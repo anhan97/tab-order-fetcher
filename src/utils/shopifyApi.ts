@@ -1,3 +1,4 @@
+
 import { Order } from '@/types/order';
 import { createProxyUrl, handleProxyResponse } from './corsProxy';
 
@@ -73,14 +74,24 @@ export class ShopifyApiClient {
     return `https://${storeUrl}/admin/api/2023-10`;
   }
 
-  private async makeProxiedRequest(url: string) {
+  private async makeProxiedRequest(url: string, options: RequestInit = {}) {
     const proxyUrl = createProxyUrl(url);
     
+    // Merge headers with the request
+    const headers = {
+      ...this.getHeaders(),
+      ...options.headers,
+    };
+
     const response = await fetch(proxyUrl, {
-      method: 'GET',
+      method: options.method || 'GET',
       headers: {
         'Accept': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        // Pass Shopify headers as custom headers
+        'X-Shopify-Headers': JSON.stringify(headers),
       },
+      body: options.body,
     });
 
     return handleProxyResponse(response);
@@ -91,10 +102,7 @@ export class ShopifyApiClient {
       const url = `${this.getBaseUrl()}/shop.json`;
       console.log('Testing connection to:', url);
       
-      // For CORS proxy, we need to include headers in the URL parameters
-      const urlWithHeaders = `${url}?headers=${encodeURIComponent(JSON.stringify(this.getHeaders()))}`;
-      
-      await this.makeProxiedRequest(urlWithHeaders);
+      await this.makeProxiedRequest(url);
       return true;
     } catch (error) {
       console.error('Connection test failed:', error);
@@ -107,10 +115,7 @@ export class ShopifyApiClient {
       const url = `${this.getBaseUrl()}/orders.json?limit=${limit}&status=any`;
       console.log('Fetching orders from:', url);
       
-      // For CORS proxy, we need to include headers in the URL parameters
-      const urlWithHeaders = `${url}&headers=${encodeURIComponent(JSON.stringify(this.getHeaders()))}`;
-      
-      const data = await this.makeProxiedRequest(urlWithHeaders);
+      const data = await this.makeProxiedRequest(url);
       return data.orders || [];
     } catch (error) {
       console.error('Failed to fetch orders:', error);
@@ -121,13 +126,37 @@ export class ShopifyApiClient {
   async getOrderById(orderId: string): Promise<ShopifyOrder | null> {
     try {
       const url = `${this.getBaseUrl()}/orders/${orderId}.json`;
-      const urlWithHeaders = `${url}?headers=${encodeURIComponent(JSON.stringify(this.getHeaders()))}`;
       
-      const data = await this.makeProxiedRequest(urlWithHeaders);
+      const data = await this.makeProxiedRequest(url);
       return data.order || null;
     } catch (error) {
       console.error('Failed to fetch order:', error);
       return null;
+    }
+  }
+
+  async updateOrderTracking(orderId: string, trackingNumber: string, trackingCompany: string = 'Other'): Promise<boolean> {
+    try {
+      const url = `${this.getBaseUrl()}/orders/${orderId}/fulfillments.json`;
+      
+      const fulfillmentData = {
+        fulfillment: {
+          location_id: null,
+          tracking_number: trackingNumber,
+          tracking_company: trackingCompany,
+          notify_customer: true
+        }
+      };
+
+      await this.makeProxiedRequest(url, {
+        method: 'POST',
+        body: JSON.stringify(fulfillmentData)
+      });
+
+      return true;
+    } catch (error) {
+      console.error('Failed to update tracking:', error);
+      return false;
     }
   }
 
