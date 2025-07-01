@@ -1,11 +1,10 @@
-
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { ShopifyApiClient } from '@/utils/shopifyApi';
 
@@ -30,7 +29,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
     setError('');
 
     try {
-      console.log('Testing Shopify connection...');
+      console.log('Testing Shopify connection with CORS proxy...');
       const apiClient = new ShopifyApiClient({ storeUrl, accessToken });
       
       const isConnected = await apiClient.testConnection();
@@ -41,7 +40,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
         
         toast({
           title: "Kết nối thành công!",
-          description: "Đã kết nối với Shopify store của bạn.",
+          description: "Đã kết nối với Shopify store của bạn thông qua CORS proxy.",
         });
       } else {
         throw new Error('Kết nối thất bại');
@@ -49,7 +48,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
       
     } catch (err) {
       console.error('Connection error:', err);
-      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token.');
+      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token. Lỗi có thể do CORS hoặc thông tin xác thực không đúng.');
     } finally {
       setIsConnecting(false);
     }
@@ -62,10 +61,17 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
           <span>Kết nối Shopify</span>
         </CardTitle>
         <CardDescription>
-          Nhập thông tin store để truy cập API
+          Nhập thông tin store để truy cập API (sử dụng CORS proxy)
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            Ứng dụng sử dụng CORS proxy để truy cập Shopify API từ browser. Đảm bảo Store URL và Access Token chính xác.
+          </AlertDescription>
+        </Alert>
+
         <div className="space-y-2">
           <Label htmlFor="storeUrl">Store URL</Label>
           <Input
