@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { ShopifyApiClient } from '@/utils/shopifyApi';
 
 interface ShopifyConnectionProps {
   onConnectionSuccess: (config: { storeUrl: string; accessToken: string }) => void;
@@ -29,21 +30,26 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
     setError('');
 
     try {
-      // Simulate connection test
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log('Testing Shopify connection...');
+      const apiClient = new ShopifyApiClient({ storeUrl, accessToken });
       
-      // In a real implementation, you would test the connection here
-      // For demo purposes, we'll assume success
+      const isConnected = await apiClient.testConnection();
       
-      onConnectionSuccess({ storeUrl, accessToken });
-      
-      toast({
-        title: "Kết nối thành công!",
-        description: "Đã kết nối với Shopify store của bạn.",
-      });
+      if (isConnected) {
+        console.log('Connection successful!');
+        onConnectionSuccess({ storeUrl, accessToken });
+        
+        toast({
+          title: "Kết nối thành công!",
+          description: "Đã kết nối với Shopify store của bạn.",
+        });
+      } else {
+        throw new Error('Kết nối thất bại');
+      }
       
     } catch (err) {
-      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin.');
+      console.error('Connection error:', err);
+      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token.');
     } finally {
       setIsConnecting(false);
     }

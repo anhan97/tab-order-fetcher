@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Download, Search, RefreshCw, Package, User, MapPin } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { exportToCSV } from '@/utils/csvExport';
-import { Order, mockOrders } from '@/types/order';
+import { Order } from '@/types/order';
+import { ShopifyApiClient } from '@/utils/shopifyApi';
 
 interface OrdersTableProps {
   shopifyConfig: {
@@ -26,7 +27,7 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
 
   useEffect(() => {
     fetchOrders();
-  }, []);
+  }, [shopifyConfig]);
 
   useEffect(() => {
     const filtered = orders.filter(order => 
@@ -40,29 +41,39 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
   const fetchOrders = async () => {
     setIsLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      console.log('Fetching orders from Shopify API...');
+      const apiClient = new ShopifyApiClient(shopifyConfig);
       
-      // In real implementation, fetch from Shopify API
-      // const response = await fetch(`https://${shopifyConfig.storeUrl}/admin/api/2023-10/orders.json`, {
-      //   headers: {
-      //     'X-Shopify-Access-Token': shopifyConfig.accessToken
-      //   }
-      // });
+      // Test connection first
+      const isConnected = await apiClient.testConnection();
+      if (!isConnected) {
+        throw new Error('Unable to connect to Shopify API');
+      }
+
+      // Fetch orders from Shopify
+      const shopifyOrders = await apiClient.getOrders(250);
+      console.log('Fetched orders:', shopifyOrders);
       
-      // For demo, use mock data
-      setOrders(mockOrders);
-      setFilteredOrders(mockOrders);
+      // Convert Shopify orders to our format
+      const convertedOrders: Order[] = [];
+      shopifyOrders.forEach(shopifyOrder => {
+        const orders = apiClient.convertShopifyOrderToOrder(shopifyOrder);
+        convertedOrders.push(...orders);
+      });
+
+      setOrders(convertedOrders);
+      setFilteredOrders(convertedOrders);
       
       toast({
         title: "Đã tải dữ liệu!",
-        description: `Tìm thấy ${mockOrders.length} đơn hàng.`,
+        description: `Tìm thấy ${convertedOrders.length} đơn hàng từ Shopify.`,
       });
       
     } catch (error) {
+      console.error('Error fetching orders:', error);
       toast({
         title: "Lỗi khi tải dữ liệu",
-        description: "Không thể kết nối với Shopify API.",
+        description: error instanceof Error ? error.message : "Không thể kết nối với Shopify API.",
         variant: "destructive",
       });
     } finally {
@@ -104,7 +115,7 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
         <CardContent className="flex items-center justify-center py-12">
           <div className="text-center space-y-4">
             <RefreshCw className="h-8 w-8 animate-spin text-teal-500 mx-auto" />
-            <p className="text-slate-600">Đang tải dữ liệu đơn hàng...</p>
+            <p className="text-slate-600">Đang tải dữ liệu đơn hàng từ Shopify...</p>
           </div>
         </CardContent>
       </Card>
@@ -183,6 +194,14 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
                 />
               </div>
               <Button
+                onClick={fetchOrders}
+                variant="outline"
+                className="mr-2"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Làm mới
+              </Button>
+              <Button
                 onClick={handleExportCSV}
                 className="bg-teal-500 hover:bg-teal-600"
               >
@@ -241,7 +260,7 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
             </Table>
           </div>
           
-          {filteredOrders.length === 0 && (
+          {filteredOrders.length === 0 && !isLoading && (
             <div className="text-center py-8">
               <Package className="h-12 w-12 text-slate-300 mx-auto mb-4" />
               <p className="text-slate-500">
