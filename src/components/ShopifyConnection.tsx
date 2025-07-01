@@ -1,3 +1,4 @@
+
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,7 +30,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
     setError('');
 
     try {
-      console.log('Testing Shopify connection with CORS proxy...');
+      console.log('Testing Shopify connection with allorigins proxy...');
       const apiClient = new ShopifyApiClient({ storeUrl, accessToken });
       
       const isConnected = await apiClient.testConnection();
@@ -40,7 +41,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
         
         toast({
           title: "Kết nối thành công!",
-          description: "Đã kết nối với Shopify store của bạn thông qua CORS proxy.",
+          description: "Đã kết nối với Shopify store của bạn.",
         });
       } else {
         throw new Error('Kết nối thất bại');
@@ -48,7 +49,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
       
     } catch (err) {
       console.error('Connection error:', err);
-      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token. Lỗi có thể do CORS hoặc thông tin xác thực không đúng.');
+      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token. Đảm bảo Access Token có quyền đọc đơn hàng (read_orders).');
     } finally {
       setIsConnecting(false);
     }
@@ -61,14 +62,14 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
           <span>Kết nối Shopify</span>
         </CardTitle>
         <CardDescription>
-          Nhập thông tin store để truy cập API (sử dụng CORS proxy)
+          Nhập thông tin store để truy cập API
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <Alert>
           <Info className="h-4 w-4" />
           <AlertDescription>
-            Ứng dụng sử dụng CORS proxy để truy cập Shopify API từ browser. Đảm bảo Store URL và Access Token chính xác.
+            Ứng dụng sử dụng proxy để truy cập Shopify API từ browser. Đảm bảo Store URL và Access Token chính xác.
           </AlertDescription>
         </Alert>
 
@@ -123,7 +124,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
         <div className="text-xs text-slate-500 space-y-1">
           <p>💡 Để lấy Access Token:</p>
           <p>1. Vào Shopify Admin → Apps → Develop apps</p>
-          <p>2. Tạo private app với quyền read_orders</p>
+          <p>2. Tạo private app với quyền read_orders và write_orders</p>
           <p>3. Copy Admin API access token</p>
         </div>
       </CardContent>
