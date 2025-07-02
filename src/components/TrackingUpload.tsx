@@ -14,6 +14,7 @@ interface TrackingRecord {
   orderNumber: string;
   trackingNumber: string;
   trackingCompany: string;
+  trackingUrl?: string;
   status?: 'pending' | 'success' | 'error';
   error?: string;
 }
@@ -83,12 +84,13 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
           await apiClient.updateOrderTracking(
             record.orderNumber,
             record.trackingNumber,
-            record.trackingCompany
+            record.trackingCompany,
+            record.trackingUrl
           );
           
           updatedRecords[i] = { ...record, status: 'success' };
           
-          // Cập nhật state để hiển thị progress
+          // Update state to show progress
           setTrackingRecords([...updatedRecords]);
           
         } catch (error) {
@@ -101,7 +103,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
           setTrackingRecords([...updatedRecords]);
         }
         
-        // Delay để tránh rate limiting
+        // Delay to avoid rate limiting
         if (i < updatedRecords.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -130,10 +132,10 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
   };
 
   const downloadTemplate = () => {
-    const template = `Order Number,Tracking Number,Tracking Company
-1001,1234567890,4PX
-1002,0987654321,Royal Mail
-1003,1122334455,USPS`;
+    const template = `Order Number,Tracking Number,Tracking Company,Tracking URL
+1001,1234567890,4PX,https://track.4px.com/1234567890
+1002,0987654321,Royal Mail,https://www.royalmail.com/track-your-item#/tracking-results/0987654321
+1003,1122334455,USPS,https://tools.usps.com/go/TrackConfirmAction?tLabels=1122334455`;
 
     const blob = new Blob([template], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -170,7 +172,8 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
           <Alert>
             <FileText className="h-4 w-4" />
             <AlertDescription>
-              File CSV cần có 3 cột: Order Number, Tracking Number, Tracking Company.
+              File CSV cần có các cột: Order Number, Tracking Number, Tracking Company. 
+              Tùy chọn: Tracking URL (để thêm link tracking tùy chỉnh).
               <Button
                 variant="link"
                 className="p-0 h-auto ml-2"
@@ -232,6 +235,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                     <TableHead>Mã đơn</TableHead>
                     <TableHead>Tracking Number</TableHead>
                     <TableHead>Tracking Company</TableHead>
+                    <TableHead>Tracking URL</TableHead>
                     <TableHead>Lỗi</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -242,6 +246,18 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                       <TableCell className="font-medium">#{record.orderNumber}</TableCell>
                       <TableCell>{record.trackingNumber}</TableCell>
                       <TableCell>{record.trackingCompany}</TableCell>
+                      <TableCell className="max-w-xs truncate">
+                        {record.trackingUrl && (
+                          <a 
+                            href={record.trackingUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-blue-500 hover:underline text-sm"
+                          >
+                            {record.trackingUrl}
+                          </a>
+                        )}
+                      </TableCell>
                       <TableCell className="text-red-500 text-sm">
                         {record.error || ''}
                       </TableCell>

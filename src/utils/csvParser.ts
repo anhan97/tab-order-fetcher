@@ -3,6 +3,7 @@ interface TrackingRecord {
   orderNumber: string;
   trackingNumber: string;
   trackingCompany: string;
+  trackingUrl?: string;
 }
 
 export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
@@ -20,7 +21,7 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
         
         const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
         
-        // Kiểm tra các cột bắt buộc
+        // Check required columns
         const requiredColumns = ['order number', 'tracking number', 'tracking company'];
         const missingColumns = requiredColumns.filter(col => 
           !headers.some(h => h.includes(col.replace(' ', '')) || h.includes(col))
@@ -30,7 +31,7 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
           throw new Error(`Thiếu các cột: ${missingColumns.join(', ')}`);
         }
         
-        // Tìm index của các cột
+        // Find column indexes
         const orderNumberIndex = headers.findIndex(h => 
           h.includes('order') && h.includes('number') || h === 'order number'
         );
@@ -40,13 +41,16 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
         const trackingCompanyIndex = headers.findIndex(h => 
           h.includes('tracking') && h.includes('company') || h === 'tracking company'
         );
+        const trackingUrlIndex = headers.findIndex(h => 
+          h.includes('tracking') && h.includes('url') || h === 'tracking url' || h === 'tracking link'
+        );
         
         const records: TrackingRecord[] = [];
         
         for (let i = 1; i < lines.length; i++) {
           const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
           
-          if (values.length < 3) continue; // Bỏ qua dòng không đủ dữ liệu
+          if (values.length < 3) continue; // Skip rows without enough data
           
           const record: TrackingRecord = {
             orderNumber: values[orderNumberIndex] || '',
@@ -54,7 +58,12 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
             trackingCompany: values[trackingCompanyIndex] || '',
           };
           
-          // Loại bỏ # nếu có trong order number
+          // Add tracking URL if available
+          if (trackingUrlIndex !== -1 && values[trackingUrlIndex]) {
+            record.trackingUrl = values[trackingUrlIndex];
+          }
+          
+          // Remove # if present in order number
           record.orderNumber = record.orderNumber.replace('#', '');
           
           if (record.orderNumber && record.trackingNumber && record.trackingCompany) {

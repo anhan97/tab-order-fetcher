@@ -1,5 +1,5 @@
+
 import { Order } from '@/types/order';
-import { createProxyUrl, handleProxyResponse } from './corsProxy';
 
 export interface ShopifyConfig {
   storeUrl: string;
@@ -51,6 +51,7 @@ export interface ShopifyOrder {
   fulfillments?: {
     tracking_number: string;
     tracking_company: string;
+    tracking_url?: string;
   }[];
 }
 
@@ -73,17 +74,54 @@ export class ShopifyApiClient {
     return `https://${storeUrl}/admin/api/2023-10`;
   }
 
-  private async makeProxiedRequest(url: string) {
-    const proxyUrl = createProxyUrl(url);
+  private async makeRequest(url: string, options: RequestInit = {}) {
+    try {
+      // Try direct request first
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          ...this.getHeaders(),
+          ...options.headers,
+        },
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (error) {
+      console.log('Direct request failed, trying with proxy...');
+    }
+
+    // Fallback to proxy with proper header encoding
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
     
     const response = await fetch(proxyUrl, {
-      method: 'GET',
+      method: 'POST',
       headers: {
-        'Accept': 'application/json',
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify({
+        method: options.method || 'GET',
+        headers: this.getHeaders(),
+        body: options.body,
+      }),
     });
 
-    return handleProxyResponse(response);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    
+    if (result.contents) {
+      try {
+        return JSON.parse(result.contents);
+      } catch {
+        return result.contents;
+      }
+    }
+    
+    return result;
   }
 
   async testConnection(): Promise<boolean> {
@@ -91,10 +129,7 @@ export class ShopifyApiClient {
       const url = `${this.getBaseUrl()}/shop.json`;
       console.log('Testing connection to:', url);
       
-      // For CORS proxy, we need to include headers in the URL parameters
-      const urlWithHeaders = `${url}?headers=${encodeURIComponent(JSON.stringify(this.getHeaders()))}`;
-      
-      await this.makeProxiedRequest(urlWithHeaders);
+      await this.makeRequest(url);
       return true;
     } catch (error) {
       console.error('Connection test failed:', error);
@@ -107,10 +142,7 @@ export class ShopifyApiClient {
       const url = `${this.getBaseUrl()}/orders.json?limit=${limit}&status=any`;
       console.log('Fetching orders from:', url);
       
-      // For CORS proxy, we need to include headers in the URL parameters
-      const urlWithHeaders = `${url}&headers=${encodeURIComponent(JSON.stringify(this.getHeaders()))}`;
-      
-      const data = await this.makeProxiedRequest(urlWithHeaders);
+      const data = await this.makeRequest(url);
       return data.orders || [];
     } catch (error) {
       console.error('Failed to fetch orders:', error);
@@ -121,9 +153,7 @@ export class ShopifyApiClient {
   async getOrderById(orderId: string): Promise<ShopifyOrder | null> {
     try {
       const url = `${this.getBaseUrl()}/orders/${orderId}.json`;
-      const urlWithHeaders = `${url}?headers=${encodeURIComponent(JSON.stringify(this.getHeaders()))}`;
-      
-      const data = await this.makeProxiedRequest(urlWithHeaders);
+      const data = await this.makeRequest(url);
       return data.order || null;
     } catch (error) {
       console.error('Failed to fetch order:', error);
@@ -134,10 +164,11 @@ export class ShopifyApiClient {
   async updateOrderTracking(
     orderNumber: string, 
     trackingNumber: string, 
-    trackingCompany: string
+    trackingCompany: string,
+    trackingUrl?: string
   ): Promise<boolean> {
     try {
-      // Lấy thông tin đơn hàng trước
+      // Get order info first
       const orders = await this.getOrders(250);
       const order = orders.find(o => o.name.replace('#', '') === orderNumber);
       
@@ -145,13 +176,13 @@ export class ShopifyApiClient {
         throw new Error(`Không tìm thấy đơn hàng #${orderNumber}`);
       }
       
-      // Tạo fulfillment cho đơn hàng
+      // Create fulfillment for the order
       const fulfillmentData = {
         fulfillment: {
           location_id: null,
           tracking_number: trackingNumber,
           tracking_company: trackingCompany,
-          tracking_urls: [],
+          tracking_urls: trackingUrl ? [trackingUrl] : [],
           notify_customer: true,
           line_items: order.line_items.map(item => ({
             id: item.id,
@@ -163,21 +194,12 @@ export class ShopifyApiClient {
       const url = `${this.getBaseUrl()}/orders/${order.id}/fulfillments.json`;
       console.log('Creating fulfillment for order:', order.id, fulfillmentData);
       
-      const response = await fetch(url, {
+      await this.makeRequest(url, {
         method: 'POST',
-        headers: this.getHeaders(),
         body: JSON.stringify(fulfillmentData)
       });
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Fulfillment creation failed:', response.status, errorText);
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
-      }
-      
-      const result = await response.json();
-      console.log('Fulfillment created successfully:', result);
-      
+      console.log('Fulfillment created successfully');
       return true;
       
     } catch (error) {
