@@ -2,9 +2,10 @@
 import { useState } from 'react';
 import { ShopifyConnection } from '@/components/ShopifyConnection';
 import { OrdersTable } from '@/components/OrdersTable';
+import { TrackingUpload } from '@/components/TrackingUpload';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ShoppingBag, Download, Settings } from 'lucide-react';
+import { ShoppingBag, Download, Settings, Upload } from 'lucide-react';
 
 const Index = () => {
   const [isConnected, setIsConnected] = useState(false);
@@ -62,10 +63,14 @@ const Index = () => {
           </div>
         ) : (
           <Tabs defaultValue="orders" className="space-y-6">
-            <TabsList className="grid w-full grid-cols-2 max-w-md">
+            <TabsList className="grid w-full grid-cols-3 max-w-lg">
               <TabsTrigger value="orders" className="flex items-center space-x-2">
                 <ShoppingBag className="h-4 w-4" />
                 <span>Đơn hàng</span>
+              </TabsTrigger>
+              <TabsTrigger value="tracking" className="flex items-center space-x-2">
+                <Upload className="h-4 w-4" />
+                <span>Tracking</span>
               </TabsTrigger>
               <TabsTrigger value="export" className="flex items-center space-x-2">
                 <Download className="h-4 w-4" />
@@ -75,6 +80,10 @@ const Index = () => {
 
             <TabsContent value="orders" className="space-y-6">
               <OrdersTable shopifyConfig={shopifyConfig!} />
+            </TabsContent>
+
+            <TabsContent value="tracking" className="space-y-6">
+              <TrackingUpload shopifyConfig={shopifyConfig!} />
             </TabsContent>
 
             <TabsContent value="export" className="space-y-6">

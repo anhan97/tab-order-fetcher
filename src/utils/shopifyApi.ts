@@ -131,6 +131,61 @@ export class ShopifyApiClient {
     }
   }
 
+  async updateOrderTracking(
+    orderNumber: string, 
+    trackingNumber: string, 
+    trackingCompany: string
+  ): Promise<boolean> {
+    try {
+      // Lấy thông tin đơn hàng trước
+      const orders = await this.getOrders(250);
+      const order = orders.find(o => o.name.replace('#', '') === orderNumber);
+      
+      if (!order) {
+        throw new Error(`Không tìm thấy đơn hàng #${orderNumber}`);
+      }
+      
+      // Tạo fulfillment cho đơn hàng
+      const fulfillmentData = {
+        fulfillment: {
+          location_id: null,
+          tracking_number: trackingNumber,
+          tracking_company: trackingCompany,
+          tracking_urls: [],
+          notify_customer: true,
+          line_items: order.line_items.map(item => ({
+            id: item.id,
+            quantity: item.quantity
+          }))
+        }
+      };
+      
+      const url = `${this.getBaseUrl()}/orders/${order.id}/fulfillments.json`;
+      console.log('Creating fulfillment for order:', order.id, fulfillmentData);
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(fulfillmentData)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Fulfillment creation failed:', response.status, errorText);
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+      
+      const result = await response.json();
+      console.log('Fulfillment created successfully:', result);
+      
+      return true;
+      
+    } catch (error) {
+      console.error('Error updating order tracking:', error);
+      throw error;
+    }
+  }
+
   convertShopifyOrderToOrder(shopifyOrder: ShopifyOrder): Order[] {
     // Convert each line item to a separate order record
     return shopifyOrder.line_items.map((item, index) => {
