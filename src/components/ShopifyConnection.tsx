@@ -30,7 +30,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
     setError('');
 
     try {
-      console.log('Testing Shopify connection with allorigins proxy...');
+      console.log('Testing Shopify connection...');
       const apiClient = new ShopifyApiClient({ storeUrl, accessToken });
       
       const isConnected = await apiClient.testConnection();
@@ -49,7 +49,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
       
     } catch (err) {
       console.error('Connection error:', err);
-      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token. Đảm bảo Access Token có quyền đọc đơn hàng (read_orders).');
+      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token.');
     } finally {
       setIsConnecting(false);
     }

@@ -68,21 +68,17 @@ export class ShopifyApiClient {
   }
 
   private async makeProxiedRequest(endpoint: string, options: RequestInit = {}) {
-    // Build the full URL with headers as query parameters for GET requests
     const baseUrl = `${this.getBaseUrl()}${endpoint}`;
-    const url = new URL(baseUrl);
-    
-    // Add auth header as query parameter since we're using a proxy
-    url.searchParams.append('_token', this.config.accessToken);
-    
-    const proxyUrl = createProxyUrl(url.toString());
+    const proxyUrl = createProxyUrl(baseUrl);
     
     console.log('Making proxied request to:', proxyUrl);
     
     const response = await fetch(proxyUrl, {
-      method: 'GET', // allorigins only supports GET
+      ...options,
       headers: {
         'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': this.config.accessToken,
+        ...options.headers,
       },
     });
 
@@ -91,10 +87,10 @@ export class ShopifyApiClient {
 
   async testConnection(): Promise<boolean> {
     try {
-      console.log('Testing connection with new proxy...');
+      console.log('Testing connection...');
       
-      // Try a simple shop info request
-      await this.makeProxiedRequest('/shop.json');
+      // Just try to get orders directly without checking permissions
+      await this.makeProxiedRequest('/orders.json?limit=1');
       return true;
     } catch (error) {
       console.error('Connection test failed:', error);
@@ -126,9 +122,23 @@ export class ShopifyApiClient {
 
   async updateOrderTracking(orderId: string, trackingNumber: string, trackingCompany: string = 'Other'): Promise<boolean> {
     try {
-      // This would need a different approach for POST requests
-      // For now, we'll return true as a placeholder
-      console.log(`Would update order ${orderId} with tracking ${trackingNumber}`);
+      // Update order fulfillment with tracking info
+      const fulfillmentData = {
+        fulfillment: {
+          location_id: null,
+          tracking_number: trackingNumber,
+          tracking_company: trackingCompany,
+          notify_customer: true,
+          line_items: []
+        }
+      };
+
+      await this.makeProxiedRequest(`/orders/${orderId}/fulfillments.json`, {
+        method: 'POST',
+        body: JSON.stringify(fulfillmentData)
+      });
+
+      console.log(`Updated order ${orderId} with tracking ${trackingNumber}`);
       return true;
     } catch (error) {
       console.error('Failed to update tracking:', error);
