@@ -49,7 +49,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
       
     } catch (err) {
       console.error('Connection error:', err);
-      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token.');
+      setError('Không thể kết nối. Hãy thử các bước sau:\n1. Kiểm tra Store URL và Access Token\n2. Đảm bảo Access Token có đủ quyền\n3. Nếu vẫn lỗi, có thể do hạn chế CORS của browser');
     } finally {
       setIsConnecting(false);
     }
@@ -69,7 +69,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
         <Alert>
           <Info className="h-4 w-4" />
           <AlertDescription>
-            Ứng dụng sử dụng proxy để truy cập Shopify API từ browser. Đảm bảo Store URL và Access Token chính xác.
+            Ứng dụng sẽ thử nhiều cách để kết nối với Shopify API. Có thể mất vài giây để kiểm tra.
           </AlertDescription>
         </Alert>
 
@@ -99,7 +99,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
         {error && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription className="whitespace-pre-line">{error}</AlertDescription>
           </Alert>
         )}
 

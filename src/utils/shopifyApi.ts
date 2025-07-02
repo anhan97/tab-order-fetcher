@@ -1,6 +1,6 @@
 
 import { Order } from '@/types/order';
-import { createProxyUrl, handleProxyResponse } from './corsProxy';
+import { createProxyUrl, handleProxyResponse, makeDirectRequest } from './corsProxy';
 
 export interface ShopifyConfig {
   storeUrl: string;
@@ -67,30 +67,39 @@ export class ShopifyApiClient {
     return `https://${storeUrl}/admin/api/2023-10`;
   }
 
-  private async makeProxiedRequest(endpoint: string, options: RequestInit = {}) {
+  private async makeRequest(endpoint: string, options: RequestInit = {}) {
     const baseUrl = `${this.getBaseUrl()}${endpoint}`;
-    const proxyUrl = createProxyUrl(baseUrl);
     
-    console.log('Making proxied request to:', proxyUrl);
+    console.log('Making request to:', baseUrl);
     
-    const response = await fetch(proxyUrl, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': this.config.accessToken,
-        ...options.headers,
-      },
-    });
+    // Try direct request first
+    try {
+      return await makeDirectRequest(baseUrl, this.config.accessToken, options);
+    } catch (directError) {
+      console.log('Direct request failed, trying proxy...');
+      
+      // Fall back to proxy
+      const proxyUrl = createProxyUrl(baseUrl);
+      console.log('Making proxied request to:', proxyUrl);
+      
+      const response = await fetch(proxyUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': this.config.accessToken,
+        },
+      });
 
-    return handleProxyResponse(response);
+      return handleProxyResponse(response);
+    }
   }
 
   async testConnection(): Promise<boolean> {
     try {
       console.log('Testing connection...');
       
-      // Just try to get orders directly without checking permissions
-      await this.makeProxiedRequest('/orders.json?limit=1');
+      // Try to get a single order to test connection
+      await this.makeRequest('/orders.json?limit=1');
       return true;
     } catch (error) {
       console.error('Connection test failed:', error);
@@ -102,7 +111,7 @@ export class ShopifyApiClient {
     try {
       console.log('Fetching orders...');
       
-      const data = await this.makeProxiedRequest(`/orders.json?limit=${limit}&status=any`);
+      const data = await this.makeRequest(`/orders.json?limit=${limit}&status=any`);
       return data.orders || [];
     } catch (error) {
       console.error('Failed to fetch orders:', error);
@@ -112,7 +121,7 @@ export class ShopifyApiClient {
 
   async getOrderById(orderId: string): Promise<ShopifyOrder | null> {
     try {
-      const data = await this.makeProxiedRequest(`/orders/${orderId}.json`);
+      const data = await this.makeRequest(`/orders/${orderId}.json`);
       return data.order || null;
     } catch (error) {
       console.error('Failed to fetch order:', error);
@@ -133,7 +142,7 @@ export class ShopifyApiClient {
         }
       };
 
-      await this.makeProxiedRequest(`/orders/${orderId}/fulfillments.json`, {
+      await this.makeRequest(`/orders/${orderId}/fulfillments.json`, {
         method: 'POST',
         body: JSON.stringify(fulfillmentData)
       });
