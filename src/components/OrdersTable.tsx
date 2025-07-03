@@ -1,42 +1,60 @@
-
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Download, Search, RefreshCw, Package, User, MapPin } from 'lucide-react';
+import { Download, Search, RefreshCw, Package, User, MapPin, Calendar, Filter } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { exportToCSV } from '@/utils/csvExport';
 import { Order } from '@/types/order';
-import { ShopifyApiClient } from '@/utils/shopifyApi';
+import { ShopifyApiClient, OrderFilters } from '@/utils/shopifyApi';
 
 interface OrdersTableProps {
   shopifyConfig: {
     storeUrl: string;
     accessToken: string;
   };
+  onOrdersChange?: (orders: Order[]) => void;
 }
 
-export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
+export const OrdersTable = ({ shopifyConfig, onOrdersChange }: OrdersTableProps) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [filters, setFilters] = useState<OrderFilters>({
+    status: 'any',
+    financial_status: undefined,
+    fulfillment_status: undefined,
+    limit: 250
+  });
+  const [dateRange, setDateRange] = useState({
+    start: '',
+    end: ''
+  });
   const { toast } = useToast();
 
   useEffect(() => {
     fetchOrders();
-  }, [shopifyConfig]);
+  }, [shopifyConfig, filters, dateRange]);
 
   useEffect(() => {
     const filtered = orders.filter(order => 
       order.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.email.toLowerCase().includes(searchTerm.toLowerCase())
+      order.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.productName.toLowerCase().includes(searchTerm.toLowerCase())
     );
     setFilteredOrders(filtered);
   }, [orders, searchTerm]);
+
+  useEffect(() => {
+    if (onOrdersChange) {
+      onOrdersChange(orders);
+    }
+  }, [orders, onOrdersChange]);
 
   const fetchOrders = async () => {
     setIsLoading(true);
@@ -50,8 +68,13 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
         throw new Error('Unable to connect to Shopify API');
       }
 
+      // Prepare filters
+      const orderFilters: OrderFilters = { ...filters };
+      if (dateRange.start) orderFilters.created_at_min = dateRange.start + 'T00:00:00Z';
+      if (dateRange.end) orderFilters.created_at_max = dateRange.end + 'T23:59:59Z';
+
       // Fetch orders from Shopify
-      const shopifyOrders = await apiClient.getOrders(250);
+      const shopifyOrders = await apiClient.getOrders(orderFilters);
       console.log('Fetched orders:', shopifyOrders);
       
       // Convert Shopify orders to our format
@@ -109,6 +132,22 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
     return new Date(dateString).toLocaleDateString('vi-VN');
   };
 
+  const getStatusBadge = (status: string) => {
+    const statusColors: Record<string, string> = {
+      'paid': 'bg-green-50 text-green-700 border-green-200',
+      'pending': 'bg-yellow-50 text-yellow-700 border-yellow-200',
+      'refunded': 'bg-red-50 text-red-700 border-red-200',
+      'fulfilled': 'bg-blue-50 text-blue-700 border-blue-200',
+      'unfulfilled': 'bg-gray-50 text-gray-700 border-gray-200'
+    };
+    
+    return (
+      <Badge variant="outline" className={statusColors[status] || 'bg-gray-50 text-gray-700 border-gray-200'}>
+        {status}
+      </Badge>
+    );
+  };
+
   if (isLoading) {
     return (
       <Card>
@@ -124,6 +163,77 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
 
   return (
     <div className="space-y-6">
+      {/* Filters */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center space-x-2">
+            <Filter className="h-5 w-5" />
+            <span>Bộ lọc</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Trạng thái đơn hàng</label>
+              <Select
+                value={filters.status}
+                onValueChange={(value) => setFilters(prev => ({ ...prev, status: value as any }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">Tất cả</SelectItem>
+                  <SelectItem value="open">Mở</SelectItem>
+                  <SelectItem value="closed">Đóng</SelectItem>
+                  <SelectItem value="cancelled">Hủy</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Trạng thái thanh toán</label>
+              <Select
+                value={filters.financial_status || 'all'}
+                onValueChange={(value) => setFilters(prev => ({ 
+                  ...prev, 
+                  financial_status: value === 'all' ? undefined : value as any 
+                }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tất cả</SelectItem>
+                  <SelectItem value="paid">Đã thanh toán</SelectItem>
+                  <SelectItem value="pending">Chờ thanh toán</SelectItem>
+                  <SelectItem value="refunded">Đã hoàn tiền</SelectItem>
+                  <SelectItem value="voided">Đã hủy</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Từ ngày</label>
+              <Input
+                type="date"
+                value={dateRange.start}
+                onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Đến ngày</label>
+              <Input
+                type="date"
+                value={dateRange.end}
+                onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
@@ -180,7 +290,7 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
             <div>
               <CardTitle className="flex items-center space-x-2">
                 <Package className="h-5 w-5" />
-                <span>Danh sách đơn hàng</span>
+                <span>Danh sách đơn hàng ({filteredOrders.length})</span>
               </CardTitle>
             </div>
             <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
@@ -223,7 +333,9 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
                   <TableHead>Sản phẩm</TableHead>
                   <TableHead>Địa chỉ</TableHead>
                   <TableHead>Tổng tiền</TableHead>
-                  <TableHead>Trạng thái</TableHead>
+                  <TableHead>Thanh toán</TableHead>
+                  <TableHead>Vận chuyển</TableHead>
+                  <TableHead>Nguồn</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -250,9 +362,17 @@ export const OrdersTable = ({ shopifyConfig }: OrdersTableProps) => {
                     </TableCell>
                     <TableCell className="font-medium">{formatCurrency(order.totalAmount)}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                        Hoàn thành
-                      </Badge>
+                      {getStatusBadge(order.financialStatus || 'unknown')}
+                    </TableCell>
+                    <TableCell>
+                      {getStatusBadge(order.fulfillmentStatus || 'unfulfilled')}
+                    </TableCell>
+                    <TableCell>
+                      <div className="max-w-xs text-sm">
+                        {order.sourceName && <p>Nguồn: {order.sourceName}</p>}
+                        {order.referringSite && <p>Từ: {order.referringSite}</p>}
+                        {order.landingSite && <p className="text-xs text-slate-400">Landing: {order.landingSite}</p>}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

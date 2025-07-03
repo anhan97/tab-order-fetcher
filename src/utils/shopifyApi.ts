@@ -10,19 +10,36 @@ export interface ShopifyOrder {
   id: number;
   name: string;
   created_at: string;
+  updated_at: string;
+  processed_at: string;
   total_price: string;
+  subtotal_price: string;
+  total_tax: string;
   financial_status: string;
   fulfillment_status: string;
+  order_status_url: string;
+  cancelled_at?: string;
+  cancel_reason?: string;
+  tags: string;
+  gateway: string;
+  landing_site?: string;
+  referring_site?: string;
+  source_name?: string;
   customer?: {
     id: number;
     email: string;
     first_name: string;
     last_name: string;
+    phone?: string;
+    created_at: string;
+    orders_count: number;
+    total_spent: string;
   };
   billing_address?: {
     first_name: string;
     last_name: string;
     address1: string;
+    address2?: string;
     city: string;
     province: string;
     zip: string;
@@ -33,6 +50,7 @@ export interface ShopifyOrder {
     first_name: string;
     last_name: string;
     address1: string;
+    address2?: string;
     city: string;
     province: string;
     zip: string;
@@ -47,12 +65,35 @@ export interface ShopifyOrder {
     sku: string;
     variant_title: string;
     price: string;
+    product_id: number;
   }[];
   fulfillments?: {
+    id: number;
     tracking_number: string;
     tracking_company: string;
     tracking_url?: string;
+    status: string;
+    created_at: string;
   }[];
+  note_attributes?: {
+    name: string;
+    value: string;
+  }[];
+}
+
+export interface OrderFilters {
+  status?: 'open' | 'closed' | 'cancelled' | 'any';
+  financial_status?: 'authorized' | 'pending' | 'paid' | 'partially_paid' | 'refunded' | 'voided' | 'partially_refunded' | 'unpaid';
+  fulfillment_status?: 'shipped' | 'partial' | 'unshipped' | 'any' | 'unfulfilled';
+  created_at_min?: string;
+  created_at_max?: string;
+  updated_at_min?: string;
+  updated_at_max?: string;
+  processed_at_min?: string;
+  processed_at_max?: string;
+  limit?: number;
+  since_id?: number;
+  fields?: string;
 }
 
 export class ShopifyApiClient {
@@ -60,6 +101,25 @@ export class ShopifyApiClient {
 
   constructor(config: ShopifyConfig) {
     this.config = config;
+    // Save to localStorage
+    localStorage.setItem('shopify_store_url', config.storeUrl);
+    localStorage.setItem('shopify_access_token', config.accessToken);
+  }
+
+  static fromLocalStorage(): ShopifyApiClient | null {
+    const storeUrl = localStorage.getItem('shopify_store_url');
+    const accessToken = localStorage.getItem('shopify_access_token');
+    
+    if (storeUrl && accessToken) {
+      return new ShopifyApiClient({ storeUrl, accessToken });
+    }
+    
+    return null;
+  }
+
+  static clearLocalStorage(): void {
+    localStorage.removeItem('shopify_store_url');
+    localStorage.removeItem('shopify_access_token');
   }
 
   private getHeaders() {
@@ -71,7 +131,7 @@ export class ShopifyApiClient {
 
   private getBaseUrl() {
     const storeUrl = this.config.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    return `https://${storeUrl}/admin/api/2023-10`;
+    return `https://${storeUrl}/admin/api/2024-04`;
   }
 
   private async makeRequest(url: string, options: RequestInit = {}) {
@@ -92,7 +152,7 @@ export class ShopifyApiClient {
       console.log('Direct request failed, trying with proxy...');
     }
 
-    // Fallback to proxy with proper header encoding
+    // Fallback to proxy
     const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
     
     const response = await fetch(proxyUrl, {
@@ -137,9 +197,27 @@ export class ShopifyApiClient {
     }
   }
 
-  async getOrders(limit = 250): Promise<ShopifyOrder[]> {
+  async getOrders(filters: OrderFilters = {}): Promise<ShopifyOrder[]> {
     try {
-      const url = `${this.getBaseUrl()}/orders.json?limit=${limit}&status=any`;
+      const params = new URLSearchParams();
+      
+      // Default filters
+      params.append('limit', (filters.limit || 250).toString());
+      params.append('status', filters.status || 'any');
+      
+      // Add all filter parameters
+      if (filters.financial_status) params.append('financial_status', filters.financial_status);
+      if (filters.fulfillment_status) params.append('fulfillment_status', filters.fulfillment_status);
+      if (filters.created_at_min) params.append('created_at_min', filters.created_at_min);
+      if (filters.created_at_max) params.append('created_at_max', filters.created_at_max);
+      if (filters.updated_at_min) params.append('updated_at_min', filters.updated_at_min);
+      if (filters.updated_at_max) params.append('updated_at_max', filters.updated_at_max);
+      if (filters.processed_at_min) params.append('processed_at_min', filters.processed_at_min);
+      if (filters.processed_at_max) params.append('processed_at_max', filters.processed_at_max);
+      if (filters.since_id) params.append('since_id', filters.since_id.toString());
+      if (filters.fields) params.append('fields', filters.fields);
+      
+      const url = `${this.getBaseUrl()}/orders.json?${params.toString()}`;
       console.log('Fetching orders from:', url);
       
       const data = await this.makeRequest(url);
@@ -169,7 +247,7 @@ export class ShopifyApiClient {
   ): Promise<boolean> {
     try {
       // Get order info first
-      const orders = await this.getOrders(250);
+      const orders = await this.getOrders({ limit: 250 });
       const order = orders.find(o => o.name.replace('#', '') === orderNumber);
       
       if (!order) {
@@ -235,7 +313,14 @@ export class ShopifyApiClient {
         phoneNumber: shippingAddress?.phone || billingAddress?.phone || '',
         totalAmount: parseFloat(item.price) * item.quantity,
         shippingMethod: shopifyOrder.fulfillments?.[0]?.tracking_company || '',
-        trackingNumber: shopifyOrder.fulfillments?.[0]?.tracking_number || ''
+        trackingNumber: shopifyOrder.fulfillments?.[0]?.tracking_number || '',
+        financialStatus: shopifyOrder.financial_status,
+        fulfillmentStatus: shopifyOrder.fulfillment_status || 'unfulfilled',
+        tags: shopifyOrder.tags,
+        landingSite: shopifyOrder.landing_site,
+        referringSite: shopifyOrder.referring_site,
+        sourceName: shopifyOrder.source_name,
+        gateway: shopifyOrder.gateway
       };
     });
   }

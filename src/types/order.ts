@@ -18,6 +18,20 @@ export interface Order {
   totalAmount: number;
   shippingMethod: string;
   trackingNumber?: string;
+  // New Shopify fields
+  financialStatus?: string;
+  fulfillmentStatus?: string;
+  tags?: string;
+  landingSite?: string;
+  referringSite?: string;
+  sourceName?: string;
+  gateway?: string;
+  // Facebook Ads fields
+  facebookCampaignId?: string;
+  facebookCampaignName?: string;
+  campaignSpend?: number;
+  campaignROAS?: number;
+  campaignCostPerPurchase?: number;
 }
 
 // Mock data for demonstration
