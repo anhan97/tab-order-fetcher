@@ -126,6 +126,7 @@ export class ShopifyApiClient {
     return {
       'X-Shopify-Access-Token': this.config.accessToken,
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
     };
   }
 
@@ -135,53 +136,24 @@ export class ShopifyApiClient {
   }
 
   private async makeRequest(url: string, options: RequestInit = {}) {
-    try {
-      // Try direct request first
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          ...this.getHeaders(),
-          ...options.headers,
-        },
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-    } catch (error) {
-      console.log('Direct request failed, trying with proxy...');
-    }
-
-    // Fallback to proxy
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    console.log('Making direct request to:', url);
     
-    const response = await fetch(proxyUrl, {
-      method: 'POST',
+    const response = await fetch(url, {
+      ...options,
       headers: {
-        'Content-Type': 'application/json',
+        ...this.getHeaders(),
+        ...options.headers,
       },
-      body: JSON.stringify({
-        method: options.method || 'GET',
-        headers: this.getHeaders(),
-        body: options.body,
-      }),
+      mode: 'cors',
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+      console.error('API Error Response:', errorText);
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
     }
 
-    const result = await response.json();
-    
-    if (result.contents) {
-      try {
-        return JSON.parse(result.contents);
-      } catch {
-        return result.contents;
-      }
-    }
-    
-    return result;
+    return await response.json();
   }
 
   async testConnection(): Promise<boolean> {
@@ -190,6 +162,7 @@ export class ShopifyApiClient {
       console.log('Testing connection to:', url);
       
       await this.makeRequest(url);
+      console.log('Connection test successful');
       return true;
     } catch (error) {
       console.error('Connection test failed:', error);
@@ -203,11 +176,15 @@ export class ShopifyApiClient {
       
       // Default filters
       params.append('limit', (filters.limit || 250).toString());
-      params.append('status', filters.status || 'any');
+      if (filters.status && filters.status !== 'any') {
+        params.append('status', filters.status);
+      }
       
       // Add all filter parameters
       if (filters.financial_status) params.append('financial_status', filters.financial_status);
-      if (filters.fulfillment_status) params.append('fulfillment_status', filters.fulfillment_status);
+      if (filters.fulfillment_status && filters.fulfillment_status !== 'any') {
+        params.append('fulfillment_status', filters.fulfillment_status);
+      }
       if (filters.created_at_min) params.append('created_at_min', filters.created_at_min);
       if (filters.created_at_max) params.append('created_at_max', filters.created_at_max);
       if (filters.updated_at_min) params.append('updated_at_min', filters.updated_at_min);
@@ -221,6 +198,7 @@ export class ShopifyApiClient {
       console.log('Fetching orders from:', url);
       
       const data = await this.makeRequest(url);
+      console.log('Orders fetched successfully:', data.orders?.length || 0);
       return data.orders || [];
     } catch (error) {
       console.error('Failed to fetch orders:', error);
