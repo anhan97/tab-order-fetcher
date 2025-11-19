@@ -41,7 +41,7 @@ export const exportToCSV = (orders: Order[]) => {
       order.postalCode,
       order.countryCode,
       order.phoneNumber,
-      order.totalAmount,
+      order.totalPrice,
       order.shippingMethod,
       order.trackingNumber || ''
     ].join(','))
@@ -78,7 +78,7 @@ export const formatOrderForCSV = (order: Order): string[] => {
     order.postalCode,
     order.countryCode,
     order.phoneNumber,
-    order.totalAmount.toString(),
+    order.totalPrice.toString(),
     order.shippingMethod,
     order.trackingNumber || ''
   ];

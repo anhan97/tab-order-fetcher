@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopify Tracking Uploader</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #2d3748;
+            font-size: 28px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        h2 {
+            color: #2d3748;
+            font-size: 20px;
+            margin-bottom: 20px;
+        }
+
+        .subtitle {
+            color: #718096;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            color: #4a5568;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="file"] {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #5568d3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: #48bb78;
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #38a169;
+        }
+
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #cbd5e0;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .alert {
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: start;
+            gap: 12px;
+        }
+
+        .alert-info {
+            background: #bee3f8;
+            color: #2c5282;
+            border-left: 4px solid #3182ce;
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border-left: 4px solid #38a169;
+        }
+
+        .alert-error {
+            background: #fed7d7;
+            color: #742a2a;
+            border-left: 4px solid #e53e3e;
+        }
+
+        .status-badge {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-connected {
+            background: #48bb78;
+        }
+
+        .status-disconnected {
+            background: #cbd5e0;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.3s;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th {
+            background: #f7fafc;
+            color: #4a5568;
+            font-weight: 600;
+            text-align: left;
+            padding: 12px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        tr:hover {
+            background: #f7fafc;
+        }
+
+        .status-icon {
+            width: 20px;
+            height: 20px;
+            display: inline-block;
+        }
+
+        .icon-pending {
+            color: #cbd5e0;
+        }
+
+        .icon-processing {
+            color: #667eea;
+        }
+
+        .icon-success {
+            color: #48bb78;
+        }
+
+        .icon-error {
+            color: #f56565;
+        }
+
+        .flex {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .flex-between {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .text-small {
+            font-size: 12px;
+            color: #718096;
+        }
+
+        .text-error {
+            color: #e53e3e;
+            font-size: 12px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .link {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .link:hover {
+            text-decoration: underline;
+        }
+
+        .overflow-auto {
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                Shopify Tracking Uploader
+            </h1>
+            <p class="subtitle">Upload tracking numbers one by one to avoid API rate limits</p>
+
+            <!-- Shopify Connection -->
+            <div id="connection-section">
+                <h2>Shopify Connection</h2>
+                <div class="alert alert-info">
+                    <span>ℹ️</span>
+                    <div>
+                        <strong>Note:</strong> Your credentials will be saved in browser localStorage for convenience.
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="storeUrl">
+                        Store URL
+                        <span class="status-badge" id="connection-status"></span>
+                    </label>
+                    <input 
+                        type="text" 
+                        id="storeUrl" 
+                        placeholder="your-store.myshopify.com"
+                        autocomplete="off"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label for="accessToken">Access Token</label>
+                    <input 
+                        type="password" 
+                        id="accessToken" 
+                        placeholder="shpat_xxxxx"
+                        autocomplete="off"
+                    >
+                </div>
+
+                <div class="flex">
+                    <button class="btn-primary" onclick="saveCredentials()">Save Credentials</button>
+                    <button class="btn-secondary" onclick="clearCredentials()">Clear</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tracking Upload Section -->
+        <div class="card" id="upload-section">
+            <h2>Upload Tracking CSV</h2>
+            
+            <div class="alert alert-info">
+                <span>📄</span>
+                <div>
+                    <strong>CSV Format:</strong> Your file should have columns: Order Number, Tracking Number, Tracking Company, Tracking URL (optional).
+                    <br>
+                    <a href="#" class="link" onclick="downloadTemplate(); return false;">Download Template</a>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="csvFile">Select CSV File</label>
+                <input 
+                    type="file" 
+                    id="csvFile" 
+                    accept=".csv"
+                    onchange="handleFileUpload(event)"
+                >
+            </div>
+
+            <div id="file-info" class="hidden">
+                <div class="alert alert-success">
+                    <span>✅</span>
+                    <div>
+                        <strong>File loaded!</strong> Found <span id="record-count">0</span> orders.
+                    </div>
+                </div>
+
+                <div class="flex-between" style="margin-bottom: 15px;">
+                    <div class="text-small">
+                        Updates will be processed one at a time with a 1-second delay between each to prevent rate limiting.
+                    </div>
+                </div>
+
+                <div class="flex">
+                    <button class="btn-success" id="start-btn" onclick="startProcessing()">
+                        Start Upload
+                    </button>
+                    <button class="btn-secondary" id="reset-btn" onclick="resetUpload()">
+                        Reset
+                    </button>
+                </div>
+
+                <div id="progress-section" class="hidden" style="margin-top: 20px;">
+                    <div class="flex-between">
+                        <span class="text-small">Processing...</span>
+                        <span class="text-small" id="progress-text">0/0</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Table -->
+        <div class="card hidden" id="results-section">
+            <h2>Upload Results</h2>
+            <div class="overflow-auto">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">Status</th>
+                            <th>Order #</th>
+                            <th>Tracking Number</th>
+                            <th>Company</th>
+                            <th>Tracking URL</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let trackingRecords = [];
+        let currentIndex = 0;
+        let isProcessing = false;
+        let shopifyConfig = null;
+
+        // API Base URL - Update this to match your backend
+        const API_BASE_URL = 'http://localhost:3001/api/shopify';
+
+        // Load credentials on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            loadCredentials();
+        });
+
+        function loadCredentials() {
+            const storeUrl = localStorage.getItem('shopify_store_url');
+            const accessToken = localStorage.getItem('shopify_access_token');
+
+            if (storeUrl && accessToken) {
+                document.getElementById('storeUrl').value = storeUrl;
+                document.getElementById('accessToken').value = accessToken;
+                shopifyConfig = { storeUrl, accessToken };
+                updateConnectionStatus(true);
+            } else {
+                updateConnectionStatus(false);
+            }
+        }
+
+        function saveCredentials() {
+            const storeUrl = document.getElementById('storeUrl').value.trim();
+            const accessToken = document.getElementById('accessToken').value.trim();
+
+            if (!storeUrl || !accessToken) {
+                showAlert('error', 'Please enter both Store URL and Access Token');
+                return;
+            }
+
+            // Format store URL
+            const formattedUrl = storeUrl
+                .replace(/^https?:\/\//, '')
+                .replace(/\/$/, '')
+                .replace(/\/admin$/, '');
+
+            localStorage.setItem('shopify_store_url', formattedUrl);
+            localStorage.setItem('shopify_access_token', accessToken);
+
+            shopifyConfig = { 
+                storeUrl: formattedUrl, 
+                accessToken 
+            };
+
+            updateConnectionStatus(true);
+            showAlert('success', 'Credentials saved successfully!');
+        }
+
+        function clearCredentials() {
+            localStorage.removeItem('shopify_store_url');
+            localStorage.removeItem('shopify_access_token');
+            document.getElementById('storeUrl').value = '';
+            document.getElementById('accessToken').value = '';
+            shopifyConfig = null;
+            updateConnectionStatus(false);
+            showAlert('success', 'Credentials cleared!');
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusBadge = document.getElementById('connection-status');
+            statusBadge.className = `status-badge ${connected ? 'status-connected' : 'status-disconnected'}`;
+        }
+
+        function downloadTemplate() {
+            const template = `Order Number,Tracking Number,Tracking Company,Tracking URL
+1001,1234567890,4PX,https://track.4px.com/1234567890
+1002,0987654321,Royal Mail,https://www.royalmail.com/track-your-item#/tracking-results/0987654321
+1003,1122334455,USPS,https://tools.usps.com/go/TrackConfirmAction?tLabels=1122334455`;
+
+            const blob = new Blob([template], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.href = url;
+            link.download = 'tracking_template.csv';
+            link.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (!file.name.toLowerCase().endsWith('.csv')) {
+                showAlert('error', 'Please select a CSV file');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const csv = e.target.result;
+                    trackingRecords = parseCSV(csv);
+                    
+                    if (trackingRecords.length === 0) {
+                        showAlert('error', 'No valid records found in CSV');
+                        return;
+                    }
+
+                    document.getElementById('record-count').textContent = trackingRecords.length;
+                    document.getElementById('file-info').classList.remove('hidden');
+                    displayResults();
+                } catch (error) {
+                    showAlert('error', 'Error parsing CSV: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function parseCSV(csv) {
+            const lines = csv.split('\n').filter(line => line.trim());
+            if (lines.length < 2) {
+                throw new Error('CSV must have at least 2 lines (header + data)');
+            }
+
+            const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+            
+            // Find column indexes
+            const orderNumberIndex = headers.findIndex(h => h.includes('order'));
+            const trackingNumberIndex = headers.findIndex(h => h.includes('tracking') && h.includes('number'));
+            const trackingCompanyIndex = headers.findIndex(h => h.includes('company'));
+            const trackingUrlIndex = headers.findIndex(h => h.includes('url') || h.includes('link'));
+
+            if (orderNumberIndex === -1 || trackingNumberIndex === -1 || trackingCompanyIndex === -1) {
+                throw new Error('CSV must have Order Number, Tracking Number, and Tracking Company columns');
+            }
+
+            const records = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+                
+                if (values.length < 3) continue;
+
+                const record = {
+                    orderNumber: values[orderNumberIndex].replace('#', ''),
+                    trackingNumber: values[trackingNumberIndex],
+                    trackingCompany: values[trackingCompanyIndex],
+                    trackingUrl: trackingUrlIndex !== -1 ? values[trackingUrlIndex] : '',
+                    status: 'pending',
+                    message: ''
+                };
+
+                if (record.orderNumber && record.trackingNumber && record.trackingCompany) {
+                    records.push(record);
+                }
+            }
+
+            return records;
+        }
+
+        function displayResults() {
+            const tbody = document.getElementById('results-body');
+            tbody.innerHTML = '';
+
+            trackingRecords.forEach((record, index) => {
+                const row = document.createElement('tr');
+                row.id = `row-${index}`;
+                row.innerHTML = `
+                    <td><span class="status-icon icon-${record.status}">⏺</span></td>
+                    <td>#${record.orderNumber}</td>
+                    <td>${record.trackingNumber}</td>
+                    <td>${record.trackingCompany}</td>
+                    <td>${record.trackingUrl ? `<a href="${record.trackingUrl}" target="_blank" class="link">Link</a>` : '-'}</td>
+                    <td class="${record.status === 'error' ? 'text-error' : ''}">${record.message}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            document.getElementById('results-section').classList.remove('hidden');
+        }
+
+        async function startProcessing() {
+            if (!shopifyConfig) {
+                showAlert('error', 'Please save your Shopify credentials first');
+                return;
+            }
+
+            if (trackingRecords.length === 0) {
+                showAlert('error', 'No records to process');
+                return;
+            }
+
+            isProcessing = true;
+            currentIndex = 0;
+
+            document.getElementById('start-btn').disabled = true;
+            document.getElementById('reset-btn').disabled = true;
+            document.getElementById('csvFile').disabled = true;
+            document.getElementById('progress-section').classList.remove('hidden');
+
+            await processNextRecord();
+        }
+
+        async function processNextRecord() {
+            if (currentIndex >= trackingRecords.length) {
+                finishProcessing();
+                return;
+            }
+
+            const record = trackingRecords[currentIndex];
+            updateProgress();
+
+            try {
+                // Update status to processing
+                record.status = 'processing';
+                record.message = 'Updating...';
+                updateRow(currentIndex);
+
+                // Make API call
+                const response = await fetch(`${API_BASE_URL}/orders/tracking`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Shopify-Store-Domain': shopifyConfig.storeUrl,
+                        'X-Shopify-Access-Token': shopifyConfig.accessToken
+                    },
+                    body: JSON.stringify({
+                        orderNumber: record.orderNumber,
+                        trackingNumber: record.trackingNumber,
+                        trackingCompany: record.trackingCompany,
+                        trackingUrl: record.trackingUrl,
+                        notifyCustomer: true,
+                        fulfillItems: true,
+                        fulfillShippingNotRequired: true
+                    })
+                });
+
+                if (response.ok) {
+                    record.status = 'success';
+                    record.message = 'Updated successfully';
+                } else {
+                    const errorText = await response.text();
+                    record.status = 'error';
+                    record.message = `Error: ${errorText}`;
+                }
+            } catch (error) {
+                record.status = 'error';
+                record.message = `Error: ${error.message}`;
+            }
+
+            updateRow(currentIndex);
+            currentIndex++;
+
+            // Wait 1 second before processing next record to avoid rate limiting
+            if (currentIndex < trackingRecords.length) {
+                setTimeout(processNextRecord, 1000);
+            } else {
+                finishProcessing();
+            }
+        }
+
+        function updateRow(index) {
+            const record = trackingRecords[index];
+            const row = document.getElementById(`row-${index}`);
+            if (row) {
+                row.innerHTML = `
+                    <td><span class="status-icon icon-${record.status}">⏺</span></td>
+                    <td>#${record.orderNumber}</td>
+                    <td>${record.trackingNumber}</td>
+                    <td>${record.trackingCompany}</td>
+                    <td>${record.trackingUrl ? `<a href="${record.trackingUrl}" target="_blank" class="link">Link</a>` : '-'}</td>
+                    <td class="${record.status === 'error' ? 'text-error' : ''}">${record.message}</td>
+                `;
+            }
+        }
+
+        function updateProgress() {
+            const progress = ((currentIndex + 1) / trackingRecords.length) * 100;
+            document.getElementById('progress-fill').style.width = progress + '%';
+            document.getElementById('progress-text').textContent = `${currentIndex + 1}/${trackingRecords.length}`;
+        }
+
+        function finishProcessing() {
+            isProcessing = false;
+            document.getElementById('start-btn').disabled = false;
+            document.getElementById('reset-btn').disabled = false;
+            document.getElementById('csvFile').disabled = false;
+
+            const successCount = trackingRecords.filter(r => r.status === 'success').length;
+            const errorCount = trackingRecords.filter(r => r.status === 'error').length;
+
+            showAlert('success', `Processing complete! Success: ${successCount}, Errors: ${errorCount}`);
+        }
+
+        function resetUpload() {
+            if (isProcessing) {
+                if (!confirm('Processing is in progress. Are you sure you want to reset?')) {
+                    return;
+                }
+            }
+
+            trackingRecords = [];
+            currentIndex = 0;
+            isProcessing = false;
+
+            document.getElementById('csvFile').value = '';
+            document.getElementById('csvFile').disabled = false;
+            document.getElementById('file-info').classList.add('hidden');
+            document.getElementById('progress-section').classList.add('hidden');
+            document.getElementById('results-section').classList.add('hidden');
+            document.getElementById('start-btn').disabled = false;
+            document.getElementById('reset-btn').disabled = false;
+        }
+
+        function showAlert(type, message) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.style.position = 'fixed';
+            alertDiv.style.top = '20px';
+            alertDiv.style.right = '20px';
+            alertDiv.style.maxWidth = '400px';
+            alertDiv.style.zIndex = '9999';
+            alertDiv.style.animation = 'slideIn 0.3s ease';
+            
+            const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+            alertDiv.innerHTML = `<span>${icon}</span><div>${message}</div>`;
+            
+            document.body.appendChild(alertDiv);
+
+            setTimeout(() => {
+                alertDiv.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => alertDiv.remove(), 300);
+            }, 3000);
+        }
+
+        // Add CSS animations
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+            @keyframes slideOut {
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>
+

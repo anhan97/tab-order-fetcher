@@ -5,7 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Upload, FileText, CheckCircle, AlertCircle, Download } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import { Upload, FileText, CheckCircle, AlertCircle, Download, Zap } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { ShopifyApiClient } from '@/utils/shopifyApi';
 import { parseCsvFile } from '@/utils/csvParser';
@@ -31,6 +33,8 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
   const [trackingRecords, setTrackingRecords] = useState<TrackingRecord[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadComplete, setUploadComplete] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
+  const [useBatchMode, setUseBatchMode] = useState(true);
   const { toast } = useToast();
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -70,52 +74,107 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
     if (trackingRecords.length === 0) return;
 
     setIsProcessing(true);
+    setProcessingProgress({ current: 0, total: trackingRecords.length });
     const apiClient = new ShopifyApiClient(shopifyConfig);
     
     try {
       const updatedRecords = [...trackingRecords];
       
-      for (let i = 0; i < updatedRecords.length; i++) {
-        const record = updatedRecords[i];
+      if (useBatchMode && trackingRecords.length > 1) {
+        // Use batch API for faster processing
+        console.log(`Processing ${trackingRecords.length} orders using batch API`);
         
-        try {
-          console.log(`Updating tracking for order ${record.orderNumber}...`);
+        const trackingUpdates = trackingRecords.map(record => ({
+          orderNumber: record.orderNumber,
+          trackingNumber: record.trackingNumber,
+          trackingCompany: record.trackingCompany,
+          trackingUrl: record.trackingUrl
+        }));
+        
+        const result = await apiClient.batchUpdateOrderTracking(trackingUpdates);
+        
+        console.log('Batch update result:', result);
+        
+        // Update records based on batch results
+        trackingRecords.forEach((record, index) => {
+          const successful = result.successful.find(s => s.orderNumber === record.orderNumber);
+          const failed = result.failed.find(f => f.orderNumber === record.orderNumber);
           
-          await apiClient.updateOrderTracking(
-            record.orderNumber,
-            record.trackingNumber,
-            record.trackingCompany,
-            record.trackingUrl
-          );
+          if (successful) {
+            updatedRecords[index] = { ...record, status: 'success' };
+          } else if (failed) {
+            updatedRecords[index] = { 
+              ...record, 
+              status: 'error',
+              error: failed.error
+            };
+          }
+        });
+        
+        setProcessingProgress({ current: trackingRecords.length, total: trackingRecords.length });
+        setTrackingRecords([...updatedRecords]);
+        
+        toast({
+          title: "Hoàn thành cập nhật!",
+          description: `Thành công: ${result.summary.successful}, Lỗi: ${result.summary.failed}`,
+        });
+        
+      } else {
+        // Process orders one by one to prevent API rate limiting
+        console.log(`Processing ${updatedRecords.length} orders one by one`);
+        
+        for (let index = 0; index < updatedRecords.length; index++) {
+          const record = updatedRecords[index];
+          console.log(`Processing order ${index + 1}/${updatedRecords.length}: ${record.orderNumber}`);
           
-          updatedRecords[i] = { ...record, status: 'success' };
+          try {
+            console.log(`Updating tracking for order ${record.orderNumber}...`, {
+              orderNumber: record.orderNumber,
+              trackingNumber: record.trackingNumber,
+              trackingCompany: record.trackingCompany,
+              trackingUrl: record.trackingUrl
+            });
+            
+            const result = await apiClient.updateOrderTracking(
+              record.orderNumber,
+              record.trackingNumber,
+              record.trackingCompany,
+              record.trackingUrl
+            );
+            
+            console.log(`Tracking update result for order ${record.orderNumber}:`, result);
+            
+            updatedRecords[index] = { ...record, status: 'success' as const };
+            
+          } catch (error) {
+            console.error(`Failed to update order ${record.orderNumber}:`, error);
+            updatedRecords[index] = { 
+              ...record, 
+              status: 'error' as const,
+              error: error instanceof Error ? error.message : 'Lỗi không xác định'
+            };
+          }
+          
+          // Update progress after each order
+          setProcessingProgress({ current: index + 1, total: updatedRecords.length });
           
           // Update state to show progress
           setTrackingRecords([...updatedRecords]);
           
-        } catch (error) {
-          console.error(`Failed to update order ${record.orderNumber}:`, error);
-          updatedRecords[i] = { 
-            ...record, 
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Lỗi không xác định'
-          };
-          setTrackingRecords([...updatedRecords]);
+          // Delay 1 second between each order to avoid rate limiting
+          if (index < updatedRecords.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
         
-        // Delay to avoid rate limiting
-        if (i < updatedRecords.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
+        const successCount = updatedRecords.filter(r => r.status === 'success').length;
+        const errorCount = updatedRecords.filter(r => r.status === 'error').length;
+        
+        toast({
+          title: "Hoàn thành cập nhật!",
+          description: `Thành công: ${successCount}, Lỗi: ${errorCount}`,
+        });
       }
-      
-      const successCount = updatedRecords.filter(r => r.status === 'success').length;
-      const errorCount = updatedRecords.filter(r => r.status === 'error').length;
-      
-      toast({
-        title: "Hoàn thành cập nhật!",
-        description: `Thành công: ${successCount}, Lỗi: ${errorCount}`,
-      });
       
       setUploadComplete(true);
       
@@ -194,26 +253,66 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
             />
             
             {file && trackingRecords.length > 0 && (
-              <div className="flex space-x-2">
-                <Button
-                  onClick={processTrackingUpdates}
-                  disabled={isProcessing || uploadComplete}
-                  className="bg-teal-500 hover:bg-teal-600"
-                >
-                  {isProcessing ? 'Đang xử lý...' : 'Cập nhật Tracking'}
-                </Button>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="batch-mode"
+                        checked={useBatchMode}
+                        onCheckedChange={setUseBatchMode}
+                        disabled={isProcessing}
+                      />
+                      <Label htmlFor="batch-mode" className="flex items-center space-x-1">
+                        <Zap className="h-4 w-4 text-yellow-500" />
+                        <span>Batch Mode (Faster)</span>
+                      </Label>
+                    </div>
+                    <div className="text-sm text-slate-600">
+                      {useBatchMode ? 'All orders processed simultaneously' : 'Orders processed in small batches'}
+                    </div>
+                  </div>
+                </div>
                 
-                {uploadComplete && (
+                <div className="flex space-x-2">
                   <Button
-                    variant="outline"
-                    onClick={() => {
-                      setFile(null);
-                      setTrackingRecords([]);
-                      setUploadComplete(false);
-                    }}
+                    onClick={processTrackingUpdates}
+                    disabled={isProcessing || uploadComplete}
+                    className="bg-teal-500 hover:bg-teal-600"
                   >
-                    Tải file mới
+                    {isProcessing ? `Đang xử lý... (${processingProgress.current}/${processingProgress.total})` : 'Cập nhật Tracking'}
                   </Button>
+                  
+                  {uploadComplete && (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setFile(null);
+                        setTrackingRecords([]);
+                        setUploadComplete(false);
+                        setProcessingProgress({ current: 0, total: 0 });
+                      }}
+                    >
+                      Tải file mới
+                    </Button>
+                  )}
+                </div>
+                
+                {isProcessing && (
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm text-slate-600">
+                      <span>Tiến độ xử lý</span>
+                      <span>{processingProgress.current}/{processingProgress.total}</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2">
+                      <div 
+                        className="bg-teal-500 h-2 rounded-full transition-all duration-300"
+                        style={{ 
+                          width: `${processingProgress.total > 0 ? (processingProgress.current / processingProgress.total) * 100 : 0}%` 
+                        }}
+                      ></div>
+                    </div>
+                  </div>
                 )}
               </div>
             )}

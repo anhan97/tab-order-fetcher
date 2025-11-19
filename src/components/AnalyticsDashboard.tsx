@@ -1,14 +1,16 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
-import { TrendingUp, DollarSign, Target, Users, RefreshCw } from 'lucide-react';
-import { FacebookAdsApiClient, FacebookCampaign } from '@/utils/facebookAdsApi';
-import { Order } from '@/types/order';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { AlertCircle, TrendingUp, DollarSign, Target, Package, Loader2, ShoppingBag, Truck, Calculator } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { FacebookAdsApiClient } from '@/utils/facebookAdsApi';
+import { Order, COGSConfig } from '@/types/order';
+import { getDatePresetOptions, type DatePreset } from '@/utils/dateUtils';
 
 interface AnalyticsDashboardProps {
   facebookConfig: {
@@ -16,44 +18,71 @@ interface AnalyticsDashboardProps {
     adAccountId: string;
   };
   orders: Order[];
+  cogsConfigs: COGSConfig[];
 }
 
-export const AnalyticsDashboard = ({ facebookConfig, orders }: AnalyticsDashboardProps) => {
-  const [campaigns, setCampaigns] = useState<FacebookCampaign[]>([]);
-  const [ordersWithAds, setOrdersWithAds] = useState<Order[]>([]);
+interface AdPerformance {
+  date: string;
+  spend: number;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  cpc: number;
+}
+
+interface RoasData {
+  date: string;
+  roas: number;
+  revenue: number;
+  adSpend: number;
+}
+
+export const AnalyticsDashboard = ({ facebookConfig, orders, cogsConfigs }: AnalyticsDashboardProps) => {
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [dateRange, setDateRange] = useState('30days');
+  const [adPerformance, setAdPerformance] = useState<AdPerformance[]>([]);
+  const [roasData, setRoasData] = useState<RoasData[]>([]);
   const { toast } = useToast();
 
   useEffect(() => {
-    fetchFacebookData();
-  }, [facebookConfig]);
+    fetchAnalytics();
+  }, [facebookConfig, orders, dateRange]);
 
-  const fetchFacebookData = async () => {
+  const fetchAnalytics = async () => {
     setIsLoading(true);
+    setError('');
+
     try {
       const apiClient = new FacebookAdsApiClient(facebookConfig);
       
-      // Get campaigns from last 30 days
-      const endDate = new Date().toISOString().split('T')[0];
-      const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      // Get ad performance data
+      const endDate = new Date();
+      const startDate = new Date();
       
-      const campaignData = await apiClient.getCampaigns(startDate, endDate);
-      setCampaigns(campaignData);
+      // Convert standardized date range to days
+      const daysMap: Record<string, number> = {
+        '7days': 7,
+        '30days': 30,
+        '90days': 90
+      };
       
-      // Match orders with campaign data
-      const matchedOrders = await apiClient.calculateOrderROAS(orders, campaignData);
-      setOrdersWithAds(matchedOrders);
+      const days = daysMap[dateRange] || 30;
+      startDate.setDate(endDate.getDate() - days);
       
+      const performanceData = await apiClient.getAdPerformance(startDate, endDate);
+      setAdPerformance(performanceData);
+
+      // Calculate ROAS
+      const roasMetrics = calculateRoas(performanceData, orders, startDate, endDate);
+      setRoasData(roasMetrics);
+
+    } catch (err) {
+      console.error('Error fetching analytics:', err);
+      setError('Failed to load analytics data. Please try again later.');
       toast({
-        title: "Đã tải dữ liệu Facebook Ads!",
-        description: `Tìm thấy ${campaignData.length} chiến dịch quảng cáo.`,
-      });
-      
-    } catch (error) {
-      console.error('Error fetching Facebook Ads data:', error);
-      toast({
-        title: "Lỗi khi tải dữ liệu Facebook Ads",
-        description: "Không thể kết nối với Facebook Ads API.",
+        title: "Error loading data",
+        description: err instanceof Error ? err.message : "Could not connect to Facebook Ads API.",
         variant: "destructive",
       });
     } finally {
@@ -61,182 +90,284 @@ export const AnalyticsDashboard = ({ facebookConfig, orders }: AnalyticsDashboar
     }
   };
 
-  const totalSpend = campaigns.reduce((sum, c) => sum + c.spend, 0);
-  const totalRevenue = ordersWithAds.reduce((sum, o) => sum + o.totalAmount, 0);
-  const overallROAS = totalSpend > 0 ? totalRevenue / totalSpend : 0;
-  const avgCostPerPurchase = campaigns.length > 0 
-    ? campaigns.reduce((sum, c) => sum + c.cost_per_purchase, 0) / campaigns.length 
-    : 0;
+  const calculateRoas = (
+    adData: AdPerformance[], 
+    orders: Order[], 
+    startDate: Date, 
+    endDate: Date
+  ): RoasData[] => {
+    // Group orders by date
+    const ordersByDate = orders.reduce((acc, order) => {
+      const date = new Date(order.orderDate).toISOString().split('T')[0];
+      if (!acc[date]) acc[date] = 0;
+      acc[date] += order.totalPrice;
+      return acc;
+    }, {} as Record<string, number>);
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('vi-VN', {
-      style: 'currency',
-      currency: 'USD'
-    }).format(amount);
+    // Calculate ROAS for each day
+    return adData.map(day => {
+      const revenue = ordersByDate[day.date] || 0;
+      return {
+        date: day.date,
+        revenue,
+        adSpend: day.spend,
+        roas: day.spend > 0 ? revenue / day.spend : 0
+      };
+    });
+  };
+
+  const calculateMetrics = () => {
+    const totalRevenue = orders.reduce((sum, order) => sum + order.totalPrice, 0);
+    const totalCogs = orders.reduce((sum, order) => {
+      const config = cogsConfigs.find(c => c.variantId === order.variantId);
+      return sum + ((config?.baseCost || 0) + (config?.handlingFee || 0)) * order.quantity;
+    }, 0);
+    const totalShippingCost = orders.reduce((sum, order) => sum + (order.shippingCost || 0), 0);
+    const totalAdSpend = adPerformance.reduce((sum, day) => sum + day.spend, 0);
+    const totalCost = totalCogs + totalShippingCost + totalAdSpend;
+    const netProfit = totalRevenue - totalCost;
+    
+    return {
+      orderCount: orders.length,
+      revenue: totalRevenue,
+      totalCost,
+      netProfit,
+      netProfitMargin: (netProfit / totalRevenue) * 100,
+      adSpendPerOrder: totalAdSpend / orders.length,
+      avgOrderValue: totalRevenue / orders.length,
+      totalAdSpend,
+      cogs: totalCogs,
+      shippingCost: totalShippingCost
+    };
   };
 
   if (isLoading) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <div className="text-center space-y-4">
-            <RefreshCw className="h-8 w-8 animate-spin text-blue-500 mx-auto" />
-            <p className="text-slate-600">Đang tải dữ liệu Facebook Ads...</p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {[...Array(4)].map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-6">
+                <Skeleton className="h-4 w-[100px] mb-2" />
+                <Skeleton className="h-8 w-[120px]" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <Card>
+          <CardContent className="p-6">
+            <Skeleton className="h-[300px] w-full" />
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
+  if (error) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
+    );
+  }
+
+  const metrics = calculateMetrics();
+
   return (
     <div className="space-y-6">
-      {/* Overview Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">Performance Analytics</h2>
+        <Select value={dateRange} onValueChange={setDateRange}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="Select timeframe" />
+          </SelectTrigger>
+          <SelectContent>
+            {getDatePresetOptions().filter(option => 
+              ['7days', '30days', '90days'].includes(option.value)
+            ).map(option => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-red-50 rounded-lg">
-                <DollarSign className="h-5 w-5 text-red-500" />
-              </div>
-              <div>
-                <p className="text-sm text-slate-600">Tổng chi phí quảng cáo</p>
-                <p className="text-2xl font-bold text-slate-900">{formatCurrency(totalSpend)}</p>
-              </div>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <ShoppingBag className="h-4 w-4 text-blue-500" />
+              <p className="text-sm text-slate-600">Order Count</p>
             </div>
+            <h3 className="text-2xl font-bold mt-2">{metrics.orderCount}</h3>
           </CardContent>
         </Card>
-        
+
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-green-50 rounded-lg">
-                <TrendingUp className="h-5 w-5 text-green-500" />
-              </div>
-              <div>
-                <p className="text-sm text-slate-600">Doanh thu từ quảng cáo</p>
-                <p className="text-2xl font-bold text-slate-900">{formatCurrency(totalRevenue)}</p>
-              </div>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <DollarSign className="h-4 w-4 text-green-500" />
+              <p className="text-sm text-slate-600">Net Profit</p>
             </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.netProfit.toFixed(2)}
+            </h3>
           </CardContent>
         </Card>
-        
+
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-blue-50 rounded-lg">
-                <Target className="h-5 w-5 text-blue-500" />
-              </div>
-              <div>
-                <p className="text-sm text-slate-600">ROAS tổng thể</p>
-                <p className="text-2xl font-bold text-slate-900">{overallROAS.toFixed(2)}x</p>
-              </div>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <Target className="h-4 w-4 text-purple-500" />
+              <p className="text-sm text-slate-600">Net Profit Margin</p>
             </div>
+            <h3 className="text-2xl font-bold mt-2">
+              {metrics.netProfitMargin.toFixed(2)}%
+            </h3>
           </CardContent>
         </Card>
-        
+
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-purple-50 rounded-lg">
-                <Users className="h-5 w-5 text-purple-500" />
-              </div>
-              <div>
-                <p className="text-sm text-slate-600">Cost per Purchase</p>
-                <p className="text-2xl font-bold text-slate-900">{formatCurrency(avgCostPerPurchase)}</p>
-              </div>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <Calculator className="h-4 w-4 text-red-500" />
+              <p className="text-sm text-slate-600">Total Cost</p>
             </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.totalCost.toFixed(2)}
+            </h3>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <TrendingUp className="h-4 w-4 text-yellow-500" />
+              <p className="text-sm text-slate-600">Revenue</p>
+            </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.revenue.toFixed(2)}
+            </h3>
           </CardContent>
         </Card>
       </div>
 
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <Card>
-          <CardHeader>
-            <CardTitle>ROAS theo chiến dịch</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={campaigns}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip formatter={(value) => [`${Number(value).toFixed(2)}x`, 'ROAS']} />
-                <Bar dataKey="roas" fill="#3b82f6" />
-              </BarChart>
-            </ResponsiveContainer>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <DollarSign className="h-4 w-4 text-orange-500" />
+              <p className="text-sm text-slate-600">Ad Spend Per Order</p>
+            </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.adSpendPerOrder.toFixed(2)}
+            </h3>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Chi phí vs Doanh thu</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={campaigns}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip formatter={(value) => [formatCurrency(Number(value)), '']} />
-                <Line type="monotone" dataKey="spend" stroke="#ef4444" name="Chi phí" />
-                <Line type="monotone" dataKey="purchase_value" stroke="#22c55e" name="Doanh thu" />
-              </LineChart>
-            </ResponsiveContainer>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <Package className="h-4 w-4 text-indigo-500" />
+              <p className="text-sm text-slate-600">Avg. Order Value</p>
+            </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.avgOrderValue.toFixed(2)}
+            </h3>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <DollarSign className="h-4 w-4 text-pink-500" />
+              <p className="text-sm text-slate-600">Total Ad Spend</p>
+            </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.totalAdSpend.toFixed(2)}
+            </h3>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <Calculator className="h-4 w-4 text-cyan-500" />
+              <p className="text-sm text-slate-600">COGS</p>
+            </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.cogs.toFixed(2)}
+            </h3>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center space-x-2">
+              <Truck className="h-4 w-4 text-teal-500" />
+              <p className="text-sm text-slate-600">Shipping Cost</p>
+            </div>
+            <h3 className="text-2xl font-bold mt-2">
+              ${metrics.shippingCost.toFixed(2)}
+            </h3>
           </CardContent>
         </Card>
       </div>
 
-      {/* Campaign Performance Table */}
-      <Card>
-        <CardHeader>
-          <div className="flex justify-between items-center">
-            <CardTitle>Hiệu suất chiến dịch</CardTitle>
-            <Button onClick={fetchFacebookData} variant="outline">
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Làm mới
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Tên chiến dịch</TableHead>
-                  <TableHead>Trạng thái</TableHead>
-                  <TableHead>Chi phí</TableHead>
-                  <TableHead>Doanh thu</TableHead>
-                  <TableHead>ROAS</TableHead>
-                  <TableHead>Cost/Purchase</TableHead>
-                  <TableHead>Purchases</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {campaigns.map((campaign) => (
-                  <TableRow key={campaign.id}>
-                    <TableCell className="font-medium">{campaign.name}</TableCell>
-                    <TableCell>
-                      <Badge variant={campaign.status === 'ACTIVE' ? 'default' : 'secondary'}>
-                        {campaign.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{formatCurrency(campaign.spend)}</TableCell>
-                    <TableCell>{formatCurrency(campaign.purchase_value)}</TableCell>
-                    <TableCell>
-                      <span className={campaign.roas >= 3 ? 'text-green-600 font-medium' : 'text-red-600'}>
-                        {campaign.roas.toFixed(2)}x
-                      </span>
-                    </TableCell>
-                    <TableCell>{formatCurrency(campaign.cost_per_purchase)}</TableCell>
-                    <TableCell>{campaign.purchases}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="roas">
+        <TabsList>
+          <TabsTrigger value="roas">ROAS</TabsTrigger>
+          <TabsTrigger value="performance">Ad Performance</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="roas">
+          <Card>
+            <CardHeader>
+              <CardTitle>ROAS Over Time</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[400px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={roasData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line type="monotone" dataKey="roas" stroke="#8884d8" name="ROAS" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="performance">
+          <Card>
+            <CardHeader>
+              <CardTitle>Ad Performance</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[400px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={adPerformance}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis yAxisId="left" />
+                    <YAxis yAxisId="right" orientation="right" />
+                    <Tooltip />
+                    <Legend />
+                    <Bar yAxisId="left" dataKey="clicks" fill="#82ca9d" name="Clicks" />
+                    <Bar yAxisId="right" dataKey="spend" fill="#8884d8" name="Spend" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

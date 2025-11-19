@@ -1,7 +1,13 @@
 
 export const createProxyUrl = (url: string) => {
-  // Use allorigins.win as it handles headers better for Shopify
-  return `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  // Extract the path after /admin/api/2024-04
+  const match = url.match(/\/admin\/api\/2024-04(.*)/);
+  if (!match) {
+    throw new Error('Invalid Shopify API URL format');
+  }
+  
+  // Use our backend proxy
+  return `http://localhost:3001/api/shopify${match[1]}`; // Updated port to 3001
 };
 
 export const handleProxyResponse = async (response: Response) => {

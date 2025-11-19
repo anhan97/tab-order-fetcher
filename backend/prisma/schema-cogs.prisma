@@ -1,0 +1,115 @@
+// Normalized COGS Database Schema
+// Master tables for Country and ShippingCompany with per-variant COGS mappings
+
+model Country {
+  id          String   @id @default(cuid())
+  code        String   @unique // ISO-2 country code (US, CA, AU, UK, etc.)
+  name        String
+  currency    String   @default("USD")
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  // Relations
+  variant_costs VariantCost[]
+  combo_overrides ComboOverride[]
+
+  @@map("countries")
+}
+
+model ShippingCompany {
+  id          String   @id @default(cuid())
+  name        String   @unique // e.g., "YunTu", "Shengtu Logistics", "Yuanpeng Logistics"
+  display_name String  // e.g., "YunTu Express", "Shengtu Logistics"
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  // Relations
+  variant_costs VariantCost[]
+  combo_overrides ComboOverride[]
+
+  @@map("shipping_companies")
+}
+
+model VariantCost {
+  id                  String   @id @default(cuid())
+  variant_id          BigInt   // Shopify variant ID
+  country_id          String
+  shipping_company_id String
+  cost                Decimal  @db.Decimal(10, 2) // COGS cost for this variant in this context
+  is_active           Boolean  @default(true)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  // Relations
+  country          Country          @relation(fields: [country_id], references: [id], onDelete: Cascade)
+  shipping_company ShippingCompany @relation(fields: [shipping_company_id], references: [id], onDelete: Cascade)
+
+  // Unique constraint to prevent duplicate mappings
+  @@unique([variant_id, country_id, shipping_company_id])
+  @@map("variant_costs")
+}
+
+model Combo {
+  id              String   @id @default(cuid())
+  combo_id        String   @unique // User-defined combo identifier
+  name            String
+  trigger_quantity Int     // Number of products needed to trigger this combo
+  is_active       Boolean  @default(true)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  // Relations
+  items    ComboItem[]
+  overrides ComboOverride[]
+
+  @@map("combos")
+}
+
+model ComboItem {
+  id         String @id @default(cuid())
+  combo_id   String
+  variant_id BigInt // Shopify variant ID
+  quantity   Int    // Quantity of this variant in the combo
+
+  // Relations
+  combo Combo @relation(fields: [combo_id], references: [id], onDelete: Cascade)
+
+  // Unique constraint to prevent duplicate items in same combo
+  @@unique([combo_id, variant_id])
+  @@map("combo_items")
+}
+
+model ComboOverride {
+  id                  String   @id @default(cuid())
+  combo_id            String
+  country_id          String
+  shipping_company_id String
+  override_cost       Decimal? @db.Decimal(10, 2) // Override cost for this combo in this context
+  discount_type       String?  // "percent" or "fixed"
+  discount_value      Decimal? @db.Decimal(10, 2) // Discount amount or percentage
+  is_active           Boolean  @default(true)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  // Relations
+  combo            Combo            @relation(fields: [combo_id], references: [id], onDelete: Cascade)
+  country          Country          @relation(fields: [country_id], references: [id], onDelete: Cascade)
+  shipping_company ShippingCompany @relation(fields: [shipping_company_id], references: [id], onDelete: Cascade)
+
+  // Unique constraint to prevent duplicate overrides
+  @@unique([combo_id, country_id, shipping_company_id])
+  @@map("combo_overrides")
+}
+
+// Seed data for master tables
+model SeedData {
+  id   String @id @default(cuid())
+  name String
+  data Json
+  created_at DateTime @default(now())
+
+  @@map("seed_data")
+}
+
+

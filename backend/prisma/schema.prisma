@@ -1,0 +1,316 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String    @id @default(uuid())
+  email       String    @unique
+  password    String
+  firstName   String?
+  lastName    String?
+  isVerified  Boolean   @default(false)
+  verifyToken String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  // Tenant relationships
+  shopifyStores ShopifyStore[]
+  fbAdAccounts  FacebookAdAccount[]
+  orders        Order[]
+  adSpends      FacebookAdSpend[]
+  productCosts  ProductCost[]
+  cogsConfigs   COGSConfig[]
+  comboPricing  ComboPricing[]
+  
+  // New relationships
+  productVariants ProductVariant[]
+  combos          Combo[]
+  pricebooks      Pricebook[]
+}
+
+model ShopifyStore {
+  id          String    @id @default(uuid())
+  userId      String
+  storeDomain String
+  accessToken String
+  name        String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  // Relationships
+  user        User      @relation(fields: [userId], references: [id])
+  orders      Order[]
+  cogsConfigs COGSConfig[]
+  comboPricing ComboPricing[]
+  adSpends    FacebookAdSpend[]
+  productCosts ProductCost[]
+  
+  // New relationships
+  productVariants ProductVariant[]
+  pricebooks      Pricebook[]
+  combos          Combo[]
+
+  @@unique([userId, storeDomain])
+}
+
+model FacebookAdAccount {
+  id        String    @id @default(uuid())
+  userId    String
+  accountId String
+  name      String
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relationships
+  user      User      @relation(fields: [userId], references: [id])
+  adSpends  FacebookAdSpend[]
+
+  @@unique([userId, accountId])
+}
+
+model Order {
+  id                String    @id @default(uuid())
+  userId            String
+  storeId           String
+  shopifyOrderId    String
+  orderNumber       String
+  customerEmail     String?
+  customerName      String?
+  totalAmount       Float
+  currency          String
+  status            String
+  fulfillmentStatus String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // UTM tracking fields
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmContent  String?
+  fbclid      String?
+  fbAdId      String?
+  fbAdsetId   String?
+  fbCampaignId String?
+
+  // Additional properties for compatibility
+  productName  String?
+  style        String?
+  quantity     Int?
+  email        String?
+  phoneNumber  String?
+
+  // Relationships
+  user        User      @relation(fields: [userId], references: [id])
+  store       ShopifyStore @relation(fields: [storeId], references: [id])
+  adSpends    FacebookAdSpend[]
+
+  @@unique([userId, storeId, shopifyOrderId])
+}
+
+model FacebookAdSpend {
+  id        String    @id @default(uuid())
+  userId    String
+  storeId   String
+  accountId String
+  date      DateTime
+  spend     Float
+  currency  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relationships
+  user      User      @relation(fields: [userId], references: [id])
+  store     ShopifyStore @relation(fields: [storeId], references: [id])
+  account   FacebookAdAccount @relation(fields: [accountId], references: [id])
+  order     Order?    @relation(fields: [orderId], references: [id])
+  orderId   String?
+
+  @@unique([userId, storeId, accountId, date])
+}
+
+model ProductCost {
+  id        String    @id @default(uuid())
+  userId    String
+  storeId   String
+  variantId String
+  cost      Float
+  currency  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relationships
+  user      User      @relation(fields: [userId], references: [id])
+  store     ShopifyStore @relation(fields: [storeId], references: [id])
+
+  @@unique([userId, storeId, variantId])
+}
+
+// New comprehensive COGS system based on the specification
+
+model ProductVariant {
+  variantId        BigInt   @id // Shopify Variant ID
+  userId           String
+  storeId          String
+  sku              String?
+  title            String
+  productId        BigInt
+  inventoryItemId  BigInt?  // for Shopify cost sync
+  baseCost         Decimal  @db.Decimal(10, 2) // pulled from Shopify or metafield
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relationships
+  user             User     @relation(fields: [userId], references: [id])
+  store            ShopifyStore @relation(fields: [storeId], references: [id])
+  comboItems       ComboItem[]
+  variantCostOverrides PricebookVariantCostOverride[]
+
+  @@unique([userId, storeId, variantId])
+}
+
+model Combo {
+  comboId    String   @id @default(uuid())
+  userId     String
+  storeId    String
+  name       String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relationships
+  user       User     @relation(fields: [userId], references: [id])
+  store      ShopifyStore @relation(fields: [storeId], references: [id])
+  comboItems ComboItem[]
+  comboOverrides PricebookComboOverride[]
+
+  @@unique([userId, storeId, name])
+}
+
+model ComboItem {
+  comboId    String
+  variantId  BigInt
+  qty        Int      // CHECK (qty > 0)
+
+  // Relationships
+  combo      Combo    @relation(fields: [comboId], references: [comboId], onDelete: Cascade)
+  variant    ProductVariant @relation(fields: [variantId], references: [variantId], onDelete: Cascade)
+
+  @@id([comboId, variantId])
+}
+
+model Pricebook {
+  pricebookId     String   @id @default(uuid())
+  userId          String
+  storeId         String
+  countryCode     String   // ISO 3166-1 alpha-2
+  shippingCompany String   // e.g., 'YunTu', 'Shengtu Logistics'
+  currency        String   // e.g., 'USD'
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relationships
+  user            User     @relation(fields: [userId], references: [id])
+  store           ShopifyStore @relation(fields: [storeId], references: [id])
+  shippingTiers   PricebookShippingTier[]
+  variantCostOverrides PricebookVariantCostOverride[]
+  comboOverrides  PricebookComboOverride[]
+
+  @@unique([userId, storeId, countryCode, shippingCompany])
+}
+
+model PricebookShippingTier {
+  pricebookId   String
+  minItems      Int      // inclusive
+  maxItems      Int      // inclusive; use very large number for "infinity"
+  shippingCost  Decimal  @db.Decimal(10, 2)
+
+  // Relationships
+  pricebook     Pricebook @relation(fields: [pricebookId], references: [pricebookId], onDelete: Cascade)
+
+  @@id([pricebookId, minItems, maxItems])
+}
+
+model PricebookVariantCostOverride {
+  pricebookId   String
+  variantId     BigInt
+  overrideCost  Decimal  @db.Decimal(10, 2)
+
+  // Relationships
+  pricebook     Pricebook @relation(fields: [pricebookId], references: [pricebookId], onDelete: Cascade)
+  variant       ProductVariant @relation(fields: [variantId], references: [variantId], onDelete: Cascade)
+
+  @@id([pricebookId, variantId])
+}
+
+model PricebookComboOverride {
+  pricebookId           String
+  comboId               String
+  overrideProductCost   Decimal? @db.Decimal(10, 2) // if null => sum of components * qty
+  overrideShippingCost  Decimal? @db.Decimal(10, 2) // if null => compute via tier(s)
+
+  // Relationships
+  pricebook             Pricebook @relation(fields: [pricebookId], references: [pricebookId], onDelete: Cascade)
+  combo                 Combo @relation(fields: [comboId], references: [comboId], onDelete: Cascade)
+
+  @@id([pricebookId, comboId])
+}
+
+// Legacy models for backward compatibility
+model COGSConfig {
+  id            String    @id @default(uuid())
+  userId        String
+  storeId       String
+  productSKU    String
+  variantId     String
+  productId     String
+  productTitle  String
+  variantTitle  String
+  baseCost      Float
+  handlingFee   Float
+  description   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relationships
+  user          User          @relation(fields: [userId], references: [id])
+  store         ShopifyStore  @relation(fields: [storeId], references: [id])
+  comboPricing  ComboPricing[]
+
+  @@unique([userId, storeId, variantId])
+}
+
+model ComboPricing {
+  id            String    @id @default(uuid())
+  cogsConfigId  String
+  userId        String
+  storeId       String
+  supplier      String    // e.g., "YunTu", "Shengtu Logistics", "Yuanpeng Logistics"
+  country       String    // e.g., "US", "UK", "CA", "AU"
+  comboType     String    // e.g., "single", "combo2", "combo3", "combo4", "combo5+"
+  quantity      Int       // Exact quantity for this combo (1, 2, 3, 4, 5+)
+  productCost   Float     // Cost per unit for this combo
+  shippingCost  Float     // Shipping cost for this combo
+  totalCost     Float     // Total cost for this combo (calculated)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relationships
+  cogsConfig    COGSConfig @relation(fields: [cogsConfigId], references: [id], onDelete: Cascade)
+  user          User       @relation(fields: [userId], references: [id])
+  store         ShopifyStore @relation(fields: [storeId], references: [id])
+
+  @@unique([cogsConfigId, supplier, country, quantity])
+  @@index([supplier, country, comboType])
+}
