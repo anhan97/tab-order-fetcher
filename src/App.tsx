@@ -12,6 +12,8 @@ import { AnalyticsPage } from "@/pages/AnalyticsPage";
 import { CogsPage } from "@/pages/CogsPage";
 import { FacebookPage } from "@/pages/FacebookPage";
 import { ContentAnalyticsPage } from "@/pages/ContentAnalyticsPage";
+import { PrivacyPolicyPage } from "@/pages/PrivacyPolicyPage";
+import { TermsOfServicePage } from "@/pages/TermsOfServicePage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -31,6 +33,8 @@ const AppRoutes = () => {
   return (
     <Routes>
       <Route path="/connect" element={<ConnectPage />} />
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
+      <Route path="/terms" element={<TermsOfServicePage />} />
 
       <Route element={<Layout />}>
         <Route path="/" element={<Navigate to="/orders" replace />} />

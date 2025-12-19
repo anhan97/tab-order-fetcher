@@ -764,4 +764,71 @@ export class COGSService {
   static async getPricingForOrder(userId: string, variantId: string, country: string, quantity: number) {
     return this.getExactCOGSForOrder(userId, variantId, country, quantity);
   }
+
+  // Shipping Company Management
+  static async getShippingCompanies() {
+    try {
+      // Use raw query to avoid type issues if client isn't regenerated
+      const companies = await prisma.$queryRaw`
+        SELECT * FROM shipping_companies WHERE is_active = true ORDER BY name ASC
+      `;
+      return companies;
+    } catch (error) {
+      console.error('Error fetching shipping companies:', error);
+      throw new Error('Failed to fetch shipping companies');
+    }
+  }
+
+  static async createShippingCompany(data: { name: string; display_name?: string; tracking_prefixes?: string }) {
+    try {
+      const { name, display_name, tracking_prefixes } = data;
+      // Use raw query
+      const id = require('crypto').randomUUID();
+      await prisma.$executeRaw`
+        INSERT INTO shipping_companies (id, name, display_name, tracking_prefixes, is_active, "createdAt", "updatedAt")
+        VALUES (${id}, ${name}, ${display_name || name}, ${tracking_prefixes || null}, true, NOW(), NOW())
+      `;
+      const company = await prisma.$queryRaw`SELECT * FROM shipping_companies WHERE id = ${id}`;
+      return (company as any[])[0];
+    } catch (error) {
+      console.error('Error creating shipping company:', error);
+      throw new Error('Failed to create shipping company');
+    }
+  }
+
+  static async updateShippingCompany(id: string, data: { name: string; display_name?: string; tracking_prefixes?: string; is_active?: boolean }) {
+    try {
+      const { name, display_name, tracking_prefixes, is_active } = data;
+      await prisma.$executeRaw`
+        UPDATE shipping_companies
+        SET name = ${name},
+            display_name = ${display_name || name},
+            tracking_prefixes = ${tracking_prefixes || null},
+            is_active = ${is_active !== undefined ? is_active : true},
+            "updatedAt" = NOW()
+        WHERE id = ${id}
+      `;
+      const company = await prisma.$queryRaw`SELECT * FROM shipping_companies WHERE id = ${id}`;
+      return (company as any[])[0];
+    } catch (error) {
+      console.error('Error updating shipping company:', error);
+      throw new Error('Failed to update shipping company');
+    }
+  }
+
+  static async deleteShippingCompany(id: string) {
+    try {
+      await prisma.$executeRaw`
+        UPDATE shipping_companies
+        SET is_active = false,
+            "updatedAt" = NOW()
+        WHERE id = ${id}
+      `;
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting shipping company:', error);
+      throw new Error('Failed to delete shipping company');
+    }
+  }
 }
+

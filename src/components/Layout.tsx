@@ -186,6 +186,22 @@ export const Layout = () => {
                 <main className="flex-1 overflow-y-auto p-4 sm:p-8">
                     <Outlet />
                 </main>
+
+                {/* Footer */}
+                <footer className="bg-white border-t border-slate-200 px-4 sm:px-8 py-4">
+                    <div className="flex flex-col sm:flex-row items-center justify-between text-sm text-slate-500">
+                        <p>© {new Date().getFullYear()} Order Manager. All rights reserved.</p>
+                        <div className="flex items-center space-x-4 mt-2 sm:mt-0">
+                            <Link to="/privacy" className="hover:text-slate-700 transition-colors">
+                                Privacy Policy
+                            </Link>
+                            <span className="text-slate-300">|</span>
+                            <Link to="/terms" className="hover:text-slate-700 transition-colors">
+                                Terms of Service
+                            </Link>
+                        </div>
+                    </div>
+                </footer>
             </div>
         </div>
     );

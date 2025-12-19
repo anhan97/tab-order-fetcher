@@ -16,6 +16,7 @@ import { Order } from '@/types/order';
 import { CogsConfig } from '@/types/minimalCogs';
 import { calculateProductCogs as calculateProductCogsUtil } from '@/utils/minimalCogsResolver';
 import { calculateOrderCOGS, calculateBulkCOGS, getCountryCode } from '@/utils/cogsCalculator';
+import { detectShippingCompany } from '@/utils/trackingUtils';
 import { ShopifyApiClient, OrderFilters } from '@/utils/shopifyApi';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -104,7 +105,24 @@ export const OrdersTable = ({
   const [pageSize, setPageSize] = useState(10);
   const { toast } = useToast();
   const [selectedShippingProvider, setSelectedShippingProvider] = useState<string>('YunTu');
+  const [shippingCompanies, setShippingCompanies] = useState<any[]>([]);
   const SHIPPING_PROVIDERS = ['YunTu', 'Shengtu Logistics', 'Yuanpeng Logistics'];
+
+  // Load shipping companies
+  useEffect(() => {
+    const loadShippingCompanies = async () => {
+      try {
+        const response = await fetch('/api/cogs/shipping-companies');
+        if (response.ok) {
+          const data = await response.json();
+          setShippingCompanies(data);
+        }
+      } catch (error) {
+        console.error('Failed to load shipping companies:', error);
+      }
+    };
+    loadShippingCompanies();
+  }, []);
 
   // Add state for temporary date range
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(undefined);
@@ -397,7 +415,17 @@ export const OrdersTable = ({
         }));
 
         const countryCode = getCountryCode(order.shippingAddress?.country);
-        const shippingCompany = selectedShippingProvider;
+
+        // Try to auto-detect shipping company from tracking number
+        let shippingCompany = selectedShippingProvider;
+        const trackingNumber = order.fulfillmentStatus === 'fulfilled' && order.trackingNumber ? order.trackingNumber : null;
+
+        if (trackingNumber) {
+          const detected = detectShippingCompany(trackingNumber, shippingCompanies);
+          if (detected) {
+            shippingCompany = detected;
+          }
+        }
 
         const result = calculateOrderCOGS(orderLines, countryCode, shippingCompany, cogsConfig);
         totalCogs += result.total_cogs;
@@ -660,7 +688,18 @@ export const OrdersTable = ({
       try {
         // Extract country and shipping company from order
         const countryCode = order.shippingAddress?.country || 'US';
-        const shippingCompany = selectedShippingProvider;
+
+        // Try to auto-detect shipping company from tracking number
+        let shippingCompany = selectedShippingProvider;
+        // Handle both Order and MergedOrder types for tracking number
+        const trackingNumber = 'trackingNumber' in order ? order.trackingNumber : null;
+
+        if (trackingNumber) {
+          const detected = detectShippingCompany(trackingNumber, shippingCompanies);
+          if (detected) {
+            shippingCompany = detected;
+          }
+        }
 
         // Prepare order lines for COGS calculation
         let orderLines = [];
@@ -762,7 +801,7 @@ export const OrdersTable = ({
 
     calculateAllMetrics();
     calculateAllMetrics();
-  }, [orders, dateRange, cogsConfig, selectedShippingProvider]);
+  }, [orders, dateRange, cogsConfig, selectedShippingProvider, shippingCompanies]);
 
   // Calculate individual order costs using bulk API
   useEffect(() => {
@@ -795,9 +834,33 @@ export const OrdersTable = ({
 
         if (orderLines.length > 0) {
           const countryCode = getCountryCode(order.shippingAddress?.country);
-          const shippingCompany = selectedShippingProvider;
+
+          // Try to auto-detect shipping company from tracking number
+          let shippingCompany = selectedShippingProvider;
+          const trackingNumber = 'trackingNumber' in order ? order.trackingNumber : null;
+
+          if (trackingNumber) {
+            const detected = detectShippingCompany(trackingNumber, shippingCompanies);
+            if (detected) {
+              shippingCompany = detected;
+              console.log(`[COGS Debug] Order ${order.orderNumber}: Detected shipping company '${detected}' from tracking '${trackingNumber}'`);
+            } else {
+              console.log(`[COGS Debug] Order ${order.orderNumber}: Failed to detect shipping company from tracking '${trackingNumber}'. Available companies:`, shippingCompanies);
+            }
+          } else {
+            // console.log(`[COGS Debug] Order ${order.orderNumber}: No tracking number found.`);
+          }
 
           const result = calculateOrderCOGS(orderLines, countryCode, shippingCompany, cogsConfig);
+
+          if (result.total_cogs === 0 && orderLines.length > 0) {
+            console.log(`[COGS Debug] Order ${order.orderNumber}: COGS is 0. Inputs:`, {
+              countryCode,
+              shippingCompany,
+              orderLines,
+              // cogsConfig: '...' // Don't log full config
+            });
+          }
 
           const shippingCost = order.shippingCost || 0;
           const totalCost = result.total_cogs + shippingCost;
@@ -819,8 +882,7 @@ export const OrdersTable = ({
     };
 
     calculateOrderCostsForAll();
-    calculateOrderCostsForAll();
-  }, [orders, cogsConfig, selectedShippingProvider]);
+  }, [orders, cogsConfig, selectedShippingProvider, shippingCompanies]);
 
   // Recalculate metrics when ad spend data changes
   useEffect(() => {

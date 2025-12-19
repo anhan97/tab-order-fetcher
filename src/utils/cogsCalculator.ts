@@ -1,4 +1,4 @@
-import { CogsConfig } from '../types/cogs';
+import { CogsConfig } from '../types/minimalCogs';
 
 export interface OrderLine {
   variant_id: number;
@@ -31,17 +31,18 @@ export function calculateOrderCOGS(
   for (const line of orderLines) {
     // Find product in COGS config
     const product = cogsConfig.products.find(p => p.variant_id === line.variant_id);
-    
+
     if (product) {
       // Check for country/shipping override
-      const override = product.overrides?.find(o => 
-        o.country === countryCode && o.shipping_company === shippingCompany
+      const override = product.overrides?.find(o =>
+        (o.country === countryCode || getCountryCode(o.country) === countryCode) &&
+        o.shipping_company === shippingCompany
       );
-      
+
       const unitCost = override ? override.cost : product.base_cost;
       const lineCost = unitCost * line.quantity;
       totalCogs += lineCost;
-      
+
       lineDetails.push({
         variant_id: line.variant_id,
         quantity: line.quantity,
@@ -99,10 +100,10 @@ export function calculateBulkCOGS(
  */
 export function getCountryCode(countryName: string | undefined): string {
   if (!countryName) return 'US';
-  
+
   const countryMap: Record<string, string> = {
     'United States': 'US',
-    'Canada': 'CA', 
+    'Canada': 'CA',
     'Australia': 'AU',
     'United Kingdom': 'UK',
     'Germany': 'DE',
@@ -110,7 +111,7 @@ export function getCountryCode(countryName: string | undefined): string {
     'Italy': 'IT',
     'Spain': 'ES'
   };
-  
+
   return countryMap[countryName] || countryName.substring(0, 2).toUpperCase();
 }
 

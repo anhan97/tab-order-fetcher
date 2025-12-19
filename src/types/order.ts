@@ -32,6 +32,9 @@ export interface Order {
   note: string;
   productSKU: string;
   variantId: string; // Add variantId for COGS calculations
+  trackingNumber?: string;
+  trackingCompany?: string;
+  trackingUrl?: string;
   // UTM tracking
   fbAdId?: string;
   fbAdsetId?: string;

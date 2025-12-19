@@ -11,6 +11,7 @@ import { Upload, FileText, CheckCircle, AlertCircle, Download, Zap } from 'lucid
 import { useToast } from '@/hooks/use-toast';
 import { ShopifyApiClient } from '@/utils/shopifyApi';
 import { parseCsvFile } from '@/utils/csvParser';
+import { detectShippingCompany } from '@/utils/trackingUtils';
 
 interface TrackingRecord {
   orderNumber: string;
@@ -35,6 +36,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
   const [uploadComplete, setUploadComplete] = useState(false);
   const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
   const [useBatchMode, setUseBatchMode] = useState(true);
+  const [shippingCompanies, setShippingCompanies] = useState<Array<{ name: string; tracking_prefixes?: string }>>([]);
   const { toast } = useToast();
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -51,15 +53,34 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
     }
 
     setFile(selectedFile);
-    
+
     try {
+      // Load shipping companies for auto-detection
+      await loadShippingCompanies();
+
       const records = await parseCsvFile(selectedFile);
-      setTrackingRecords(records.map(record => ({ ...record, status: 'pending' })));
+
+      // Auto-detect shipping company if not provided
+      const recordsWithDetection = records.map(record => {
+        if (!record.trackingCompany || record.trackingCompany.trim() === '') {
+          const detected = detectShippingCompany(record.trackingNumber, shippingCompanies);
+          if (detected) {
+            return { ...record, trackingCompany: detected, status: 'pending' as const };
+          }
+        }
+        return { ...record, status: 'pending' as const };
+      });
+
+      setTrackingRecords(recordsWithDetection);
       setUploadComplete(false);
-      
+
+      const autoDetectedCount = recordsWithDetection.filter(
+        (r, i) => r.trackingCompany !== records[i].trackingCompany
+      ).length;
+
       toast({
         title: "Đã tải file!",
-        description: `Tìm thấy ${records.length} đơn hàng cần cập nhật tracking.`,
+        description: `Tìm thấy ${records.length} đơn hàng. ${autoDetectedCount > 0 ? `Tự động nhận diện ${autoDetectedCount} shipping company.` : ''}`,
       });
     } catch (error) {
       toast({
@@ -76,57 +97,57 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
     setIsProcessing(true);
     setProcessingProgress({ current: 0, total: trackingRecords.length });
     const apiClient = new ShopifyApiClient(shopifyConfig);
-    
+
     try {
       const updatedRecords = [...trackingRecords];
-      
+
       if (useBatchMode && trackingRecords.length > 1) {
         // Use batch API for faster processing
         console.log(`Processing ${trackingRecords.length} orders using batch API`);
-        
+
         const trackingUpdates = trackingRecords.map(record => ({
           orderNumber: record.orderNumber,
           trackingNumber: record.trackingNumber,
           trackingCompany: record.trackingCompany,
           trackingUrl: record.trackingUrl
         }));
-        
+
         const result = await apiClient.batchUpdateOrderTracking(trackingUpdates);
-        
+
         console.log('Batch update result:', result);
-        
+
         // Update records based on batch results
         trackingRecords.forEach((record, index) => {
           const successful = result.successful.find(s => s.orderNumber === record.orderNumber);
           const failed = result.failed.find(f => f.orderNumber === record.orderNumber);
-          
+
           if (successful) {
             updatedRecords[index] = { ...record, status: 'success' };
           } else if (failed) {
-            updatedRecords[index] = { 
-              ...record, 
+            updatedRecords[index] = {
+              ...record,
               status: 'error',
               error: failed.error
             };
           }
         });
-        
+
         setProcessingProgress({ current: trackingRecords.length, total: trackingRecords.length });
         setTrackingRecords([...updatedRecords]);
-        
+
         toast({
           title: "Hoàn thành cập nhật!",
           description: `Thành công: ${result.summary.successful}, Lỗi: ${result.summary.failed}`,
         });
-        
+
       } else {
         // Process orders one by one to prevent API rate limiting
         console.log(`Processing ${updatedRecords.length} orders one by one`);
-        
+
         for (let index = 0; index < updatedRecords.length; index++) {
           const record = updatedRecords[index];
           console.log(`Processing order ${index + 1}/${updatedRecords.length}: ${record.orderNumber}`);
-          
+
           try {
             console.log(`Updating tracking for order ${record.orderNumber}...`, {
               orderNumber: record.orderNumber,
@@ -134,50 +155,50 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
               trackingCompany: record.trackingCompany,
               trackingUrl: record.trackingUrl
             });
-            
+
             const result = await apiClient.updateOrderTracking(
               record.orderNumber,
               record.trackingNumber,
               record.trackingCompany,
               record.trackingUrl
             );
-            
+
             console.log(`Tracking update result for order ${record.orderNumber}:`, result);
-            
+
             updatedRecords[index] = { ...record, status: 'success' as const };
-            
+
           } catch (error) {
             console.error(`Failed to update order ${record.orderNumber}:`, error);
-            updatedRecords[index] = { 
-              ...record, 
+            updatedRecords[index] = {
+              ...record,
               status: 'error' as const,
               error: error instanceof Error ? error.message : 'Lỗi không xác định'
             };
           }
-          
+
           // Update progress after each order
           setProcessingProgress({ current: index + 1, total: updatedRecords.length });
-          
+
           // Update state to show progress
           setTrackingRecords([...updatedRecords]);
-          
+
           // Delay 1 second between each order to avoid rate limiting
           if (index < updatedRecords.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         }
-        
+
         const successCount = updatedRecords.filter(r => r.status === 'success').length;
         const errorCount = updatedRecords.filter(r => r.status === 'error').length;
-        
+
         toast({
           title: "Hoàn thành cập nhật!",
           description: `Thành công: ${successCount}, Lỗi: ${errorCount}`,
         });
       }
-      
+
       setUploadComplete(true);
-      
+
     } catch (error) {
       console.error('Error processing tracking updates:', error);
       toast({
@@ -187,6 +208,20 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
       });
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const loadShippingCompanies = async () => {
+    try {
+      const apiBaseUrl = '/api';
+      const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies`);
+
+      if (response.ok) {
+        const data = await response.json();
+        setShippingCompanies(data);
+      }
+    } catch (error) {
+      console.warn('Error loading shipping companies:', error);
     }
   };
 
@@ -231,7 +266,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
           <Alert>
             <FileText className="h-4 w-4" />
             <AlertDescription>
-              File CSV cần có các cột: Order Number, Tracking Number, Tracking Company. 
+              File CSV cần có các cột: Order Number, Tracking Number, Tracking Company.
               Tùy chọn: Tracking URL (để thêm link tracking tùy chỉnh).
               <Button
                 variant="link"
@@ -243,7 +278,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
               </Button>
             </AlertDescription>
           </Alert>
-          
+
           <div className="space-y-4">
             <Input
               type="file"
@@ -251,7 +286,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
               onChange={handleFileChange}
               disabled={isProcessing}
             />
-            
+
             {file && trackingRecords.length > 0 && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -273,7 +308,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="flex space-x-2">
                   <Button
                     onClick={processTrackingUpdates}
@@ -282,7 +317,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                   >
                     {isProcessing ? `Đang xử lý... (${processingProgress.current}/${processingProgress.total})` : 'Cập nhật Tracking'}
                   </Button>
-                  
+
                   {uploadComplete && (
                     <Button
                       variant="outline"
@@ -297,7 +332,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                     </Button>
                   )}
                 </div>
-                
+
                 {isProcessing && (
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm text-slate-600">
@@ -305,10 +340,10 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                       <span>{processingProgress.current}/{processingProgress.total}</span>
                     </div>
                     <div className="w-full bg-slate-200 rounded-full h-2">
-                      <div 
+                      <div
                         className="bg-teal-500 h-2 rounded-full transition-all duration-300"
-                        style={{ 
-                          width: `${processingProgress.total > 0 ? (processingProgress.current / processingProgress.total) * 100 : 0}%` 
+                        style={{
+                          width: `${processingProgress.total > 0 ? (processingProgress.current / processingProgress.total) * 100 : 0}%`
                         }}
                       ></div>
                     </div>
@@ -347,9 +382,9 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                       <TableCell>{record.trackingCompany}</TableCell>
                       <TableCell className="max-w-xs truncate">
                         {record.trackingUrl && (
-                          <a 
-                            href={record.trackingUrl} 
-                            target="_blank" 
+                          <a
+                            href={record.trackingUrl}
+                            target="_blank"
                             rel="noopener noreferrer"
                             className="text-blue-500 hover:underline text-sm"
                           >

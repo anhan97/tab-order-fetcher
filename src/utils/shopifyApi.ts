@@ -44,10 +44,10 @@ export class ShopifyApiClient {
       ...config,
       storeUrl: formatStoreDomain(config.storeUrl)
     };
-    
+
     // Determine the correct API base URL based on current environment
     this.baseUrl = this.getApiBaseUrl();
-    
+
     // Save to localStorage
     localStorage.setItem('shopify_store_url', this.config.storeUrl);
     localStorage.setItem('shopify_access_token', this.config.accessToken);
@@ -65,11 +65,11 @@ export class ShopifyApiClient {
   static fromLocalStorage(): ShopifyApiClient | null {
     const storeUrl = localStorage.getItem('shopify_store_url');
     const accessToken = localStorage.getItem('shopify_access_token');
-    
+
     if (storeUrl && accessToken) {
       return new ShopifyApiClient({ storeUrl, accessToken });
     }
-    
+
     return null;
   }
 
@@ -94,7 +94,7 @@ export class ShopifyApiClient {
       ...this.getHeaders(),
       'X-Shopify-Access-Token': '***hidden***' // Hide sensitive data in logs
     });
-    
+
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -125,7 +125,7 @@ export class ShopifyApiClient {
           accessToken: this.config.accessToken
         })
       });
-      
+
       return response.valid;
     } catch (error) {
       console.error('Connection test failed:', error);
@@ -138,7 +138,7 @@ export class ShopifyApiClient {
       let allOrders: any[] = [];
       let hasMore = true;
       let pageInfo: string | undefined;
-      
+
       while (hasMore) {
         const queryParams = new URLSearchParams();
         if (filters.status) {
@@ -146,7 +146,7 @@ export class ShopifyApiClient {
         }
         // Add base parameters
         queryParams.append('limit', '250'); // Maximum allowed by Shopify
-        
+
         // Add pagination token if we have one
         if (pageInfo) {
           queryParams.append('page_info', pageInfo);
@@ -177,12 +177,12 @@ export class ShopifyApiClient {
 
         const data = await response.json();
         const { orders, pageInfo: nextPageInfo } = data;
-        
+
         if (!orders || orders.length === 0) {
           hasMore = false;
         } else {
           allOrders = [...allOrders, ...orders];
-          
+
           // Continue if we have a next page
           pageInfo = nextPageInfo;
           hasMore = !!pageInfo;
@@ -228,7 +228,7 @@ export class ShopifyApiClient {
           fulfillShippingNotRequired: true // Also fulfill items that don't require shipping
         })
       });
-      
+
       return response;
     } catch (error) {
       console.error('Error updating order tracking:', error);
@@ -258,7 +258,7 @@ export class ShopifyApiClient {
           fulfillShippingNotRequired: true
         })
       });
-      
+
       return response;
     } catch (error) {
       console.error('Error batch updating order tracking:', error);
@@ -275,7 +275,7 @@ export class ShopifyApiClient {
       const queryParams = new URLSearchParams();
       queryParams.append('limit', String(filters.limit || 50));
       queryParams.append('status', filters.status || 'active');
-      
+
       if (filters.page_info) {
         queryParams.append('page_info', filters.page_info);
       }
@@ -296,7 +296,7 @@ export class ShopifyApiClient {
         return attr.value;
       }
     }
-    
+
     // Try to extract from tags
     const tags = shopifyOrder.tags ? shopifyOrder.tags.split(',').map((t: string) => t.trim()) : [];
     for (const tag of tags) {
@@ -305,7 +305,7 @@ export class ShopifyApiClient {
         return tag.split(':').slice(1).join(':'); // Handle colons in values
       }
     }
-    
+
     return undefined;
   }
 
@@ -362,7 +362,10 @@ export class ShopifyApiClient {
       utmContent: this.extractUtmParameter(shopifyOrder, 'utm_content'),
       fbAdId: this.extractUtmParameter(shopifyOrder, 'fb_ad_id') || this.extractUtmParameter(shopifyOrder, 'fbadid'),
       fbAdsetId: this.extractUtmParameter(shopifyOrder, 'fb_adset_id') || this.extractUtmParameter(shopifyOrder, 'fbadsetid'),
-      fbCampaignId: this.extractUtmParameter(shopifyOrder, 'fb_campaign_id') || this.extractUtmParameter(shopifyOrder, 'fbcampaignid')
+      fbCampaignId: this.extractUtmParameter(shopifyOrder, 'fb_campaign_id') || this.extractUtmParameter(shopifyOrder, 'fbcampaignid'),
+      trackingNumber: shopifyOrder.fulfillments?.[0]?.tracking_number,
+      trackingCompany: shopifyOrder.fulfillments?.[0]?.tracking_company,
+      trackingUrl: shopifyOrder.fulfillments?.[0]?.tracking_url
     };
 
     return [order];

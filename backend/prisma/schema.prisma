@@ -314,3 +314,15 @@ model ComboPricing {
   @@unique([cogsConfigId, supplier, country, quantity])
   @@index([supplier, country, comboType])
 }
+
+model ShippingCompany {
+  id                String   @id @default(uuid())
+  name              String
+  display_name      String?
+  tracking_prefixes String?
+  is_active         Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("shipping_companies")
+}

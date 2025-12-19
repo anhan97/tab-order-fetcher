@@ -5,7 +5,7 @@ This guide will help you deploy your Shopify App (Tab Order Fetcher) to a Contab
 ## Prerequisites
 
 1.  **VPS Access**: You need the IP address and root password of your VPS.
-2.  **Domain Name**: You should have a domain name pointing to your VPS IP address (e.g., `app.yourdomain.com`).
+2.  **Domain Name**: You should have your domain `adumie.com` pointing to your VPS IP address.
 3.  **Shopify App Credentials**: Client ID, Client Secret, etc.
 
 ## Step 1: Initial Server Setup
@@ -76,29 +76,6 @@ You can transfer your code using `scp` or `git`. Assuming you use `git`:
 
 Create `.env` file in `backend` directory:
 ```bash
-cd /var/www/tab-order-fetcher/backend
-cp .env.example .env
-nano .env
-```
-
-Update the `.env` file with your production values:
-- `DATABASE_URL="postgresql://app_user:your_secure_password@localhost:5432/tab_order_fetcher?schema=public"`
-- `PORT=3001`
-- `FRONTEND_URL=https://app.yourdomain.com`
-- Shopify Credentials
-
-Create `.env` file in `frontend` (root) directory:
-```bash
-cd /var/www/tab-order-fetcher
-nano .env
-```
-- `VITE_API_URL=https://app.yourdomain.com/api`
-
-## Step 6: Build and Start
-
-**Backend:**
-```bash
-cd /var/www/tab-order-fetcher/backend
 npm install
 npx prisma migrate deploy
 npm run build
@@ -119,12 +96,12 @@ Create an Nginx config file:
 nano /etc/nginx/conf.d/tab-order-fetcher.conf
 ```
 
-Paste the following (replace `app.yourdomain.com` with your domain):
+Paste the following configuration:
 
 ```nginx
 server {
     listen 80;
-    server_name app.yourdomain.com;
+    server_name adumie.com;
 
     root /var/www/tab-order-fetcher/dist;
     index index.html;
@@ -171,7 +148,7 @@ Install Certbot:
 ```bash
 dnf install epel-release -y
 dnf install certbot python3-certbot-nginx -y
-certbot --nginx -d app.yourdomain.com
+certbot --nginx -d adumie.com
 ```
 
 ## Step 10: Finalize
@@ -182,7 +159,7 @@ pm2 save
 pm2 startup
 ```
 
-Your app should now be live at `https://app.yourdomain.com`!
+Your app should now be live at `https://adumie.com`!
 
 ## Troubleshooting
 

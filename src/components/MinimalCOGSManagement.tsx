@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Edit, Trash2, Package, Calculator, Upload, Download, Save, FileText } from 'lucide-react';
+import { Plus, Edit, Trash2, Package, Calculator, Upload, Download, Save, FileText, Settings } from 'lucide-react';
+import { ShippingCompanyManager } from './ShippingCompanyManager';
 import { useToast } from '@/hooks/use-toast';
 import { CogsConfig, ProductCog, ComboCog, CogsResult } from '@/types/minimalCogs';
 import {
@@ -25,13 +26,14 @@ interface MinimalCOGSManagementProps {
 }
 
 const COUNTRIES = ['US', 'UK', 'CA', 'AU', 'DE', 'FR', 'IT', 'ES', 'NL', 'SE', 'NO', 'DK', 'FI'];
-const SHIPPING_COMPANIES = ['YunTu', 'Shengtu Logistics', 'Yuanpeng Logistics', 'DHL', 'FedEx', 'UPS'];
 const CURRENCIES = ['USD', 'GBP', 'CAD', 'EUR', 'AUD'];
 
 export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ onUpdateCOGS }) => {
   const [config, setConfig] = useState<CogsConfig>(sampleCogsConfig);
   const [products, setProducts] = useState<any[]>([]);
+  const [shippingCompanies, setShippingCompanies] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [showShippingManager, setShowShippingManager] = useState(false);
   const [showAddProductDialog, setShowAddProductDialog] = useState(false);
   const [showEditProductDialog, setShowEditProductDialog] = useState(false);
   const [showAddComboDialog, setShowAddComboDialog] = useState(false);
@@ -206,9 +208,28 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     }
   };
 
+  // Load shipping companies from database
+  const loadShippingCompanies = async () => {
+    try {
+      const apiBaseUrl = '/api';
+      const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies`);
+
+      if (response.ok) {
+        const data = await response.json();
+        const companyNames = data.map((company: any) => company.name);
+        setShippingCompanies(companyNames);
+      }
+    } catch (error) {
+      console.warn('Error loading shipping companies:', error);
+      // Fallback to default list if API fails
+      setShippingCompanies(['YunTu', 'DHL', 'FedEx', 'UPS']);
+    }
+  };
+
   // Load config from database on mount
   useEffect(() => {
     loadFromDatabase();
+    loadShippingCompanies();
   }, []);
 
   // Filter products based on search query
@@ -657,6 +678,10 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
+          <Button onClick={() => setShowShippingManager(true)} variant="outline">
+            <Settings className="h-4 w-4 mr-2" />
+            Manage Shipping Companies
+          </Button>
           <label className="cursor-pointer">
             <Button asChild variant="outline">
               <span>
@@ -1002,7 +1027,7 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                                                     <SelectValue placeholder="Shipper" />
                                                   </SelectTrigger>
                                                   <SelectContent>
-                                                    {SHIPPING_COMPANIES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                                                    {shippingCompanies.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                                                   </SelectContent>
                                                 </Select>
                                               </div>
@@ -1824,7 +1849,7 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {SHIPPING_COMPANIES.map(company => (
+                        {shippingCompanies.map(company => (
                           <SelectItem key={company} value={company}>{company}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1931,6 +1956,22 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
               </Button>
             </DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Shipping Company Manager Dialog */}
+      <Dialog open={showShippingManager} onOpenChange={(open) => {
+        setShowShippingManager(open);
+        if (!open) {
+          // Reload shipping companies when dialog closes
+          loadShippingCompanies();
+        }
+      }}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Manage Shipping Companies</DialogTitle>
+          </DialogHeader>
+          <ShippingCompanyManager />
         </DialogContent>
       </Dialog>
     </div>

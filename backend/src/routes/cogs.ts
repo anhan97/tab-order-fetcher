@@ -53,7 +53,7 @@ const CogsConfigSchema = z.object({
 async function getOrCreateCountry(countryCode: string, name?: string) {
   // Ensure country code is exactly 2 characters (ISO 3166-1 alpha-2)
   const normalizedCountryCode = countryCode ? countryCode.substring(0, 2).toUpperCase() : 'US';
-  
+
   let country = await prisma.$queryRaw`
     SELECT * FROM countries WHERE code = ${normalizedCountryCode} LIMIT 1
   `;
@@ -72,10 +72,10 @@ async function getOrCreateCountry(countryCode: string, name?: string) {
 
     const countryId = uuidv4();
     const countryName = name || countryNames[normalizedCountryCode] || normalizedCountryCode;
-    const currency = normalizedCountryCode === 'US' ? 'USD' : 
-                    normalizedCountryCode === 'CA' ? 'CAD' :
-                    normalizedCountryCode === 'AU' ? 'AUD' :
-                    normalizedCountryCode === 'UK' ? 'GBP' : 'USD';
+    const currency = normalizedCountryCode === 'US' ? 'USD' :
+      normalizedCountryCode === 'CA' ? 'CAD' :
+        normalizedCountryCode === 'AU' ? 'AUD' :
+          normalizedCountryCode === 'UK' ? 'GBP' : 'USD';
 
     await prisma.$executeRaw`
       INSERT INTO countries (id, code, name, currency) 
@@ -98,7 +98,7 @@ async function getOrCreateShippingCompany(companyName: string) {
 
   if (!company || (company as any[]).length === 0) {
     const companyId = uuidv4();
-    
+
     await prisma.$executeRaw`
       INSERT INTO shipping_companies (id, name, display_name) 
       VALUES (${companyId}, ${companyName}, ${companyName})
@@ -154,7 +154,7 @@ router.get('/config', async (req, res) => {
     // Transform to the expected format
     const products = (variantCosts as any[]).reduce((acc: any[], cost) => {
       let product = acc.find(p => p.variant_id === Number(cost.variant_id));
-      
+
       if (!product) {
         product = {
           variant_id: Number(cost.variant_id),
@@ -186,7 +186,7 @@ router.get('/config', async (req, res) => {
           overrides: []
         });
       }
-      
+
       if (row.item_variant_id) {
         comboMap.get(row.combo_id).items.push({
           variant_id: Number(row.item_variant_id),
@@ -311,7 +311,7 @@ router.post('/config', async (req, res) => {
   } catch (error) {
     console.error('Error saving COGS config:', error);
     if (error instanceof z.ZodError) {
-      res.status(400).json({ error: 'Invalid data format', details: error.errors });
+      res.status(400).json({ error: 'Invalid data format', details: error.issues });
     } else {
       res.status(500).json({ error: 'Failed to save COGS configuration' });
     }
@@ -341,6 +341,81 @@ router.get('/shipping-companies', async (req, res) => {
   } catch (error) {
     console.error('Error fetching shipping companies:', error);
     res.status(500).json({ error: 'Failed to fetch shipping companies' });
+  }
+});
+
+// POST /api/cogs/shipping-companies - Create new shipping company
+router.post('/shipping-companies', async (req, res) => {
+  try {
+    const { name, display_name, tracking_prefixes } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+
+    const companyId = uuidv4();
+    await prisma.$executeRaw`
+      INSERT INTO shipping_companies (id, name, display_name, tracking_prefixes, is_active)
+      VALUES (${companyId}, ${name}, ${display_name || name}, ${tracking_prefixes || null}, true)
+    `;
+
+    const company = await prisma.$queryRaw`
+      SELECT * FROM shipping_companies WHERE id = ${companyId} LIMIT 1
+    `;
+
+    res.status(201).json((company as any[])[0]);
+  } catch (error) {
+    console.error('Error creating shipping company:', error);
+    res.status(500).json({ error: 'Failed to create shipping company' });
+  }
+});
+
+// PUT /api/cogs/shipping-companies/:id - Update shipping company
+router.put('/shipping-companies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, display_name, tracking_prefixes, is_active } = req.body;
+
+    await prisma.$executeRaw`
+      UPDATE shipping_companies
+      SET name = ${name},
+          display_name = ${display_name || name},
+          tracking_prefixes = ${tracking_prefixes || null},
+          is_active = ${is_active !== undefined ? is_active : true}
+      WHERE id = ${id}
+    `;
+
+    const company = await prisma.$queryRaw`
+      SELECT * FROM shipping_companies WHERE id = ${id} LIMIT 1
+    `;
+
+    if (!company || (company as any[]).length === 0) {
+      return res.status(404).json({ error: 'Shipping company not found' });
+    }
+
+    res.json((company as any[])[0]);
+  } catch (error) {
+    console.error('Error updating shipping company:', error);
+    res.status(500).json({ error: 'Failed to update shipping company' });
+  }
+});
+
+// DELETE /api/cogs/shipping-companies/:id - Delete (soft delete) shipping company
+router.delete('/shipping-companies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Soft delete by setting is_active to false
+    await prisma.$executeRaw`
+      UPDATE shipping_companies
+      SET is_active = false
+      WHERE id = ${id}
+    `;
+
+    res.json({ success: true, message: 'Shipping company deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting shipping company:', error);
+    res.status(500).json({ error: 'Failed to delete shipping company' });
   }
 });
 

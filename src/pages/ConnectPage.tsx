@@ -2,7 +2,7 @@ import { Card } from '@/components/ui/card';
 import { ShopifyConnection } from '@/components/ShopifyConnection';
 import { Settings } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 
 export const ConnectPage = () => {
     const { isShopifyConnected, handleShopifyConnectionSuccess } = useAppContext();
@@ -26,6 +26,17 @@ export const ConnectPage = () => {
                     </p>
                     <ShopifyConnection onConnectionSuccess={handleShopifyConnectionSuccess} />
                 </Card>
+                
+                {/* Legal Links for Facebook App Verification */}
+                <div className="mt-6 text-center text-sm text-slate-500">
+                    <Link to="/privacy" className="text-blue-600 hover:text-blue-800 hover:underline">
+                        Privacy Policy
+                    </Link>
+                    <span className="mx-2">•</span>
+                    <Link to="/terms" className="text-blue-600 hover:text-blue-800 hover:underline">
+                        Terms of Service
+                    </Link>
+                </div>
             </div>
         </div>
     );
