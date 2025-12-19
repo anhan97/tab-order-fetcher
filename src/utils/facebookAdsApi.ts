@@ -375,19 +375,19 @@ export class FacebookAdsApiClient {
         reject(new Error('Facebook SDK load timeout'));
       }, 10000); // 10 second timeout
 
-        window.fbAsyncInit = () => {
-            window.FB.init({
+      window.fbAsyncInit = () => {
+        window.FB.init({
           appId: FACEBOOK_APP_ID,
-              cookie: true,
-              xfbml: true,
+          cookie: true,
+          xfbml: true,
           version: FACEBOOK_API_VERSION
-            });
+        });
         this.sdkLoaded = true;
         clearTimeout(timeout);
-            resolve();
+        resolve();
       };
 
-      // Load the SDK
+      // Load the SDK - use sdk.js for Business Login support
       (function (d, s, id) {
         var js, fjs = d.getElementsByTagName(s)[0];
         if (d.getElementById(id)) return;
@@ -411,12 +411,31 @@ export class FacebookAdsApiClient {
     await this.ensureSDKLoaded();
 
     try {
+      // Use Business Login if config_id is available, otherwise fall back to regular login
+      const loginOptions: any = {
+        scope: FACEBOOK_CONFIG.scope
+      };
+
+      // Add config_id for Facebook Business Login
+      // This enables the Business Login flow which is required for business assets
+      if (FACEBOOK_CONFIG.configId) {
+        loginOptions.config_id = FACEBOOK_CONFIG.configId;
+        // When using config_id, scope is defined in the configuration
+        // but we can still pass it for backwards compatibility
+      }
+
+      console.log('Facebook login options:', loginOptions);
+
       const response = await new Promise<FacebookLoginResponse>((resolve, reject) => {
         window.FB.login((response) => {
-          resolve(response);
-        }, {
-          scope: FACEBOOK_CONFIG.scope
-        });
+          if (response.status === 'connected') {
+            resolve(response);
+          } else if (response.status === 'not_authorized') {
+            reject(new Error('User did not authorize the app. Please grant the required permissions.'));
+          } else {
+            reject(new Error('User cancelled login or login failed.'));
+          }
+        }, loginOptions);
       });
 
       if (!response.authResponse) {
@@ -432,6 +451,8 @@ export class FacebookAdsApiClient {
       // Save to localStorage
       localStorage.setItem('facebook_access_token', accessToken);
       localStorage.setItem('facebook_user_id', userID);
+
+      console.log('Facebook Business Login successful');
 
       return {
         accessToken,
