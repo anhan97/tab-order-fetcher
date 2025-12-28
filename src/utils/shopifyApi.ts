@@ -54,12 +54,10 @@ export class ShopifyApiClient {
   }
 
   private getApiBaseUrl(): string {
-    // If running on ngrok, use localhost for API calls
-    if (window.location.origin.includes('ngrok')) {
-      return 'http://localhost:3001/api/shopify';
-    }
-    // Otherwise use the configured URL
-    return config.shopifyApiUrl;
+    // Always use relative path for API calls to leverage Vite's proxy
+    // This works both in development (localhost) and when accessed via ngrok
+    // The Vite dev server proxies /api to localhost:3001
+    return '/api/shopify';
   }
 
   static fromLocalStorage(): ShopifyApiClient | null {
