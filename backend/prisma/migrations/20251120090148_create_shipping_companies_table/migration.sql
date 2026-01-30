@@ -36,13 +36,13 @@
 
 */
 -- DropIndex
-DROP INDEX "FacebookAdSpend_accountId_adId_date_key";
+DROP INDEX IF EXISTS "FacebookAdSpend_accountId_adId_date_key";
 
 -- DropIndex
-DROP INDEX "Order_storeId_orderId_key";
+DROP INDEX IF EXISTS "Order_storeId_orderId_key";
 
 -- DropIndex
-DROP INDEX "ProductCost_userId_sku_key";
+DROP INDEX IF EXISTS "ProductCost_userId_sku_key";
 
 -- AlterTable
 ALTER TABLE "FacebookAdAccount" DROP COLUMN "accessToken",
