@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Upload, FileText, CheckCircle, AlertCircle, Download, Zap } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Download, Zap, Bell } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { ShopifyApiClient } from '@/utils/shopifyApi';
 import { parseCsvFile } from '@/utils/csvParser';
@@ -36,6 +36,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
   const [uploadComplete, setUploadComplete] = useState(false);
   const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
   const [useBatchMode, setUseBatchMode] = useState(true);
+  const [notifyCustomer, setNotifyCustomer] = useState(true);
   const [shippingCompanies, setShippingCompanies] = useState<Array<{ name: string; tracking_prefixes?: string }>>([]);
   const { toast } = useToast();
 
@@ -112,7 +113,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
           trackingUrl: record.trackingUrl
         }));
 
-        const result = await apiClient.batchUpdateOrderTracking(trackingUpdates);
+        const result = await apiClient.batchUpdateOrderTracking(trackingUpdates, notifyCustomer);
 
         console.log('Batch update result:', result);
 
@@ -160,7 +161,8 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
               record.orderNumber,
               record.trackingNumber,
               record.trackingCompany,
-              record.trackingUrl
+              record.trackingUrl,
+              notifyCustomer
             );
 
             console.log(`Tracking update result for order ${record.orderNumber}:`, result);
@@ -289,7 +291,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
 
             {file && trackingRecords.length > 0 && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col space-y-3">
                   <div className="flex items-center space-x-4">
                     <div className="flex items-center space-x-2">
                       <Switch
@@ -305,6 +307,24 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                     </div>
                     <div className="text-sm text-slate-600">
                       {useBatchMode ? 'All orders processed simultaneously' : 'Orders processed in small batches'}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="notify-customer"
+                        checked={notifyCustomer}
+                        onCheckedChange={setNotifyCustomer}
+                        disabled={isProcessing}
+                      />
+                      <Label htmlFor="notify-customer" className="flex items-center space-x-1">
+                        <Bell className="h-4 w-4 text-blue-500" />
+                        <span>Gửi thông báo cho khách hàng</span>
+                      </Label>
+                    </div>
+                    <div className="text-sm text-slate-600">
+                      {notifyCustomer ? 'Shopify sẽ gửi email tracking cho khách' : 'Không gửi email thông báo cho khách'}
                     </div>
                   </div>
                 </div>

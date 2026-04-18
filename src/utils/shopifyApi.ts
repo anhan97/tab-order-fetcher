@@ -211,7 +211,8 @@ export class ShopifyApiClient {
     orderNumber: string,
     trackingNumber: string,
     trackingCompany: string,
-    trackingUrl?: string
+    trackingUrl?: string,
+    notifyCustomer: boolean = true
   ): Promise<void> {
     try {
       const response = await this.makeRequest('/orders/tracking', {
@@ -221,7 +222,7 @@ export class ShopifyApiClient {
           trackingNumber,
           trackingCompany,
           trackingUrl,
-          notifyCustomer: true, // Send notification to customer
+          notifyCustomer,
           fulfillItems: true,   // Fulfill all items in the order
           fulfillShippingNotRequired: true // Also fulfill items that don't require shipping
         })
@@ -240,7 +241,8 @@ export class ShopifyApiClient {
       trackingNumber: string;
       trackingCompany: string;
       trackingUrl?: string;
-    }>
+    }>,
+    notifyCustomer: boolean = true
   ): Promise<{
     summary: { total: number; successful: number; failed: number };
     successful: Array<{ orderNumber: string; fulfillment: any }>;
@@ -251,7 +253,7 @@ export class ShopifyApiClient {
         method: 'PUT',
         body: JSON.stringify({
           trackingUpdates,
-          notifyCustomer: true,
+          notifyCustomer,
           fulfillItems: true,
           fulfillShippingNotRequired: true
         })
