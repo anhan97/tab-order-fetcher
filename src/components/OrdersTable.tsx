@@ -18,11 +18,12 @@ import { calculateProductCogs as calculateProductCogsUtil } from '@/utils/minima
 import { calculateOrderCOGS, calculateBulkCOGS, getCountryCode } from '@/utils/cogsCalculator';
 import { detectShippingCompany } from '@/utils/trackingUtils';
 import { ShopifyApiClient, OrderFilters } from '@/utils/shopifyApi';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { TimezoneSelect } from '@/components/ui/timezone-select';
 import { cn } from '@/lib/utils';
 import { FacebookAdAccount } from '@/types/facebook';
+import { DashboardInsights } from '@/components/DashboardInsights';
 import {
   getShopifyDateRange,
   getDateRangeFromPreset,
@@ -94,6 +95,9 @@ export const OrdersTable = ({
 }: OrdersTableProps) => {
   const [isLoading, setIsLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
+  // Map of shopifyOrderId → payment fee (from Shopify Payments balance API).
+  // Keyed by string because Shopify order IDs are very large numbers.
+  const [orderFees, setOrderFees] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<string>('any');
   const [datePreset, setDatePreset] = useState<DatePreset>('30days');
   const [dateRange, setDateRange] = useState<DateRange>(() => getDateRangeFromPreset('30days'));
@@ -137,6 +141,38 @@ export const OrdersTable = ({
   useEffect(() => {
     fetchOrders();
   }, [shopifyConfig, dateRange, comparisonRange, timezone, statusFilter]);
+
+  // Pull payment fees from our DB whenever the date range changes. Failure is
+  // non-fatal — Fees column simply renders $0 for orders we don't have data on.
+  useEffect(() => {
+    if (!shopifyConfig?.storeUrl || !shopifyConfig?.accessToken) return;
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          from: new Date(dateRange.from.getFullYear(), dateRange.from.getMonth(), dateRange.from.getDate()).toISOString(),
+          to: new Date(dateRange.to.getFullYear(), dateRange.to.getMonth(), dateRange.to.getDate() + 1).toISOString()
+        });
+        const res = await fetch(`/api/pl/order-fees?${params}`, {
+          headers: {
+            'X-Shopify-Store-Domain': shopifyConfig.storeUrl,
+            'X-Shopify-Access-Token': shopifyConfig.accessToken
+          },
+          signal: ctrl.signal
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const map: Record<string, number> = {};
+        for (const [orderId, info] of Object.entries(data.fees || {})) {
+          map[orderId] = (info as any).fee || 0;
+        }
+        setOrderFees(map);
+      } catch (e) {
+        if ((e as any)?.name !== 'AbortError') console.warn('Failed to load order fees:', e);
+      }
+    })();
+    return () => ctrl.abort();
+  }, [shopifyConfig, dateRange]);
 
   const [lastFetchedDateRange, setLastFetchedDateRange] = useState<string>('');
   const [isLoadingAdSpend, setIsLoadingAdSpend] = useState(false);
@@ -1136,15 +1172,15 @@ export const OrdersTable = ({
           <CardContent>
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
+                <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="period" />
                   <YAxis />
                   <RechartsTooltip />
                   <Legend />
-                  <Bar dataKey="revenue" fill="#8884d8" name="Revenue" />
-                  <Bar dataKey="netProfit" fill="#82ca9d" name="Net Profit" />
-                </BarChart>
+                  <Line type="monotone" dataKey="revenue" stroke="#8884d8" strokeWidth={2} name="Revenue" />
+                  <Line type="monotone" dataKey="netProfit" stroke="#82ca9d" strokeWidth={2} name="Net Profit" />
+                </LineChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
@@ -1157,16 +1193,16 @@ export const OrdersTable = ({
           <CardContent>
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
+                <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="period" />
                   <YAxis yAxisId="left" />
                   <YAxis yAxisId="right" orientation="right" />
                   <RechartsTooltip />
                   <Legend />
-                  <Bar yAxisId="left" dataKey="orderCount" fill="#8884d8" name="Orders" />
-                  <Bar yAxisId="right" dataKey="avgOrderValue" fill="#82ca9d" name="AOV" />
-                </BarChart>
+                  <Line yAxisId="left" type="monotone" dataKey="orderCount" stroke="#8884d8" strokeWidth={2} name="Orders" />
+                  <Line yAxisId="right" type="monotone" dataKey="avgOrderValue" stroke="#82ca9d" strokeWidth={2} name="AOV" />
+                </LineChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
@@ -1428,6 +1464,14 @@ export const OrdersTable = ({
         </div>
       </TooltipProvider>
 
+      {/* Insight Pack — margin %, refund rate, repeat customer, top products & countries */}
+      <DashboardInsights
+        orders={getFilteredOrders()}
+        revenue={currentMetrics.revenue}
+        netProfit={currentMetrics.netProfit}
+        totalFees={Object.values(orderFees).reduce((s, v) => s + (v || 0), 0)}
+      />
+
       {/* Orders Table */}
       <Card>
         <CardHeader>
@@ -1517,6 +1561,7 @@ export const OrdersTable = ({
                   <TableHead>Products</TableHead>
                   <TableHead>Quantity</TableHead>
                   <TableHead>Total</TableHead>
+                  <TableHead>Fees</TableHead>
                   <TableHead>COGS</TableHead>
                   <TableHead>Net Profit</TableHead>
                   <TableHead>Status</TableHead>
@@ -1571,6 +1616,9 @@ export const OrdersTable = ({
                         </TableCell>
                         <TableCell>{order.totalQuantity}</TableCell>
                         <TableCell>{formatCurrency(order.totalPrice)}</TableCell>
+                        <TableCell className="text-purple-700">
+                          {formatCurrency(orderFees[String(order.id)] || 0)}
+                        </TableCell>
                         <TableCell>{formatCurrency(costs.cogs)}</TableCell>
                         <TableCell>
                           <div>
