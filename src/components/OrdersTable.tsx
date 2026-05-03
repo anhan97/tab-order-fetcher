@@ -1147,55 +1147,8 @@ export const OrdersTable = ({
         </div>
       </div>
 
-      {/* Charts */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Revenue & Net Profit</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="period" />
-                  <YAxis />
-                  <RechartsTooltip />
-                  <Legend />
-                  <Line type="monotone" dataKey="revenue" stroke="#8884d8" strokeWidth={2} name="Revenue" />
-                  <Line type="monotone" dataKey="netProfit" stroke="#82ca9d" strokeWidth={2} name="Net Profit" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Orders & Average Order Value</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="period" />
-                  <YAxis yAxisId="left" />
-                  <YAxis yAxisId="right" orientation="right" />
-                  <RechartsTooltip />
-                  <Legend />
-                  <Line yAxisId="left" type="monotone" dataKey="orderCount" stroke="#8884d8" strokeWidth={2} name="Orders" />
-                  <Line yAxisId="right" type="monotone" dataKey="avgOrderValue" stroke="#82ca9d" strokeWidth={2} name="AOV" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-
-
-      {/* Metrics Cards */}
+      {/* Metrics Cards — moved to top of dashboard so the most-watched
+          numbers are above the fold. Trend charts live below the table. */}
       <TooltipProvider>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <Tooltip>
@@ -1754,6 +1707,53 @@ export const OrdersTable = ({
           </div>
         </CardContent>
       </Card>
+
+      {/* Trend charts — pushed below the orders table because they're for
+          spotting trends after you've scanned the headline KPIs. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Revenue & Net Profit</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="period" />
+                  <YAxis />
+                  <RechartsTooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="revenue" stroke="#8884d8" strokeWidth={2} name="Revenue" />
+                  <Line type="monotone" dataKey="netProfit" stroke="#82ca9d" strokeWidth={2} name="Net Profit" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Orders & Average Order Value</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="period" />
+                  <YAxis yAxisId="left" />
+                  <YAxis yAxisId="right" orientation="right" />
+                  <RechartsTooltip />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="orderCount" stroke="#8884d8" strokeWidth={2} name="Orders" />
+                  <Line yAxisId="right" type="monotone" dataKey="avgOrderValue" stroke="#82ca9d" strokeWidth={2} name="AOV" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div >
   );
 };
