@@ -9,12 +9,36 @@ export type DatePreset = 'today' | 'yesterday' | '7days' | '30days' | '90days' |
 export const DEFAULT_TZ = 'America/Los_Angeles';
 
 /**
+ * Returns true if `tz` is a recognised IANA name or a `Etc/GMT±N` offset that
+ * Intl.DateTimeFormat accepts. Use at boundaries (loading from localStorage,
+ * user input) to keep `formatInTimeZone` from throwing "Invalid time value".
+ */
+export function isValidTimezone(tz: string | null | undefined): tz is string {
+  if (!tz || typeof tz !== 'string') return false;
+  try {
+    // The constructor throws RangeError for unknown/malformed zones.
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Coerce arbitrary stored values into a usable IANA tz, falling back to LA. */
+export function safeTimezone(tz: string | null | undefined): string {
+  return isValidTimezone(tz) ? tz : DEFAULT_TZ;
+}
+
+/**
  * Returns the YYYY-MM-DD calendar date "today" looks like in the given
  * timezone — independent of the browser's locale. Source of truth for any
  * "today / yesterday / N days ago" arithmetic in this app.
+ *
+ * Coerces unknown / malformed `tz` values to the default rather than letting
+ * `formatInTimeZone` blow up with "Invalid time value".
  */
 export function todayInTz(tz: string = DEFAULT_TZ): string {
-  return formatInTimeZone(new Date(), tz, 'yyyy-MM-dd');
+  return formatInTimeZone(new Date(), safeTimezone(tz), 'yyyy-MM-dd');
 }
 
 /**
@@ -34,8 +58,9 @@ export function addDaysToDateString(dateStr: string, days: number): string {
  * that wants UTC instants (Shopify, Facebook, our own DB queries).
  */
 export function tzDayBoundsUtc(dateStr: string, tz: string = DEFAULT_TZ): { from: Date; to: Date } {
-  const from = fromZonedTime(`${dateStr}T00:00:00`, tz);
-  const to = fromZonedTime(`${dateStr}T23:59:59.999`, tz);
+  const safe = safeTimezone(tz);
+  const from = fromZonedTime(`${dateStr}T00:00:00`, safe);
+  const to = fromZonedTime(`${dateStr}T23:59:59.999`, safe);
   return { from, to };
 }
 
@@ -44,42 +69,43 @@ export function tzDayBoundsUtc(dateStr: string, tz: string = DEFAULT_TZ): { from
  * Returns UTC `Date` objects whose ISO timestamps mark the local-day bounds.
  */
 export function getDateRangeFromPreset(preset: DatePreset, tz: string = DEFAULT_TZ): { from: Date; to: Date } {
-  const today = todayInTz(tz);
+  const safe = safeTimezone(tz);
+  const today = todayInTz(safe);
 
   switch (preset) {
     case 'today':
-      return tzDayBoundsUtc(today, tz);
+      return tzDayBoundsUtc(today, safe);
     case 'yesterday': {
       const y = addDaysToDateString(today, -1);
-      return tzDayBoundsUtc(y, tz);
+      return tzDayBoundsUtc(y, safe);
     }
     case '7days': {
       const start = addDaysToDateString(today, -6);
       return {
-        from: fromZonedTime(`${start}T00:00:00`, tz),
-        to: fromZonedTime(`${today}T23:59:59.999`, tz)
+        from: fromZonedTime(`${start}T00:00:00`, safe),
+        to: fromZonedTime(`${today}T23:59:59.999`, safe)
       };
     }
     case '30days': {
       const start = addDaysToDateString(today, -29);
       return {
-        from: fromZonedTime(`${start}T00:00:00`, tz),
-        to: fromZonedTime(`${today}T23:59:59.999`, tz)
+        from: fromZonedTime(`${start}T00:00:00`, safe),
+        to: fromZonedTime(`${today}T23:59:59.999`, safe)
       };
     }
     case '90days': {
       const start = addDaysToDateString(today, -89);
       return {
-        from: fromZonedTime(`${start}T00:00:00`, tz),
-        to: fromZonedTime(`${today}T23:59:59.999`, tz)
+        from: fromZonedTime(`${start}T00:00:00`, safe),
+        to: fromZonedTime(`${today}T23:59:59.999`, safe)
       };
     }
     case 'custom':
     default: {
       const start = addDaysToDateString(today, -29);
       return {
-        from: fromZonedTime(`${start}T00:00:00`, tz),
-        to: fromZonedTime(`${today}T23:59:59.999`, tz)
+        from: fromZonedTime(`${start}T00:00:00`, safe),
+        to: fromZonedTime(`${today}T23:59:59.999`, safe)
       };
     }
   }
@@ -96,13 +122,14 @@ export function formatDateRange(from: Date, to: Date): string {
  * honors any IANA timezone.
  */
 export function formatLADateRange(from: Date, to: Date, tz: string = DEFAULT_TZ): string {
-  return `${formatInTimeZone(from, tz, 'LLL dd, yyyy')} - ${formatInTimeZone(to, tz, 'LLL dd, yyyy')}`;
+  const safe = safeTimezone(tz);
+  return `${formatInTimeZone(from, safe, 'LLL dd, yyyy')} - ${formatInTimeZone(to, safe, 'LLL dd, yyyy')}`;
 }
 
 /** Format a single timestamp in the given timezone. */
 export function formatInTz(date: Date | string, tz: string = DEFAULT_TZ, fmt: string = 'yyyy-MM-dd HH:mm'): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  return formatInTimeZone(d, tz, fmt);
+  return formatInTimeZone(d, safeTimezone(tz), fmt);
 }
 
 /**
@@ -110,23 +137,24 @@ export function formatInTz(date: Date | string, tz: string = DEFAULT_TZ, fmt: st
  * and ensure `from <= to`. Returns UTC Dates anchored to local-day bounds.
  */
 export function validateDateRange(from: Date, to: Date, tz: string = DEFAULT_TZ): { from: Date; to: Date } {
-  const todayStr = todayInTz(tz);
-  const eod = fromZonedTime(`${todayStr}T23:59:59.999`, tz);
+  const safe = safeTimezone(tz);
+  const todayStr = todayInTz(safe);
+  const eod = fromZonedTime(`${todayStr}T23:59:59.999`, safe);
 
   // Clamp future "to"
   const clampedTo = to > eod ? eod : to;
 
   // Compute the calendar-date string for from / to in tz, then re-anchor to
   // local-day boundaries so we always pass clean day windows downstream.
-  const fromDateStr = formatInTimeZone(from, tz, 'yyyy-MM-dd');
-  const toDateStr = formatInTimeZone(clampedTo, tz, 'yyyy-MM-dd');
+  const fromDateStr = formatInTimeZone(from, safe, 'yyyy-MM-dd');
+  const toDateStr = formatInTimeZone(clampedTo, safe, 'yyyy-MM-dd');
 
   // Guard: if from > to (after clamp), collapse from to start of to-day.
   const finalFromStr = fromDateStr > toDateStr ? toDateStr : fromDateStr;
 
   return {
-    from: fromZonedTime(`${finalFromStr}T00:00:00`, tz),
-    to: fromZonedTime(`${toDateStr}T23:59:59.999`, tz)
+    from: fromZonedTime(`${finalFromStr}T00:00:00`, safe),
+    to: fromZonedTime(`${toDateStr}T23:59:59.999`, safe)
   };
 }
 
@@ -156,9 +184,10 @@ export function getShopifyDateRange(from: Date, to: Date): { min: string; max: s
 
 /** Convert a date range to Facebook Marketing API's `since`/`until` format. */
 export function getFacebookDateRange(from: Date, to: Date, tz: string = DEFAULT_TZ): { since: string; until: string } {
+  const safe = safeTimezone(tz);
   return {
-    since: formatInTimeZone(from, tz, 'yyyy-MM-dd'),
-    until: formatInTimeZone(to, tz, 'yyyy-MM-dd')
+    since: formatInTimeZone(from, safe, 'yyyy-MM-dd'),
+    until: formatInTimeZone(to, safe, 'yyyy-MM-dd')
   };
 }
 

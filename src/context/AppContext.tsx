@@ -6,6 +6,7 @@ import { Order, COGSConfig } from '@/types/order';
 import { CogsConfig } from '@/types/minimalCogs';
 import { FacebookAdAccount, FacebookCampaign, FacebookAdSet, FacebookAd } from '@/types/facebook';
 import { DatePreset } from "@/components/ui/date-range-picker";
+import { safeTimezone, isValidTimezone, DEFAULT_TZ } from '@/utils/dateUtils';
 
 interface AppContextType {
     // Shopify State
@@ -73,10 +74,14 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
 
     const [timezone, setTimezone] = useState(() => {
         // Default to the merchant's Shopify store timezone (LA). The app
-        // shipped briefly with a buggy Etc/GMT+6 default — clear it so users
-        // who never explicitly chose a tz get LA going forward.
+        // shipped earlier versions with a bad Etc/GMT+6 default and an
+        // older picker that stored display labels (e.g. "GMT+6:00") rather
+        // than IANA names — both fail Intl.DateTimeFormat. Validate and
+        // fall back to LA so the calendar helpers can never throw.
         const stored = localStorage.getItem('preferred_timezone');
-        if (!stored || stored === 'Etc/GMT+6') return 'America/Los_Angeles';
+        if (!stored || stored === 'Etc/GMT+6' || !isValidTimezone(stored)) {
+            return DEFAULT_TZ;
+        }
         return stored;
     });
 
@@ -179,9 +184,14 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
         loadOrders();
     }, [dateRange, shopifyConfig]);
 
-    // Save Timezone
+    // Save Timezone — coerce just in case some legacy code calls setTimezone
+    // with an invalid value, so the persisted state stays self-healing.
     useEffect(() => {
-        localStorage.setItem('preferred_timezone', timezone);
+        const safe = safeTimezone(timezone);
+        localStorage.setItem('preferred_timezone', safe);
+        if (safe !== timezone) {
+            setTimezone(safe);
+        }
     }, [timezone]);
 
     // Load All Accounts Spend

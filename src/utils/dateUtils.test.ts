@@ -9,6 +9,8 @@ import {
   formatInTz,
   getShopifyDateRange,
   getFacebookDateRange,
+  isValidTimezone,
+  safeTimezone,
   DEFAULT_TZ
 } from './dateUtils';
 
@@ -20,6 +22,50 @@ describe('dateUtils', () => {
   describe('default timezone', () => {
     it('defaults to America/Los_Angeles', () => {
       expect(DEFAULT_TZ).toBe('America/Los_Angeles');
+    });
+  });
+
+  describe('isValidTimezone', () => {
+    it('accepts named IANA zones', () => {
+      expect(isValidTimezone('America/Los_Angeles')).toBe(true);
+      expect(isValidTimezone('Europe/London')).toBe(true);
+      expect(isValidTimezone('Asia/Ho_Chi_Minh')).toBe(true);
+    });
+    it('accepts UTC and Etc/GMT offsets', () => {
+      expect(isValidTimezone('UTC')).toBe(true);
+      expect(isValidTimezone('Etc/GMT+6')).toBe(true);
+      expect(isValidTimezone('Etc/GMT-7')).toBe(true);
+    });
+    it('rejects display labels and other garbage', () => {
+      // Old picker stored these — they must not survive into formatInTimeZone
+      expect(isValidTimezone('GMT+6:00')).toBe(false);
+      expect(isValidTimezone('UTC (GMT+0)')).toBe(false);
+      expect(isValidTimezone('America/Los Angeles')).toBe(false); // space, not underscore
+      expect(isValidTimezone('')).toBe(false);
+      expect(isValidTimezone(null)).toBe(false);
+      expect(isValidTimezone(undefined)).toBe(false);
+    });
+  });
+
+  describe('safeTimezone', () => {
+    it('returns the input when valid', () => {
+      expect(safeTimezone('Asia/Tokyo')).toBe('Asia/Tokyo');
+    });
+    it('falls back to LA when invalid', () => {
+      expect(safeTimezone('GMT+6:00')).toBe('America/Los_Angeles');
+      expect(safeTimezone(null)).toBe('America/Los_Angeles');
+      expect(safeTimezone('')).toBe('America/Los_Angeles');
+    });
+  });
+
+  describe('todayInTz with invalid tz', () => {
+    afterEach(() => vi.useRealTimers());
+    it('does not throw — coerces to default', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-05-03T06:00:00Z'));
+      expect(() => todayInTz('GMT+6:00' as any)).not.toThrow();
+      // Result should be the default-tz answer (LA, May 2)
+      expect(todayInTz('GMT+6:00' as any)).toBe('2026-05-02');
     });
   });
 
