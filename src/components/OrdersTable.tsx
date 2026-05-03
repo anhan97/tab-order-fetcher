@@ -278,6 +278,35 @@ export const OrdersTable = ({
           if (onAccountsSpendUpdate) {
             onAccountsSpendUpdate(account.id, totalSpend);
           }
+
+          // Persist daily ad spend to backend so it survives token expiry —
+          // calls the FB Insights API server-side with time_increment=1, which
+          // gives us frozen daily rows in the FacebookAdSpend table. P&L
+          // snapshots and the dashboard then read from DB instead of re-fetching
+          // live each session.
+          if (shopifyConfig?.storeUrl && shopifyConfig?.accessToken) {
+            const externalId = String(account.id).replace(/^act_/, '');
+            fetch('/api/pl/sync-fb', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Shopify-Store-Domain': shopifyConfig.storeUrl,
+                'X-Shopify-Access-Token': shopifyConfig.accessToken
+              },
+              body: JSON.stringify({
+                fbAccountExternalId: externalId,
+                accessToken: account.accessToken,
+                since: dateRange.from.toISOString(),
+                until: dateRange.to.toISOString(),
+                name: account.name
+              })
+            }).catch(err => {
+              // Persistence is best-effort — UI already has the live total
+              // from the React state above. Log so we can spot widespread
+              // backend failures, but don't surface to the user.
+              console.warn(`Failed to persist ad spend for ${account.id}:`, err);
+            });
+          }
         } catch (error) {
           console.error(`OrdersTable: Failed to load spend for account ${account.id}:`, error);
         }
