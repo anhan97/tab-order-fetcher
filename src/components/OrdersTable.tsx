@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { format } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { ShoppingBag, DollarSign, Target, Calculator, TrendingUp, Package, Truck, Calendar as CalendarIcon, Search, Download, RefreshCw } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
@@ -100,7 +101,7 @@ export const OrdersTable = ({
   const [orderFees, setOrderFees] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<string>('any');
   const [datePreset, setDatePreset] = useState<DatePreset>('30days');
-  const [dateRange, setDateRange] = useState<DateRange>(() => getDateRangeFromPreset('30days'));
+  const [dateRange, setDateRange] = useState<DateRange>(() => getDateRangeFromPreset('30days', timezone));
   const [comparisonRange, setComparisonRange] = useState<DateRange | null>(null);
   const [showComparison, setShowComparison] = useState(false);
   const [periodType, setPeriodType] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -137,6 +138,14 @@ export const OrdersTable = ({
       setDateRange(globalDateRange);
     }
   }, [globalDateRange]);
+
+  // Re-anchor preset windows when timezone changes — without this, "Last 30
+  // days" computed in GMT-6 keeps its boundaries even after switching to LA.
+  useEffect(() => {
+    if (datePreset !== 'custom') {
+      setDateRange(getDateRangeFromPreset(datePreset, timezone));
+    }
+  }, [timezone]);
 
   useEffect(() => {
     fetchOrders();
@@ -280,50 +289,21 @@ export const OrdersTable = ({
     }
   };
 
-  const getShopifyDateRange = (from: Date, to: Date) => {
-    // Set the time to start of day for 'from' and end of day for 'to'
-    const fromDate = new Date(from);
-    fromDate.setHours(0, 0, 0, 0);
-
-    const toDate = new Date(to);
-    toDate.setHours(23, 59, 59, 999);
-
-    // Format in ISO 8601 format with GMT-6 timezone
-    const formatGMT6ISO = (date: Date) => {
-      const pad = (num: number) => {
-        const norm = Math.floor(Math.abs(num));
-        return (norm < 10 ? '0' : '') + norm;
-      };
-
-      return date.getFullYear() +
-        '-' + pad(date.getMonth() + 1) +
-        '-' + pad(date.getDate()) +
-        'T' + pad(date.getHours()) +
-        ':' + pad(date.getMinutes()) +
-        ':' + pad(date.getSeconds()) +
-        '.' + (date.getMilliseconds() + '00').slice(0, 3) +
-        '-06:00';  // Fixed GMT-6 timezone
-    };
-
-    return {
-      min: formatGMT6ISO(fromDate),
-      max: formatGMT6ISO(toDate)
-    };
-  };
-
   const fetchOrders = async () => {
     try {
       setIsLoading(true);
       const apiClient = new ShopifyApiClient(shopifyConfig);
 
-      // Get date range in GMT-6 timezone
+      // dateRange is already a UTC instant pair anchored to the user's tz day
+      // boundaries (set up in getDateRangeFromPreset / validateDateRange);
+      // Shopify accepts ISO timestamps with offset, so just serialize.
       const { min: created_at_min, max: created_at_max } = getShopifyDateRange(dateRange.from, dateRange.to);
 
       console.log('Fetching orders with date range:', {
         created_at_min,
         created_at_max,
         datePreset,
-        timezone: 'GMT-6'
+        timezone
       });
 
       let allOrders: Order[] = [];
@@ -340,11 +320,10 @@ export const OrdersTable = ({
           status: statusFilter || 'any'
         });
 
-        // Process orders
-        const processedOrders = currentOrders.map(order => ({
-          ...order,
-          orderDate: format(new Date(order.orderDate), 'yyyy-MM-dd HH:mm:ss')
-        }));
+        // Keep the original ISO timestamp from Shopify — the UI re-formats
+        // it in the user's tz at render time. Pre-formatting here would
+        // discard the timezone info and the displayed day could drift.
+        const processedOrders = currentOrders;
 
         allOrders = [...allOrders, ...processedOrders];
 
@@ -377,27 +356,27 @@ export const OrdersTable = ({
     const grouped: { [key: string]: Order[] } = {};
     const days = Math.ceil((range.to.getTime() - range.from.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
-    // Initialize all periods
+    // Initialize all periods using the user's tz so day boundaries match
+    // the rest of the app and the underlying Shopify store calendar.
     let currentDate = new Date(range.from);
     while (currentDate <= range.to) {
       let key = '';
       switch (periodType) {
         case 'daily':
-          key = format(currentDate, 'yyyy-MM-dd');
-          currentDate.setDate(currentDate.getDate() + 1);
+          key = formatInTimeZone(currentDate, timezone, 'yyyy-MM-dd');
+          currentDate = new Date(currentDate.getTime() + 24 * 60 * 60 * 1000);
           break;
         case 'weekly': {
-          // Get the week number and year
-          const weekYear = format(currentDate, 'yyyy');
-          const weekNum = format(currentDate, 'ww');
+          const weekYear = formatInTimeZone(currentDate, timezone, 'yyyy');
+          const weekNum = formatInTimeZone(currentDate, timezone, 'ww');
           key = `${weekYear}-W${weekNum}`;
-          currentDate.setDate(currentDate.getDate() + 7);
+          currentDate = new Date(currentDate.getTime() + 7 * 24 * 60 * 60 * 1000);
           break;
         }
         case 'monthly': {
-          key = format(currentDate, 'yyyy-MM');
+          key = formatInTimeZone(currentDate, timezone, 'yyyy-MM');
           const nextMonth = new Date(currentDate);
-          nextMonth.setMonth(nextMonth.getMonth() + 1);
+          nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
           currentDate = nextMonth;
           break;
         }
@@ -405,28 +384,31 @@ export const OrdersTable = ({
       grouped[key] = [];
     }
 
-    // Group orders
+    // Group orders by their calendar day in the user's tz, NOT the browser's
+    // local tz — otherwise an order placed at 23:30 LA on May 2 shows up
+    // under May 3 for a Vietnam-based browser.
+    const todayKey = formatInTimeZone(new Date(), timezone, 'yyyy-MM-dd');
     orders.forEach(order => {
       const orderDate = new Date(order.orderDate);
       // Skip if the order is from today when using 7days or 30days preset
       if ((datePreset === '7days' || datePreset === '30days') &&
-        format(orderDate, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')) {
+        formatInTimeZone(orderDate, timezone, 'yyyy-MM-dd') === todayKey) {
         return;
       }
 
       let key = '';
       switch (periodType) {
         case 'daily':
-          key = format(orderDate, 'yyyy-MM-dd');
+          key = formatInTimeZone(orderDate, timezone, 'yyyy-MM-dd');
           break;
         case 'weekly': {
-          const weekYear = format(orderDate, 'yyyy');
-          const weekNum = format(orderDate, 'ww');
+          const weekYear = formatInTimeZone(orderDate, timezone, 'yyyy');
+          const weekNum = formatInTimeZone(orderDate, timezone, 'ww');
           key = `${weekYear}-W${weekNum}`;
           break;
         }
         case 'monthly':
-          key = format(orderDate, 'yyyy-MM');
+          key = formatInTimeZone(orderDate, timezone, 'yyyy-MM');
           break;
       }
 
@@ -670,32 +652,10 @@ export const OrdersTable = ({
     }).format(amount);
   };
 
-  // Update formatDate to use the selected timezone
+  // Single tz-aware formatter for both IANA names (America/Los_Angeles) and
+  // fixed offsets (Etc/GMT+6). formatInTimeZone handles both correctly.
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    // Handle GMT offsets
-    if (timezone.startsWith('Etc/GMT')) {
-      const offset = parseInt(timezone.replace('Etc/GMT', ''));
-      const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
-      const tzDate = new Date(utc + (3600000 * -offset));
-      return tzDate.toLocaleString('vi-VN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      });
-    }
-    return date.toLocaleString('vi-VN', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
+    return formatInTimeZone(new Date(dateString), timezone, 'dd/MM/yyyy HH:mm');
   };
 
   const getStatusBadge = (status: string) => {
@@ -947,7 +907,7 @@ export const OrdersTable = ({
   const handleDatePresetChange = (preset: DatePreset) => {
     setDatePreset(preset);
     if (preset !== 'custom') {
-      const newRange = getDateRangeFromPreset(preset);
+      const newRange = getDateRangeFromPreset(preset, timezone);
       setDateRange(newRange);
       setStatusFilter('any'); // Reset status filter to 'any'
 
@@ -971,7 +931,7 @@ export const OrdersTable = ({
 
     // If we have both dates, validate and normalize them
     if (range.from && range.to) {
-      const validatedRange = validateDateRange(range.from, range.to);
+      const validatedRange = validateDateRange(range.from, range.to, timezone);
       setDateRange(validatedRange);
       setStatusFilter('any');
     }
@@ -995,14 +955,9 @@ export const OrdersTable = ({
 
     setDatePreset('custom');
 
-    // Set time to start of day for from date and end of day for to date
-    const fromDate = new Date(tempDateRange.from);
-    fromDate.setHours(0, 0, 0, 0);
-
-    const toDate = new Date(tempDateRange.to);
-    toDate.setHours(23, 59, 59, 999);
-
-    setDateRange({ from: fromDate, to: toDate });
+    // Anchor day bounds in the user's tz, not the browser's local tz
+    const validated = validateDateRange(tempDateRange.from, tempDateRange.to, timezone);
+    setDateRange(validated);
     setStatusFilter('any');
     setTempDateRange(undefined); // Reset temp range after applying
   };
@@ -1086,7 +1041,7 @@ export const OrdersTable = ({
                     {dateRange?.from ? (
                       dateRange.to ? (
                         <>
-                          {formatLADateRange(dateRange.from, dateRange.to)}
+                          {formatLADateRange(dateRange.from, dateRange.to, timezone)}
                         </>
                       ) : (
                         format(dateRange.from, "LLL dd, yyyy") + " - Pick end date"

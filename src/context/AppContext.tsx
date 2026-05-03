@@ -72,7 +72,12 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     const [minimalCogsConfig, setMinimalCogsConfig] = useState<CogsConfig | null>(null);
 
     const [timezone, setTimezone] = useState(() => {
-        return localStorage.getItem('preferred_timezone') || 'Etc/GMT+6';
+        // Default to the merchant's Shopify store timezone (LA). The app
+        // shipped briefly with a buggy Etc/GMT+6 default — clear it so users
+        // who never explicitly chose a tz get LA going forward.
+        const stored = localStorage.getItem('preferred_timezone');
+        if (!stored || stored === 'Etc/GMT+6') return 'America/Los_Angeles';
+        return stored;
     });
 
     const [selectedDatePreset, setSelectedDatePreset] = useState<DatePreset>("last30days");
