@@ -28,17 +28,25 @@ const FB_BASE = `https://graph.facebook.com/${FACEBOOK_CONFIG.version}`;
 
 /**
  * Pick the right access token for an account.
- *   - If system-user pool is configured → consistent-hash to a pool slot.
- *     This is the multi-tenant "Adlux BM" path.
- *   - Otherwise fall back to whatever token the caller passed in (legacy
- *     per-user FB Login flow). Lets the app keep working before pool setup.
+ *
+ * Order matters here — used to be "pool wins if configured" but that broke
+ * any user who had picked User Token mode in a deployment that also had an
+ * Adlux pool: their long-lived token sat in the DB unused while requests
+ * went out with a system token whose BM didn't have the right app.
+ *
+ *   1. If the caller passed a non-empty token → trust them and use it.
+ *      (The route resolves UserFacebookConnection first now, so this is
+ *       how user-token mode reaches FB.)
+ *   2. Else if pool is configured → consistent-hash to a pool slot.
+ *   3. Else throw (caller must error out — there's no token to use).
  */
 function resolveToken(accountId: string, fallbackToken: string): string {
+  if (fallbackToken && fallbackToken.length > 0) return fallbackToken;
   if (pool.isPoolConfigured()) {
     try { return pool.tokenForAccount(accountId); }
-    catch { return fallbackToken; }
+    catch { /* fall through */ }
   }
-  return fallbackToken;
+  throw new Error('No FB token available — connect Facebook (user-token mode) or configure the Adlux system-user pool.');
 }
 
 // Per-key in-flight promises so concurrent callers share one underlying fetch.

@@ -122,21 +122,33 @@ router.get('/account-data', resolveStore, async (req, res) => {
       });
     }
 
-    // SECURITY: token is no longer passed via URL/query string. We resolve
-    // it server-side based on the authenticated user. Adlux pool wins when
-    // configured; falls back to per-user FB SDK token from DB.
+    // Token resolution order — fixes "user picked User Token mode but the
+    // pool always wins" bug. Earlier we only checked the pool first; that
+    // meant a deployment with both Adlux AND a connected user-token
+    // would always hammer FB with the system token, even if the system
+    // token's BM doesn't have the app installed (→ #190 app-not-in-BM).
+    //
+    //   1. UserFacebookConnection (user-token mode): user explicitly
+    //      connected via FB SDK login → prefer their long-lived token.
+    //      `disconnect-all` wipes this row, so its presence is reliable
+    //      signal of "I'm in user-token mode".
+    //   2. Adlux pool (system-bm mode): only used when there's no user
+    //      connection. The service-layer resolveToken further hashes the
+    //      account → pool slot.
+    //   3. Neither → 401.
     let accessToken = '';
-    if (!pool.isPoolConfigured()) {
-      const dbToken = await userToken.getRawToken(req.resolved.userId);
-      if (!dbToken) {
-        return res.status(401).json({
-          error: 'No FB connection found. Connect Facebook via the Facebook tab.',
-          reason: 'no_connection'
-        });
-      }
+    const dbToken = await userToken.getRawToken(req.resolved.userId);
+    if (dbToken) {
       accessToken = dbToken;
       await userToken.markUsed(req.resolved.userId);
+    } else if (!pool.isPoolConfigured()) {
+      return res.status(401).json({
+        error: 'No FB connection found. Connect Facebook via the Facebook tab.',
+        reason: 'no_connection'
+      });
     }
+    // accessToken stays '' when only the pool is available — service layer
+    // picks a pool slot via resolveToken(accountId, '').
 
     const since = new Date(sinceStr);
     const until = new Date(untilStr);

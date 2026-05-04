@@ -21,6 +21,23 @@ import {
   AdCopy,
   UploadedCreative
 } from '../services/fb-ad-launch.service';
+import * as userToken from '../services/fb-user-token.service';
+
+/**
+ * Pull the caller's stored long-lived FB token from UserFacebookConnection.
+ * Used as the fallback for service-layer calls so user-token mode reaches
+ * FB instead of silently falling through to the Adlux pool. Returns
+ * undefined when the user has no FB connection (system-bm mode path).
+ */
+async function resolveUserFbToken(userId: string | undefined): Promise<string | undefined> {
+  if (!userId) return undefined;
+  try {
+    const t = await userToken.getRawToken(userId);
+    return t || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const router = express.Router();
 
@@ -36,7 +53,7 @@ router.get('/pages', resolveStore, async (req: Request, res: Response) => {
   try {
     const adAccountId = String(req.query.adAccountId || '');
     if (!adAccountId) return res.status(400).json({ error: 'adAccountId is required' });
-    const fallback = req.header('X-FB-Access-Token') || undefined;
+    const fallback = await resolveUserFbToken(req.resolved?.userId);
     const pages = await listPromotablePages(adAccountId, fallback);
     res.json({ pages });
   } catch (e: any) {
@@ -48,7 +65,7 @@ router.get('/pixels', resolveStore, async (req: Request, res: Response) => {
   try {
     const adAccountId = String(req.query.adAccountId || '');
     if (!adAccountId) return res.status(400).json({ error: 'adAccountId is required' });
-    const fallback = req.header('X-FB-Access-Token') || undefined;
+    const fallback = await resolveUserFbToken(req.resolved?.userId);
     const pixels = await listPixels(adAccountId, fallback);
     res.json({ pixels });
   } catch (e: any) {
@@ -127,7 +144,7 @@ router.post(
           callToAction: body.callToAction ? String(body.callToAction) : undefined,
           countries: body.countries ? String(body.countries).split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
           globalCopy,
-          fallbackAccessToken: req.header('X-FB-Access-Token') || undefined
+          fallbackAccessToken: await resolveUserFbToken(req.resolved?.userId)
         },
         creatives,
         send

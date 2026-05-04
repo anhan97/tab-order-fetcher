@@ -324,13 +324,18 @@ function formatAccountId(id: string): string {
 }
 
 function resolveToken(accountId: string, fallback?: string): string {
+  // Caller-supplied token wins. The route layer resolves the user's
+  // long-lived UserFacebookConnection token first; only when the user has
+  // no per-user connection do we hand it down empty and fall back to the
+  // Adlux system-user pool. Same rule as fb-account-data.service to keep
+  // the two paths consistent.
+  if (fallback && fallback.length > 0) return fallback;
   const idNoPrefix = accountId.replace(/^act_/, '');
   if (pool.isPoolConfigured()) {
     try { return pool.tokenForAccount(idNoPrefix); }
-    catch { /* fall through to fallback */ }
+    catch { /* fall through */ }
   }
-  if (fallback) return fallback;
-  throw new Error('No system-user token for account and no fallback provided. Configure Adlux pool or pass an access token.');
+  throw new Error('No FB token available — connect Facebook (user-token mode) or configure the Adlux system-user pool.');
 }
 
 function mergeCopy(perFile?: AdCopy, global?: AdCopy): AdCopy {
