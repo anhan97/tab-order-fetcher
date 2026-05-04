@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { ShopifyApiClient } from '@/utils/shopifyApi';
-import { FacebookAdsApiClient, fetchUserAdAccounts, fetchAdAccountData } from '@/utils/facebookAdsApi';
+import { FacebookAdsApiClient, fetchAdAccountData } from '@/utils/facebookAdsApi';
 import { COGSApiClient } from '@/utils/cogsApi';
 import { Order, COGSConfig } from '@/types/order';
 import { CogsConfig } from '@/types/minimalCogs';
@@ -285,25 +285,40 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const handleFacebookConnectionSuccess = async (config: { accessToken: string; adAccountId: string }) => {
+        // After the new connect flow we never have a valid frontend token —
+        // the long-lived one is in the backend DB. Pull the account list from
+        // /connection-accounts (which uses the DB-side token) instead of
+        // hitting Facebook directly with an empty token.
+        if (!shopifyConfig?.storeUrl || !shopifyConfig?.accessToken) {
+            console.warn('handleFacebookConnectionSuccess called without a Shopify config — cannot resolve user.');
+            setIsFacebookConnected(true);
+            return;
+        }
         try {
-            const accounts = await fetchUserAdAccounts(config.accessToken);
-            const adAccounts = accounts.map(account => ({
-                ...account,
-                accessToken: config.accessToken,
-                isEnabled: account.id === config.adAccountId
+            const headers = {
+                'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+                'X-Shopify-Access-Token': shopifyConfig.accessToken
+            };
+            const res = await fetch('/api/facebook/connection-accounts', { headers });
+            if (!res.ok) throw new Error(`connection-accounts ${res.status}`);
+            const { accounts: dbAccounts } = await res.json();
+            const fbAccts = (dbAccounts || []).map((a: any) => ({
+                id: a.accountId,
+                name: a.name,
+                accessToken: '', // backend resolves the real token from DB on every call
+                isEnabled: true
             }));
-
-            setFacebookAccounts(adAccounts);
-            localStorage.setItem('facebook_accounts', JSON.stringify(adAccounts));
-
-            const initialAccount = adAccounts.find(a => a.id === config.adAccountId);
-            if (initialAccount) {
-                setSelectedAccount(initialAccount);
-            }
-
+            setFacebookAccounts(fbAccts);
+            // Prefer the account the user picked during the connect flow if
+            // it's in the list, otherwise default to the first.
+            const picked = fbAccts.find((a: FacebookAdAccount) => a.id === config.adAccountId) || fbAccts[0];
+            if (picked) setSelectedAccount(picked);
             setIsFacebookConnected(true);
         } catch (error) {
-            console.error('Error fetching Facebook ad accounts:', error);
+            console.error('Error loading Facebook accounts after connect:', error);
+            // Mark connected anyway so the UI doesn't bounce back to the picker —
+            // user can retry account fetch from the FB page.
+            setIsFacebookConnected(true);
         }
     };
 
