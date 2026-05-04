@@ -1,9 +1,8 @@
 
 import { useEffect, useState } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { FacebookAdsApiClient } from '@/utils/facebookAdsApi';
 import { useAppContext } from '@/context/AppContext';
 
@@ -16,6 +15,7 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
   const [error, setError] = useState<string | null>(null);
   const [appIdMismatch, setAppIdMismatch] = useState<{ active: string; user: string } | null>(null);
   const [missingApp, setMissingApp] = useState(false);
+  const [missingScopes, setMissingScopes] = useState<string[]>([]);
   const { shopifyConfig } = useAppContext();
 
   // On mount: fetch the user's registered FB App and either configure the
@@ -58,9 +58,10 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
     return () => { cancelled = true; };
   }, [shopifyConfig]);
 
-  const handleLogin = async () => {
+  const handleLogin = async (rerequest = false) => {
     setIsLoading(true);
     setError(null);
+    setMissingScopes([]);
 
     try {
       // Re-check user app id right before login so a recent app-credential
@@ -87,7 +88,7 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
       }
 
       const client = FacebookAdsApiClient.getInstance();
-      const { accessToken: shortLivedToken } = await client.login();
+      const { accessToken: shortLivedToken } = await client.login({ rerequest });
 
       // After SDK login, fetch ad accounts list using the short-lived token
       // (one-time use; we won't keep this token around).
@@ -135,8 +136,14 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
         accessToken: '',  // intentionally empty — DB is source of truth
         adAccountId: firstAccount.id
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Facebook login error:', error);
+      // Scope-missing error from client.login → drives the dedicated UI below
+      // with a "Reconnect & grant permissions" button (auth_type=rerequest).
+      if (error?.code === 'missing_scopes' && Array.isArray(error.missingScopes)) {
+        setMissingScopes(error.missingScopes);
+        return;
+      }
       const raw = error instanceof Error ? error.message : 'Failed to connect to Facebook';
       // Translate FB's cryptic "access token does not belong to application X"
       // into the actual user-actionable advice — this is the #1 source of
@@ -180,7 +187,23 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
         </Alert>
       )}
 
-      {error && !appIdMismatch && (
+      {missingScopes.length > 0 && (
+        <Alert variant="destructive">
+          <ShieldAlert className="h-4 w-4" />
+          <AlertDescription className="space-y-2">
+            <p>
+              Facebook didn't grant the permissions we need: <code className="font-mono">{missingScopes.join(', ')}</code>.
+              The consent dialog let you untick them — sign in again and leave <strong>every checkbox checked</strong>.
+            </p>
+            <Button size="sm" variant="outline" onClick={() => handleLogin(true)} disabled={isLoading}>
+              <ShieldAlert className="h-3.5 w-3.5 mr-1.5" />
+              Reconnect & grant permissions
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {error && !appIdMismatch && missingScopes.length === 0 && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="space-y-2">
@@ -196,7 +219,7 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
       )}
 
       <Button
-        onClick={handleLogin}
+        onClick={() => handleLogin(false)}
         disabled={isLoading || missingApp || !!appIdMismatch}
         className="w-full"
       >

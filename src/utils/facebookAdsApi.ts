@@ -261,62 +261,55 @@ function transformAd(ad: any) {
   };
 }
 
+/**
+ * Fetch campaigns + adsets + ads + insights for an account/date-range.
+ *
+ * SECURITY: token NO LONGER passed via URL. Backend resolves the right
+ * token (Adlux pool or per-user DB) based on the authenticated session
+ * (Shopify domain headers from the caller's context). The `accessToken`
+ * argument is kept for back-compat but ignored — sent via Shopify-auth
+ * headers only.
+ *
+ * Auth headers must be set by the caller via `setAuthHeaders` below.
+ */
+let currentAuthHeaders: Record<string, string> = {};
+export function setFacebookApiAuthHeaders(headers: Record<string, string>) {
+  currentAuthHeaders = headers;
+}
+
 export async function fetchAdAccountData(
   accountId: string,
-  accessToken: string,
+  _accessToken: string,  // ignored — kept for back-compat, will remove next refactor
   dateRange: { from: Date; to: Date }
 ) {
-  const dateFormat = 'yyyy-MM-dd';
-  const formattedFrom = format(dateRange.from, dateFormat);
-  const formattedTo = format(dateRange.to, dateFormat);
+  const formattedFrom = format(dateRange.from, 'yyyy-MM-dd');
+  const formattedTo = format(dateRange.to, 'yyyy-MM-dd');
 
-  // Create the base parameters
   const params = new URLSearchParams({
-    access_token: accessToken,
-    limit: '500' // Increase limit to reduce pagination
+    accountId,
+    since: formattedFrom,
+    until: formattedTo
   });
 
-  // Add time range for insights
-  const insightsTimeRange = `insights.time_range({"since":"${formattedFrom}","until":"${formattedTo}"})`;
-
-  // Update field strings to include time range for insights
-  const campaignFieldsWithDate = CAMPAIGN_FIELDS.replace('insights{', `${insightsTimeRange}{`);
-  const adsetFieldsWithDate = ADSET_FIELDS.replace('insights{', `${insightsTimeRange}{`);
-  const adFieldsWithDate = AD_FIELDS.replace('insights{', `${insightsTimeRange}{`);
-
-  const baseUrl = `https://graph.facebook.com/${FACEBOOK_API_VERSION}/act_${accountId}`;
-  
-  try {
-    console.log('Fetching Facebook Ads data:', {
-      accountId,
-      dateRange: { from: formattedFrom, to: formattedTo }
-    });
-
-    // Fetch campaigns
-    const campaignsResponse = await fetch(`${baseUrl}/campaigns?fields=${campaignFieldsWithDate}&${params}`);
-    const campaignsData = await handleFacebookResponse(campaignsResponse, 'campaigns');
-    const campaigns = campaignsData.data || [];
-
-    // Fetch ad sets
-    const adsetsResponse = await fetch(`${baseUrl}/adsets?fields=${adsetFieldsWithDate}&${params}`);
-    const adsetsData = await handleFacebookResponse(adsetsResponse, 'adsets');
-    const adsets = adsetsData.data || [];
-
-    // Fetch ads
-    const adsResponse = await fetch(`${baseUrl}/ads?fields=${adFieldsWithDate}&${params}`);
-    const adsData = await handleFacebookResponse(adsResponse, 'ads');
-    const ads = adsData.data || [];
-
-    // Transform and return the data
-    return {
-      campaigns: campaigns.map(transformCampaign),
-      adsets: adsets.map(transformAdSet),
-      ads: ads.map(transformAd)
-    };
-  } catch (error) {
-    console.error('Error fetching Facebook Ads data:', error);
-    throw error;
+  const res = await fetch(`/api/facebook/account-data?${params}`, {
+    headers: currentAuthHeaders
+  });
+  if (!res.ok) {
+    let body: { error?: string; reason?: string; fbCode?: number } = {};
+    try { body = await res.json(); } catch { /* ignore */ }
+    const err = new Error(body.error || `Backend error ${res.status}`) as Error & { reason?: string; fbCode?: number };
+    err.reason = body.reason;
+    err.fbCode = body.fbCode;
+    throw err;
   }
+
+  const data = await res.json();
+  return {
+    campaigns: data.campaigns || [],
+    adsets: data.adsets || [],
+    ads: data.ads || [],
+    meta: data.meta
+  };
 }
 
 async function exchangeForLongLivedToken(shortLivedToken: string): Promise<string> {
@@ -344,6 +337,11 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<strin
 
 export class FacebookAdsApiClient {
   private static instance: FacebookAdsApiClient | null = null;
+  // Per-user FB App ID override. When set BEFORE the first SDK init, the SDK
+  // initialises with this user's app rather than the env-default. Critical
+  // for the multi-app architecture (each user owns their own FB App so a
+  // compliance flag on one app doesn't take down everyone else).
+  private static appIdOverride: string | null = null;
   private accessToken: string | null = null;
   private userId: string | null = null;
   private sdkLoaded = false;
@@ -365,37 +363,96 @@ export class FacebookAdsApiClient {
     return FacebookAdsApiClient.instance;
   }
 
+  /**
+   * Configure the FB App ID to use for SDK init. MUST be called before the
+   * first call to login()/ensureSDKLoaded() — once SDK is loaded with one
+   * app, switching requires a page reload (FB SDK can't re-init cleanly).
+   *
+   * Pass null to clear the override (fall back to env default).
+   */
+  static configureAppId(appId: string | null): void {
+    if (FacebookAdsApiClient.instance?.sdkLoaded && appId !== FacebookAdsApiClient.appIdOverride) {
+      console.warn('[FB-SDK] configureAppId called after SDK load — change requires page reload to take effect.');
+    }
+    FacebookAdsApiClient.appIdOverride = appId;
+  }
+
+  /** The active App ID (per-user override if set, else env default). */
+  static getActiveAppId(): string {
+    return FacebookAdsApiClient.appIdOverride || FACEBOOK_APP_ID;
+  }
+
   private async initializeFacebookSDK(): Promise<void> {
     if (this.sdkLoadPromise) {
       return this.sdkLoadPromise;
     }
 
     this.sdkLoadPromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Facebook SDK load timeout'));
-      }, 10000); // 10 second timeout
+      const activeAppId = FacebookAdsApiClient.getActiveAppId();
+      if (!activeAppId) {
+        reject(new Error('No FB App ID configured. Set up your FB App in Settings → Facebook App.'));
+        return;
+      }
 
-      window.fbAsyncInit = () => {
-        window.FB.init({
-          appId: FACEBOOK_APP_ID,
-          cookie: true,
-          xfbml: true,
-          version: FACEBOOK_API_VERSION
-        });
-        this.sdkLoaded = true;
-        clearTimeout(timeout);
-        resolve();
+      const initFb = () => {
+        try {
+          window.FB.init({
+            appId: activeAppId,
+            cookie: true,
+            xfbml: true,
+            version: FACEBOOK_API_VERSION
+          });
+          this.sdkLoaded = true;
+          resolve();
+        } catch (e: any) {
+          reject(new Error(`FB.init failed: ${e?.message || String(e)}`));
+        }
       };
 
-      // Load the SDK - use sdk.js for Business Login support
-      (function (d, s, id) {
-        var js, fjs = d.getElementsByTagName(s)[0];
-        if (d.getElementById(id)) return;
-        js = d.createElement(s) as HTMLScriptElement;
-        js.id = id;
-        js.src = "https://connect.facebook.net/en_US/sdk.js";
-        fjs.parentNode?.insertBefore(js, fjs);
-      }(document, 'script', 'facebook-jssdk'));
+      // Path 1: SDK already loaded by a prior call. fbAsyncInit only fires
+      // once per script load — relying on it would deadlock until timeout.
+      if (typeof window.FB !== 'undefined' && typeof window.FB.init === 'function') {
+        initFb();
+        return;
+      }
+
+      // Path 2: Script tag is in the DOM but FB hasn't finished booting yet.
+      // Set fbAsyncInit and let it fire when ready. Race with a timeout +
+      // an explicit script onerror so an ad-blocker doesn't hang us 15s.
+      const timeout = setTimeout(() => {
+        reject(new Error(
+          'Facebook SDK load timeout. The browser blocked connect.facebook.net — common causes: ad-blocker (uBlock, Brave Shields, AdGuard), corporate firewall, or DNS issue. Disable the blocker for this site and retry.'
+        ));
+      }, 15000);
+
+      window.fbAsyncInit = () => {
+        clearTimeout(timeout);
+        initFb();
+      };
+
+      const existing = document.getElementById('facebook-jssdk') as HTMLScriptElement | null;
+      const handleLoadError = () => {
+        clearTimeout(timeout);
+        reject(new Error(
+          'Facebook SDK script failed to load (connect.facebook.net unreachable). Check your network / ad-blocker and try again.'
+        ));
+      };
+
+      if (existing) {
+        // Tag exists but SDK didn't finish booting — bind onerror in case
+        // the original load failed silently.
+        existing.addEventListener('error', handleLoadError, { once: true });
+        return;
+      }
+
+      const fjs = document.getElementsByTagName('script')[0];
+      const js = document.createElement('script') as HTMLScriptElement;
+      js.id = 'facebook-jssdk';
+      js.src = 'https://connect.facebook.net/en_US/sdk.js';
+      js.async = true;
+      js.crossOrigin = 'anonymous';
+      js.addEventListener('error', handleLoadError, { once: true });
+      fjs.parentNode?.insertBefore(js, fjs);
     });
 
     return this.sdkLoadPromise;
@@ -407,7 +464,15 @@ export class FacebookAdsApiClient {
     }
   }
 
-  async login(): Promise<{ accessToken: string; userId: string }> {
+  /**
+   * Required scopes for the dashboard to work end-to-end. Verified against
+   * /me/permissions immediately after login — if the user unticked any of
+   * these in the FB consent dialog, we surface a clear error so the caller
+   * can re-prompt with auth_type=rerequest.
+   */
+  private static REQUIRED_SCOPES = ['ads_read', 'ads_management'];
+
+  async login(opts: { rerequest?: boolean } = {}): Promise<{ accessToken: string; userId: string }> {
     await this.ensureSDKLoaded();
 
     try {
@@ -415,6 +480,10 @@ export class FacebookAdsApiClient {
       const loginOptions: any = {
         scope: FACEBOOK_CONFIG.scope
       };
+      // Force the consent dialog to re-show declined permissions. Without
+      // this, FB silently re-uses prior choices — so a user who declined
+      // ads_management once can never grant it without rerequest.
+      if (opts.rerequest) loginOptions.auth_type = 'rerequest';
 
       // Add config_id for Facebook Business Login
       // This enables the Business Login flow which is required for business assets
@@ -444,6 +513,20 @@ export class FacebookAdsApiClient {
 
       const { accessToken, userID } = response.authResponse;
 
+      // Verify the user actually granted the scopes we asked for. The new FB
+      // consent UI lets users untick individual permissions — token comes
+      // back fine but later API calls fail with #200 missing_permission.
+      const missing = await this.findMissingScopes(accessToken);
+      if (missing.length > 0) {
+        const err = new Error(
+          `Facebook didn't grant required permissions: ${missing.join(', ')}. ` +
+          `When the consent dialog reopens, leave EVERY checkbox checked and click Continue.`
+        );
+        (err as any).code = 'missing_scopes';
+        (err as any).missingScopes = missing;
+        throw err;
+      }
+
       // Store the tokens
       this.accessToken = accessToken;
       this.userId = userID;
@@ -461,6 +544,32 @@ export class FacebookAdsApiClient {
     } catch (error) {
       console.error('Facebook login error:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Compare granted FB permissions against REQUIRED_SCOPES. Returns the
+   * scopes that are missing OR explicitly declined. Empty array = OK.
+   *
+   * Why we can't trust FB.login's response: when the user unticks a
+   * permission, FB still returns status='connected' with a token — but
+   * later API calls fail with #200 missing_permission. Verifying upfront
+   * lets us prompt rerequest before the user even sees a broken dashboard.
+   */
+  private async findMissingScopes(token: string): Promise<string[]> {
+    try {
+      const url = `https://graph.facebook.com/${FACEBOOK_API_VERSION}/me/permissions?access_token=${encodeURIComponent(token)}`;
+      const res = await fetch(url);
+      if (!res.ok) return []; // can't verify → trust the connect, surface real error later
+      const json = await res.json() as { data?: Array<{ permission: string; status: string }> };
+      const granted = new Set(
+        (json.data || [])
+          .filter(p => p.status === 'granted')
+          .map(p => p.permission)
+      );
+      return FacebookAdsApiClient.REQUIRED_SCOPES.filter(s => !granted.has(s));
+    } catch {
+      return []; // network/parse error → don't block login
     }
   }
 
@@ -742,7 +851,7 @@ export class FacebookAdsApiClient {
           facebookCampaignName: matchedCampaign.name,
           campaignSpend: matchedCampaign.spend,
           campaignROAS: matchedCampaign.roas,
-          campaignCostPerPurchase: matchedCampaign.cost_per_purchase
+          campaignCostPerPurchase: (matchedCampaign as any).cost_per_purchase ?? matchedCampaign.cost_per_result
         };
       }
       
