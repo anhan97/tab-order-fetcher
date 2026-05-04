@@ -602,7 +602,16 @@ export class FacebookAdsApiClient {
 
       if (!response.ok) {
         const error = data as FacebookApiError;
-        throw new Error(`Facebook API Error: ${error.error?.message || 'Unknown error'}`);
+        const msg = error.error?.message || 'Unknown error';
+        // Surface the "ad account owner has NOT grant" case as a typed error
+        // — this is NOT a user-permission issue, it's an *app-level* one.
+        // Caller renders a help card with the 3 possible fixes.
+        if (/ad account owner has not grant/i.test(msg)) {
+          const e = new Error(msg);
+          (e as any).code = 'app_not_authorized_for_ads';
+          throw e;
+        }
+        throw new Error(`Facebook API Error: ${msg}`);
       }
 
       return (data.data || [])

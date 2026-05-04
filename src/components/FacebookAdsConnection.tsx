@@ -16,6 +16,13 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
   const [appIdMismatch, setAppIdMismatch] = useState<{ active: string; user: string } | null>(null);
   const [missingApp, setMissingApp] = useState(false);
   const [missingScopes, setMissingScopes] = useState<string[]>([]);
+  /**
+   * App-level authorization failure. Distinct from missingScopes — the user
+   * granted everything we asked for, but the FB App isn't approved at the
+   * platform level for ads_read / ads_management on this ad account. Has 3
+   * possible fixes (App Review, app role, BM share).
+   */
+  const [appNotAuthorized, setAppNotAuthorized] = useState<{ fbAppId: string } | null>(null);
   const { shopifyConfig } = useAppContext();
 
   // On mount: fetch the user's registered FB App and either configure the
@@ -62,6 +69,7 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
     setIsLoading(true);
     setError(null);
     setMissingScopes([]);
+    setAppNotAuthorized(null);
 
     try {
       // Re-check user app id right before login so a recent app-credential
@@ -144,6 +152,13 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
         setMissingScopes(error.missingScopes);
         return;
       }
+      // App-not-authorized error from getAdAccounts → user granted everything
+      // but FB rejects the actual ads call because the app isn't whitelisted
+      // for ads_read/ads_management on the target ad account.
+      if (error?.code === 'app_not_authorized_for_ads') {
+        setAppNotAuthorized({ fbAppId: FacebookAdsApiClient.getActiveAppId() });
+        return;
+      }
       const raw = error instanceof Error ? error.message : 'Failed to connect to Facebook';
       // Translate FB's cryptic "access token does not belong to application X"
       // into the actual user-actionable advice — this is the #1 source of
@@ -203,7 +218,63 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
         </Alert>
       )}
 
-      {error && !appIdMismatch && missingScopes.length === 0 && (
+      {appNotAuthorized && (
+        <Alert variant="destructive">
+          <ShieldAlert className="h-4 w-4" />
+          <AlertDescription className="space-y-3">
+            <div>
+              <p className="font-semibold">Facebook App not authorized for ads access</p>
+              <p className="text-sm mt-1">
+                You signed in successfully and granted permissions, but FB still rejects ad-account API calls with
+                {' '}<code className="font-mono text-xs">"Ad account owner has NOT grant ads_management or ads_read"</code>.
+                That's an <strong>app-level</strong> issue, not a user-permission issue. Pick the fix that matches your setup:
+              </p>
+            </div>
+
+            <div className="space-y-2 text-sm">
+              <div className="border-l-2 border-rose-300 pl-3">
+                <p className="font-medium">1. App not approved for ads scopes (most common)</p>
+                <p className="text-xs mt-0.5">
+                  New FB Apps need <strong>Advanced Access</strong> for <code>ads_read</code> + <code>ads_management</code> on{' '}
+                  <a href={`https://developers.facebook.com/apps/${appNotAuthorized.fbAppId}/app-review/permissions/`} target="_blank" rel="noopener noreferrer" className="underline font-mono">
+                    App Review → Permissions and Features
+                  </a>.
+                </p>
+              </div>
+
+              <div className="border-l-2 border-rose-300 pl-3">
+                <p className="font-medium">2. You're not a Developer / Tester of the app</p>
+                <p className="text-xs mt-0.5">
+                  Add yourself in{' '}
+                  <a href={`https://developers.facebook.com/apps/${appNotAuthorized.fbAppId}/roles/roles/`} target="_blank" rel="noopener noreferrer" className="underline">
+                    App Roles
+                  </a>{' '}
+                  as Admin, Developer, or Tester. Standard Access works for these roles even before App Review.
+                </p>
+              </div>
+
+              <div className="border-l-2 border-rose-300 pl-3">
+                <p className="font-medium">3. Ad account is in a Business Manager that hasn't shared with this app</p>
+                <p className="text-xs mt-0.5">
+                  Open{' '}
+                  <a href="https://business.facebook.com/settings/apps/" target="_blank" rel="noopener noreferrer" className="underline">
+                    business.facebook.com/settings/apps
+                  </a>
+                  {' '}→ Add app <code className="font-mono">{appNotAuthorized.fbAppId}</code>, then assign it to the ad account with
+                  ads-management permission.
+                </p>
+              </div>
+            </div>
+
+            <Button size="sm" variant="outline" onClick={() => handleLogin(false)} disabled={isLoading}>
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+              I fixed it — try again
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {error && !appIdMismatch && missingScopes.length === 0 && !appNotAuthorized && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="space-y-2">
@@ -220,7 +291,7 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
 
       <Button
         onClick={() => handleLogin(false)}
-        disabled={isLoading || missingApp || !!appIdMismatch}
+        disabled={isLoading || missingApp || !!appIdMismatch || !!appNotAuthorized}
         className="w-full"
       >
         {isLoading ? (
