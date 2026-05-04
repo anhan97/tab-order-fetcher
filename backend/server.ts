@@ -6,8 +6,10 @@ import comprehensiveCogsRoutes from './src/routes/comprehensive-cogs.routes';
 import facebookRoutes from './src/routes/facebook.routes';
 import plRoutes from './src/routes/pl.routes';
 import adsLaunchRoutes from './src/routes/ads-launch.routes';
+import authRoutes from './src/routes/auth.routes';
 import { startPLScheduler } from './src/jobs/pl-scheduler';
 import { startAdluxScheduler } from './src/jobs/fb-adlux-scheduler';
+import { startFbTokenRefreshScheduler } from './src/jobs/fb-token-refresh';
 import config from './src/config/app';
 
 const app = express();
@@ -38,6 +40,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/shopify', shopifyRoutes);
 app.use('/api/cogs', cogsRoutes);
 app.use('/api/comprehensive-cogs', comprehensiveCogsRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/facebook', facebookRoutes);
 app.use('/api/pl', plRoutes);
 app.use('/api/ads', adsLaunchRoutes);
@@ -60,4 +63,5 @@ app.listen(port, () => {
     startPLScheduler();
   }
   startAdluxScheduler();
+  startFbTokenRefreshScheduler();
 });

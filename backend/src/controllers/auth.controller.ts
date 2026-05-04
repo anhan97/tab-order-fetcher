@@ -29,20 +29,29 @@ export class AuthController {
 
       // Generate verification token
       const verifyToken = uuidv4();
+      const requireVerify = process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === '1';
 
-      // Create user
+      // Create user — auto-verified when SMTP isn't enforced so the user
+      // can log in immediately. The verifyToken is still issued so that
+      // email verification can be enabled later without re-registering.
       const user = await prisma.user.create({
         data: {
           email,
           password: hashedPassword,
           firstName,
           lastName,
-          verifyToken
+          verifyToken,
+          isVerified: !requireVerify
         }
       });
 
-      // Send verification email
-      await sendVerificationEmail(email, verifyToken);
+      // Send verification email — best-effort. SMTP misconfig must not
+      // block registration in dev / self-hosted setups.
+      try {
+        await sendVerificationEmail(email, verifyToken);
+      } catch (err: any) {
+        console.warn('[auth] sendVerificationEmail failed (non-fatal):', err?.message);
+      }
 
       // Generate JWT
       const token = jwt.sign(
@@ -89,8 +98,10 @@ export class AuthController {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      // Check if email is verified
-      if (!user.isVerified) {
+      // Email verification gate — opt out for self-hosted deployments where
+      // SMTP isn't configured yet. Set AUTH_REQUIRE_EMAIL_VERIFICATION=0
+      // (or unset) to allow unverified users to log in.
+      if (!user.isVerified && process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === '1') {
         return res.status(401).json({ error: 'Please verify your email before logging in' });
       }
 

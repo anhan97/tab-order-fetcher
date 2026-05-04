@@ -6,7 +6,8 @@ import { Order, COGSConfig } from '@/types/order';
 import { CogsConfig } from '@/types/minimalCogs';
 import { FacebookAdAccount, FacebookCampaign, FacebookAdSet, FacebookAd } from '@/types/facebook';
 import { DatePreset } from "@/components/ui/date-range-picker";
-import { safeTimezone, isValidTimezone, DEFAULT_TZ } from '@/utils/dateUtils';
+import { safeTimezone, isValidTimezone, DEFAULT_TZ, todayInTz, tzDayBoundsUtc } from '@/utils/dateUtils';
+import { useAuth } from '@/context/AuthContext';
 
 interface AppContextType {
     // Shopify State
@@ -53,11 +54,24 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppContextProvider = ({ children }: { children: ReactNode }) => {
-    // --- State Definitions ---
+    // Bridge from AuthContext: shopifyConfig now derives from the user's
+    // active store record (which is loaded from the backend). Falling back
+    // to legacy localStorage keeps existing sessions working until they
+    // re-login. Once the user goes through /login → /connect, AuthContext
+    // owns the truth.
+    const { activeStore } = useAuth();
     const [isShopifyConnected, setIsShopifyConnected] = useState(() => {
         return !!localStorage.getItem('shopify_store_url');
     });
     const [shopifyConfig, setShopifyConfig] = useState<{ storeUrl: string; accessToken: string } | null>(null);
+
+    // Re-sync shopifyConfig + connection flag whenever the active store changes.
+    useEffect(() => {
+        if (activeStore) {
+            setShopifyConfig({ storeUrl: activeStore.storeDomain, accessToken: activeStore.accessToken });
+            setIsShopifyConnected(true);
+        }
+    }, [activeStore]);
 
     const [isFacebookConnected, setIsFacebookConnected] = useState(false);
     const [facebookAccounts, setFacebookAccounts] = useState<FacebookAdAccount[]>([]);
@@ -85,19 +99,32 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
         return stored;
     });
 
-    const [selectedDatePreset, setSelectedDatePreset] = useState<DatePreset>("last30days");
+    // Default to TODAY across the app — matches the dashboard "what's
+    // happening right now" mental model. The "today" window is anchored to
+    // the STORE timezone (read from localStorage at boot), NOT the browser
+    // tz, so a VN merchant viewing a US store sees the same calendar day
+    // the store would. This keeps the dashboard, P&L and Shopify aligned.
+    const [selectedDatePreset, setSelectedDatePreset] = useState<DatePreset>("today");
     const [dateRange, setDateRange] = useState(() => {
-        const now = new Date();
-        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        return { from: thirtyDaysAgo, to: now };
+        const tz = safeTimezone(localStorage.getItem('preferred_timezone'));
+        const today = todayInTz(tz);
+        return tzDayBoundsUtc(today, tz);
     });
+
+    // When the user changes timezone, re-anchor the "today" range so KPIs
+    // refetch in the new tz. Only auto-shift if the picked preset is "today"
+    // — custom ranges they explicitly chose should be preserved.
+    useEffect(() => {
+        if (selectedDatePreset !== 'today') return;
+        const today = todayInTz(timezone);
+        setDateRange(tzDayBoundsUtc(today, timezone));
+    }, [timezone, selectedDatePreset]);
 
     // --- Effects ---
 
     // Initial Load
     useEffect(() => {
         const savedShopifyClient = ShopifyApiClient.fromLocalStorage();
-        const savedFacebookClient = FacebookAdsApiClient.fromLocalStorage();
         const savedCogsConfigs = localStorage.getItem('cogs_configs');
         const savedFacebookAccounts = localStorage.getItem('facebook_accounts');
 
@@ -112,18 +139,59 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
                 const storeId = storeUrl.replace('.myshopify.com', '');
                 COGSApiClient.saveToLocalStorage(userId, storeId);
             }
+
+            // Check FB state from the backend. There are two valid "connected"
+            // shapes:
+            //   (a) per-user FB SDK login → row in UserFacebookConnection
+            //   (b) Adlux pool mode → claimed access via FacebookAdAccountAccess
+            // The user is "connected" if EITHER produces accounts. Without this,
+            // adlux-pool users (who never went through FB SDK login) had no
+            // logout pill in the sidebar — making it impossible to disconnect.
+            (async () => {
+                const fbHeaders = {
+                    'X-Shopify-Store-Domain': storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+                    'X-Shopify-Access-Token': accessToken
+                };
+                try {
+                    // /connection-accounts returns adlux-managed first, then
+                    // falls back to /me/adaccounts via FB SDK token. So a single
+                    // call covers both shapes.
+                    const accRes = await fetch('/api/facebook/connection-accounts', { headers: fbHeaders });
+                    if (accRes.ok) {
+                        const { accounts: dbAccounts } = await accRes.json();
+                        const fbAccts = (dbAccounts || []).map((a: any) => ({
+                            id: a.accountId,
+                            name: a.name,
+                            accessToken: '',  // token lives in DB only
+                            isEnabled: true
+                        }));
+                        if (fbAccts.length > 0) {
+                            setFacebookAccounts(fbAccts);
+                            setSelectedAccount(fbAccts[0]);
+                            setIsFacebookConnected(true);
+                        }
+                    }
+                } catch { /* offline / backend down — leave disconnected */ }
+            })();
         }
 
-        if (savedFacebookClient) {
-            setIsFacebookConnected(true);
-            if (savedFacebookAccounts) {
+        // Stale localStorage cleanup — old code paths used to persist FB
+        // tokens here. Wipe so they don't get re-read.
+        try {
+            localStorage.removeItem('facebook_access_token');
+            localStorage.removeItem('facebook_user_id');
+        } catch { /* ignore */ }
+
+        // Legacy: read facebook_accounts cache so the dashboard renders
+        // immediately while connection-status is in flight. Backend will
+        // overwrite with the authoritative list once it answers.
+        if (savedFacebookAccounts) {
+            try {
                 const accounts = JSON.parse(savedFacebookAccounts);
-                setFacebookAccounts(accounts);
-                const enabledAccount = accounts.find((a: FacebookAdAccount) => a.isEnabled);
-                if (enabledAccount) {
-                    setSelectedAccount(enabledAccount);
-                }
-            }
+                // Strip any stale accessToken from cached entries.
+                const sanitized = accounts.map((a: any) => ({ ...a, accessToken: '' }));
+                setFacebookAccounts(sanitized);
+            } catch { /* ignore corrupt cache */ }
         }
 
         if (savedCogsConfigs) {
@@ -239,7 +307,43 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
         }
     };
 
-    const handleDisconnectFacebook = () => {
+    const handleDisconnectFacebook = async () => {
+        // Two backend states to clear so F5 doesn't auto-reconnect:
+        //   (a) UserFacebookConnection — DELETE /connection
+        //   (b) Adlux access rows — DELETE /unclaim-account per accountId
+        // Without (b), an adlux-pool user logs out, F5, and /connection-accounts
+        // happily returns their claimed accounts again → instant re-login.
+        if (shopifyConfig?.storeUrl && shopifyConfig?.accessToken) {
+            const fbHeaders = {
+                'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+                'X-Shopify-Access-Token': shopifyConfig.accessToken
+            };
+            try {
+                await fetch('/api/facebook/connection', { method: 'DELETE', headers: fbHeaders });
+            } catch (err) {
+                console.warn('Backend FB disconnect failed:', err);
+            }
+            // Bulk-unclaim adlux accounts. Best-effort: if any one call fails,
+            // keep going so the user isn't half-logged-out.
+            await Promise.all(
+                facebookAccounts.map(acc =>
+                    fetch(`/api/facebook/unclaim-account?accountId=${encodeURIComponent(acc.id)}`, {
+                        method: 'DELETE',
+                        headers: fbHeaders
+                    }).catch(err => console.warn(`Unclaim ${acc.id} failed:`, err))
+                )
+            );
+        }
+
+        // Best-effort FB SDK logout so the user's FB session cookie is
+        // released too. Wrapped in try/catch because the SDK may not be
+        // loaded (if user never clicked Connect this session).
+        try {
+            if (typeof window !== 'undefined' && (window as any).FB?.logout) {
+                (window as any).FB.logout();
+            }
+        } catch { /* SDK not loaded — fine */ }
+
         FacebookAdsApiClient.clearLocalStorage();
         localStorage.removeItem('facebook_accounts');
         setFacebookAccounts([]);

@@ -1,7 +1,17 @@
-import { Link, useLocation, Outlet } from 'react-router-dom';
+import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/button';
 import { TimezoneSelect } from '@/components/ui/timezone-select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import {
     ShoppingBag,
@@ -13,7 +23,12 @@ import {
     PieChart as PieChartIcon,
     Menu,
     TrendingUp,
-    LayoutDashboard
+    LayoutDashboard,
+    Sliders,
+    Store as StoreIcon,
+    Plus,
+    User as UserIcon,
+    LogOut as SignOutIcon
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -24,7 +39,8 @@ const PAGE_SUBTITLES: Record<string, string> = {
     'P&L': 'Daily / period profit, costs, and operating expenses',
     COGS: 'Per-variant baseCost, supplier overrides, shipping tiers',
     Facebook: 'Ad accounts portfolio, campaigns, ad sets, ads',
-    Content: 'Content performance & engagement breakdown'
+    Content: 'Content performance & engagement breakdown',
+    Adlux: 'BM credentials & system-user token pool'
 };
 
 export const Layout = () => {
@@ -37,8 +53,21 @@ export const Layout = () => {
         setTimezone
     } = useAppContext();
 
+    const { user, stores, activeStore, setActiveStoreByDomain, logout } = useAuth();
+
     const location = useLocation();
+    const navigate = useNavigate();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+    const handleLogout = () => {
+        logout();
+        navigate('/login', { replace: true });
+    };
+
+    const userDisplayName = user
+        ? (user.firstName ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}` : user.email)
+        : '';
+    const userInitials = (user?.firstName?.[0] || user?.email?.[0] || '?').toUpperCase();
 
     const navItems = [
         // /orders is kept as the route for back-compat; the page itself is now
@@ -48,15 +77,18 @@ export const Layout = () => {
         { path: '/analytics', label: 'Analytics', icon: BarChart3 },
         { path: '/profit', label: 'P&L', icon: TrendingUp },
         { path: '/cogs', label: 'COGS', icon: DollarSign },
-        { path: '/facebook', label: 'Facebook', icon: Settings },
+        { path: '/facebook', label: 'Facebook', icon: BarChart3 },
         { path: '/content', label: 'Content', icon: PieChartIcon },
+        { path: '/adlux-settings', label: 'Adlux', icon: Sliders },
     ];
 
     const activeNavItem = navItems.find(i => i.path === location.pathname);
     const subtitle = activeNavItem ? PAGE_SUBTITLES[activeNavItem.label] : '';
 
     return (
-        <div className="min-h-screen bg-slate-50 flex">
+        // h-screen (not min-h-screen) so only the inner <main> scrolls — was
+        // creating a double scrollbar on tall pages like Adlux Settings.
+        <div className="h-screen bg-slate-50 flex overflow-hidden">
             {/* Sidebar Navigation */}
             <aside className={cn(
                 "fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200/80 transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static lg:inset-0 flex flex-col",
@@ -99,6 +131,44 @@ export const Layout = () => {
                         );
                     })}
                 </nav>
+
+                {/* Active store switcher — visible whenever the user has at
+                    least one store. Picking a different store rebinds every
+                    downstream API call to that store's domain. */}
+                {user && stores.length > 0 && (
+                    <div className="border-t border-slate-200/80 p-3 space-y-1.5 shrink-0">
+                        <p className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 px-2 pb-1 flex items-center gap-1">
+                            <StoreIcon className="h-3 w-3" />
+                            Active store
+                        </p>
+                        <Select
+                            value={activeStore?.storeDomain || ''}
+                            onValueChange={(v) => setActiveStoreByDomain(v)}
+                        >
+                            <SelectTrigger className="w-full h-9 text-xs">
+                                <SelectValue placeholder="Pick store..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {stores.map(s => (
+                                    <SelectItem key={s.id} value={s.storeDomain}>
+                                        <div className="truncate max-w-[180px]">
+                                            {s.name || s.storeDomain}
+                                        </div>
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full justify-start text-xs text-slate-600 hover:text-slate-900"
+                            onClick={() => navigate('/connect')}
+                        >
+                            <Plus className="h-3.5 w-3.5 mr-1.5" />
+                            Add another store
+                        </Button>
+                    </div>
+                )}
 
                 <div className="border-t border-slate-200/80 p-3 space-y-1.5 shrink-0">
                     <p className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 px-2 pb-1">Connections</p>
@@ -146,6 +216,38 @@ export const Layout = () => {
                             onValueChange={setTimezone}
                             aria-label="Select timezone"
                         />
+                        {user && (
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" className="h-9 px-2 gap-2">
+                                        <div className="h-7 w-7 rounded-full bg-gradient-to-br from-slate-700 to-slate-900 text-white text-xs font-semibold flex items-center justify-center">
+                                            {userInitials}
+                                        </div>
+                                        <span className="hidden md:inline text-sm text-slate-700 max-w-[140px] truncate">{userDisplayName}</span>
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56">
+                                    <DropdownMenuLabel className="font-normal">
+                                        <div className="flex flex-col gap-0.5">
+                                            <span className="text-xs text-slate-500">Signed in as</span>
+                                            <span className="text-sm font-medium truncate">{user.email}</span>
+                                        </div>
+                                    </DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem asChild>
+                                        <Link to="/connect" className="cursor-pointer">
+                                            <UserIcon className="h-4 w-4 mr-2" />
+                                            Manage stores
+                                        </Link>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onClick={handleLogout} className="text-rose-600 focus:text-rose-700 cursor-pointer">
+                                        <SignOutIcon className="h-4 w-4 mr-2" />
+                                        Sign out
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        )}
                     </div>
                 </header>
 
