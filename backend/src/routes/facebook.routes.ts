@@ -148,21 +148,30 @@ router.get('/account-data', resolveStore, async (req, res) => {
     return res.json(data);
   } catch (err: any) {
     const fbCode = err.fbCode;
-    const isExpiredToken = fbCode === 190;                // OAuthException: expired/invalid token
+    const msg = err.message || '';
+    // FB code 190 covers a few unrelated failure modes — discriminate by
+    // message before tagging "expired_token". The most common false
+    // positive is "application does not belong to system user's business",
+    // which means the FB App isn't installed in the BM that owns the
+    // system-user pool token. Token's perfectly valid; the BM config is wrong.
+    const isAppNotInBm = fbCode === 190 && /application does not belong to system user/i.test(msg);
+    const isExpiredToken = fbCode === 190 && !isAppNotInBm;
     const isPermission = fbCode === 200 || fbCode === 10; // missing permission / scope
     const isRateLimit = fbCode === 17 || fbCode === 4 || fbCode === 32 || fbCode === 613
-      || /rate-limited|too many|throttle/i.test(err.message || '');
+      || /rate-limited|too many|throttle/i.test(msg);
 
     let httpStatus = err.httpStatus || 500;
     if (isExpiredToken) httpStatus = 401;
+    else if (isAppNotInBm) httpStatus = 403;
     else if (isPermission) httpStatus = 403;
     else if (isRateLimit) httpStatus = 429;
 
     return res.status(httpStatus).json({
-      error: err.message || 'Failed to fetch account data',
+      error: msg || 'Failed to fetch account data',
       fbCode: fbCode || null,
       fbSubcode: err.fbSubcode || null,
-      reason: isExpiredToken ? 'expired_token'
+      reason: isAppNotInBm ? 'app_not_in_bm'
+            : isExpiredToken ? 'expired_token'
             : isPermission ? 'missing_permission'
             : isRateLimit ? 'rate_limit'
             : 'unknown'
