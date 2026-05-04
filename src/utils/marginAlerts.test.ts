@@ -5,8 +5,7 @@ const baseTotals: PLTotals = {
   netRevenue: 0,
   grossProfit: 0,
   netProfit: 0,
-  cogs: 0,
-  shippingCost: 0,
+  basecost: 0,             // landed-cost-per-unit × qty (product + supplier shipping merged)
   paymentFees: 0,
   fbAdSpend: 0,
   otherAdSpend: 0,
@@ -30,8 +29,7 @@ describe('computeMargins', () => {
       netRevenue: 1000,
       grossProfit: 600,
       netProfit: 200,
-      cogs: 250,
-      shippingCost: 80,
+      basecost: 330,         // 250 product + 80 supplier shipping merged
       paymentFees: 30,
       fbAdSpend: 350,
       otherAdSpend: 50,
@@ -40,7 +38,7 @@ describe('computeMargins', () => {
       orderCount: 20
     });
     expect(m.gpm).toBeCloseTo(0.6, 5);
-    expect(m.cm).toBeCloseTo((1000 - 250 - 80 - 30 - 350 - 50) / 1000, 5); // 0.24
+    expect(m.cm).toBeCloseTo((1000 - 330 - 30 - 350 - 50) / 1000, 5); // 0.24
     expect(m.npm).toBeCloseTo(0.2, 5);
   });
 });
@@ -59,7 +57,7 @@ describe('detectMarginAlerts', () => {
       netRevenue: 1000,
       grossProfit: 200,
       netProfit: -100,
-      cogs: 600,
+      basecost: 600,
       fbAdSpend: 300,
       orderCount: 10
     });
@@ -74,10 +72,9 @@ describe('detectMarginAlerts', () => {
       netRevenue: 1000,
       grossProfit: 250,
       netProfit: 50,
-      cogs: 350,
-      shippingCost: 80,
+      basecost: 430,            // 350 + 80 merged
       paymentFees: 30,
-      fbAdSpend: 460, // CM = (1000 - 350 - 80 - 30 - 460) / 1000 = 8%
+      fbAdSpend: 460, // CM = (1000 - 430 - 30 - 460) / 1000 = 8%
       orderCount: 10
     });
     const cm = alerts.find(a => a.id === 'cm-critical');
@@ -91,8 +88,7 @@ describe('detectMarginAlerts', () => {
       netRevenue: 1000,
       grossProfit: 200, // GPM = 20%
       netProfit: 50,
-      cogs: 700,
-      shippingCost: 50,
+      basecost: 750,            // 700 + 50 merged
       paymentFees: 30,
       orderCount: 10
     });
@@ -106,8 +102,7 @@ describe('detectMarginAlerts', () => {
       netRevenue: 1000,
       grossProfit: 350, // GPM = 35%
       netProfit: 100,
-      cogs: 550,
-      shippingCost: 80,
+      basecost: 630,            // 550 + 80 merged
       paymentFees: 20,
       orderCount: 10
     });
@@ -144,8 +139,7 @@ describe('detectMarginAlerts', () => {
       netRevenue: 1000,
       grossProfit: 600,
       netProfit: 250,
-      cogs: 300,
-      shippingCost: 50,
+      basecost: 350,           // 300 + 50 merged
       paymentFees: 20,
       fbAdSpend: 250,
       otherAdSpend: 30,
@@ -163,8 +157,7 @@ describe('detectMarginAlerts', () => {
       netRevenue: 1000,
       grossProfit: 200, // critical GPM
       netProfit: 50,
-      cogs: 600,
-      shippingCost: 200,
+      basecost: 800,            // 600 + 200 merged
       refunds: 70, // warning refund
       orderCount: 10
     });

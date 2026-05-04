@@ -4,6 +4,10 @@ import shopifyRoutes from './src/routes/shopify.routes';
 import cogsRoutes from './src/routes/cogs.routes';
 import comprehensiveCogsRoutes from './src/routes/comprehensive-cogs.routes';
 import facebookRoutes from './src/routes/facebook.routes';
+import plRoutes from './src/routes/pl.routes';
+import adsLaunchRoutes from './src/routes/ads-launch.routes';
+import { startPLScheduler } from './src/jobs/pl-scheduler';
+import { startAdluxScheduler } from './src/jobs/fb-adlux-scheduler';
 import config from './src/config/app';
 
 const app = express();
@@ -35,6 +39,8 @@ app.use('/api/shopify', shopifyRoutes);
 app.use('/api/cogs', cogsRoutes);
 app.use('/api/comprehensive-cogs', comprehensiveCogsRoutes);
 app.use('/api/facebook', facebookRoutes);
+app.use('/api/pl', plRoutes);
+app.use('/api/ads', adsLaunchRoutes);
 
 // Test endpoint
 app.get('/api/test', (req, res) => {
@@ -50,4 +56,8 @@ app.use((err: any, req: any, res: any, next: any) => {
 app.listen(port, () => {
   console.log(`Backend server running on port ${port}`);
   console.log('CORS enabled for origin:', process.env.FRONTEND_URL || 'http://localhost:8080');
-}); 
+  if (process.env.PL_SCHEDULER_DISABLED !== '1') {
+    startPLScheduler();
+  }
+  startAdluxScheduler();
+});
