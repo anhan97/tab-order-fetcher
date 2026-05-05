@@ -24,7 +24,6 @@ import {
     Menu,
     TrendingUp,
     LayoutDashboard,
-    Sliders,
     Store as StoreIcon,
     Plus,
     User as UserIcon,
@@ -39,8 +38,7 @@ const PAGE_SUBTITLES: Record<string, string> = {
     'P&L': 'Daily / period profit, costs, and operating expenses',
     COGS: 'Per-variant baseCost, supplier overrides, shipping tiers',
     Facebook: 'Ad accounts portfolio, campaigns, ad sets, ads',
-    Content: 'Content performance & engagement breakdown',
-    Adlux: 'BM credentials & system-user token pool'
+    Content: 'Content performance & engagement breakdown'
 };
 
 export const Layout = () => {
@@ -78,8 +76,9 @@ export const Layout = () => {
         { path: '/profit', label: 'P&L', icon: TrendingUp },
         { path: '/cogs', label: 'COGS', icon: DollarSign },
         { path: '/facebook', label: 'Facebook', icon: BarChart3 },
-        { path: '/content', label: 'Content', icon: PieChartIcon },
-        { path: '/adlux-settings', label: 'Adlux', icon: Sliders },
+        { path: '/content', label: 'Content', icon: PieChartIcon }
+        // /adlux-settings removed — System User mode was retired in favour of
+        // a single FB Login flow. Page file is still on disk if we need it back.
     ];
 
     const activeNavItem = navItems.find(i => i.path === location.pathname);

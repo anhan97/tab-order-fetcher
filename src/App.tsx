@@ -16,7 +16,6 @@ import { CogsPage } from "@/pages/CogsPage";
 import { FacebookPage } from "@/pages/FacebookPage";
 import { ContentAnalyticsPage } from "@/pages/ContentAnalyticsPage";
 import { ProfitPage } from "@/pages/ProfitPage";
-import { AdluxSettingsPage } from "@/pages/AdluxSettingsPage";
 import { PrivacyPolicyPage } from "@/pages/PrivacyPolicyPage";
 import { TermsOfServicePage } from "@/pages/TermsOfServicePage";
 import NotFound from "./pages/NotFound";
@@ -109,12 +108,6 @@ const AppRoutes = () => {
         <Route path="/profit" element={
           <ProtectedRoute>
             <ProfitPage />
-          </ProtectedRoute>
-        } />
-
-        <Route path="/adlux-settings" element={
-          <ProtectedRoute>
-            <AdluxSettingsPage />
           </ProtectedRoute>
         } />
       </Route>

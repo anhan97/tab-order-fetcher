@@ -124,6 +124,11 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
 
     // Initial Load
     useEffect(() => {
+        // One-time migration: the dual-mode FB picker was retired. Clear the
+        // persisted choice so existing users don't keep landing on a UI that
+        // no longer exists.
+        try { localStorage.removeItem('fb_mode_preference'); } catch { /* ignore */ }
+
         const savedShopifyClient = ShopifyApiClient.fromLocalStorage();
         const savedCogsConfigs = localStorage.getItem('cogs_configs');
         const savedFacebookAccounts = localStorage.getItem('facebook_accounts');

@@ -8,7 +8,9 @@ import plRoutes from './src/routes/pl.routes';
 import adsLaunchRoutes from './src/routes/ads-launch.routes';
 import authRoutes from './src/routes/auth.routes';
 import { startPLScheduler } from './src/jobs/pl-scheduler';
-import { startAdluxScheduler } from './src/jobs/fb-adlux-scheduler';
+// Adlux scheduler retired — System User mode was rolled back to a simple
+// FB Login flow. Import kept commented for the rollback path.
+// import { startAdluxScheduler } from './src/jobs/fb-adlux-scheduler';
 import { startFbTokenRefreshScheduler } from './src/jobs/fb-token-refresh';
 import config from './src/config/app';
 
@@ -62,6 +64,6 @@ app.listen(port, () => {
   if (process.env.PL_SCHEDULER_DISABLED !== '1') {
     startPLScheduler();
   }
-  startAdluxScheduler();
+  // startAdluxScheduler() — retired with the System User mode rollback.
   startFbTokenRefreshScheduler();
 });
