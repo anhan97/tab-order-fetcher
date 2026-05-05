@@ -12,7 +12,8 @@ import { FacebookOnboarding } from '@/components/FacebookOnboarding';
 import { CampaignMappingPanel } from '@/components/CampaignMappingPanel';
 import { MyFacebookAppCard } from '@/components/MyFacebookAppCard';
 import { AutoLaunchAds } from '@/components/AutoLaunchAds';
-import { Rocket } from 'lucide-react';
+import { FacebookDiagnostics } from '@/components/FacebookDiagnostics';
+import { Rocket, Stethoscope } from 'lucide-react';
 import { AdluxApi, AdluxAdAccount } from '@/utils/adluxApi';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
@@ -348,6 +349,10 @@ export const FacebookPage = () => {
             <Rocket className="h-4 w-4" />
             Auto-launch
           </TabsTrigger>
+          <TabsTrigger value="diagnostics" className="gap-2">
+            <Stethoscope className="h-4 w-4" />
+            Diagnostics
+          </TabsTrigger>
           <TabsTrigger value="mapping" className="gap-2">
             <Link2 className="h-4 w-4" />
             Campaign → Store mapping
@@ -371,6 +376,9 @@ export const FacebookPage = () => {
           <AutoLaunchAds
             adAccounts={[{ id: selectedAccount.id, name: selectedAccount.name }]}
           />
+        </TabsContent>
+        <TabsContent value="diagnostics" className="m-0">
+          <FacebookDiagnostics />
         </TabsContent>
         <TabsContent value="mapping" className="m-0">
           <CampaignMappingPanel />
@@ -413,6 +421,10 @@ export const FacebookPage = () => {
         <TabsTrigger value="launch" className="gap-2">
           <Rocket className="h-4 w-4" />
           Auto-launch
+        </TabsTrigger>
+        <TabsTrigger value="diagnostics" className="gap-2">
+          <Stethoscope className="h-4 w-4" />
+          Diagnostics
         </TabsTrigger>
         <TabsTrigger value="mapping" className="gap-2">
           <Link2 className="h-4 w-4" />
@@ -487,6 +499,10 @@ export const FacebookPage = () => {
         <AutoLaunchAds
           adAccounts={adluxAccounts.map(a => ({ id: a.accountId, name: a.accountName }))}
         />
+      </TabsContent>
+
+      <TabsContent value="diagnostics" className="m-0">
+        <FacebookDiagnostics />
       </TabsContent>
 
       <TabsContent value="mapping" className="m-0">

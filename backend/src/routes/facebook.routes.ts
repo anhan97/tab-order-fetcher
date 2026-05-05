@@ -20,6 +20,7 @@ import {
 } from '../services/campaign-mapping.service';
 import * as userToken from '../services/fb-user-token.service';
 import * as userFbApp from '../services/user-fb-app.service';
+import { diagnoseAccounts } from '../services/fb-diagnose.service';
 import { PrismaClient } from '@prisma/client';
 
 const prismaForRoutes = new PrismaClient();
@@ -463,6 +464,49 @@ router.delete('/disconnect-all', resolveStore, async (req, res) => {
     res.json({ ok: true, ...wiped });
   } catch (err: any) {
     res.status(500).json({ error: err.message, ...wiped });
+  }
+});
+
+/**
+ * Diagnose every ad account the user can see.
+ *
+ * For each account we report:
+ *   - owner type (personal vs business) + BM identity if applicable
+ *   - account_status + disable_reason
+ *   - whether the user's token can actually call /insights for it
+ *   - a typed `kind` ('ok' | 'app_not_in_bm' | 'app_not_advanced_access' | …)
+ *     plus a human-readable suggestion + deep-link to the right Meta page
+ *
+ * The frontend renders this as a matrix table so the user can answer
+ * "why does this account work but that one doesn't?" at a glance.
+ */
+router.get('/diagnose-accounts', resolveStore, async (req, res) => {
+  try {
+    if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+    const token = await userToken.getRawToken(req.resolved.userId);
+    if (!token) {
+      return res.status(401).json({ error: 'No FB connection. Connect Facebook first.', reason: 'no_connection' });
+    }
+    // Use whichever FB App the user registered — falls back to env-default
+    // if they haven't, since the deep-link URLs need a concrete App ID.
+    const cfg = await userFbApp.getForUser(req.resolved.userId);
+    const fbAppId = cfg.fbAppId || process.env.FACEBOOK_APP_ID || '';
+
+    const subset = req.query.accounts
+      ? String(req.query.accounts).split(',').map(s => s.trim()).filter(Boolean)
+      : undefined;
+
+    const rows = await diagnoseAccounts({ accessToken: token, fbAppId, accountIds: subset });
+    await userToken.markUsed(req.resolved.userId);
+    res.json({
+      fbAppId,
+      total: rows.length,
+      ok: rows.filter(r => r.kind === 'ok').length,
+      issues: rows.filter(r => r.kind !== 'ok').length,
+      rows
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Diagnose failed' });
   }
 });
 
