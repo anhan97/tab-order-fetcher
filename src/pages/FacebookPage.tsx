@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { BarChart3, Loader2, Settings, Link2, LogOut, Rocket, Stethoscope } from 'lucide-react';
+import { BarChart3, Loader2, Settings, Link2, LogOut, Rocket, Stethoscope, Library } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
 import { FacebookAdsConnection } from '@/components/FacebookAdsConnection';
 import { FacebookAdsManager } from '@/components/FacebookAdsManager';
@@ -10,6 +10,7 @@ import { CampaignMappingPanel } from '@/components/CampaignMappingPanel';
 import { MyFacebookAppCard } from '@/components/MyFacebookAppCard';
 import { AutoLaunchAds } from '@/components/AutoLaunchAds';
 import { FacebookDiagnostics } from '@/components/FacebookDiagnostics';
+import { FacebookAssetManager } from '@/components/FacebookAssetManager';
 import { apiFetch } from '@/utils/apiClient';
 import { useToast } from '@/hooks/use-toast';
 
@@ -124,8 +125,12 @@ export const FacebookPage = () => {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="dashboard" className="space-y-4">
+      <Tabs defaultValue="assets" className="space-y-4">
         <TabsList>
+          <TabsTrigger value="assets" className="gap-2">
+            <Library className="h-4 w-4" />
+            Assets
+          </TabsTrigger>
           <TabsTrigger value="dashboard" className="gap-2">
             <BarChart3 className="h-4 w-4" />
             Dashboard
@@ -140,13 +145,17 @@ export const FacebookPage = () => {
           </TabsTrigger>
           <TabsTrigger value="mapping" className="gap-2">
             <Link2 className="h-4 w-4" />
-            Campaign → Store mapping
+            Mapping
           </TabsTrigger>
           <TabsTrigger value="app" className="gap-2">
             <Settings className="h-4 w-4" />
             FB App
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="assets" className="m-0">
+          <FacebookAssetManager />
+        </TabsContent>
 
         <TabsContent value="dashboard" className="m-0">
           <FacebookAdsManager

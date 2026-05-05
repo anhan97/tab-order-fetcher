@@ -21,6 +21,7 @@ import {
 import * as userToken from '../services/fb-user-token.service';
 import * as userFbApp from '../services/user-fb-app.service';
 import { diagnoseAccounts } from '../services/fb-diagnose.service';
+import { listAssets, enrollAdAccount, unenrollAdAccount } from '../services/fb-assets.service';
 import { PrismaClient } from '@prisma/client';
 
 const prismaForRoutes = new PrismaClient();
@@ -507,6 +508,54 @@ router.get('/diagnose-accounts', resolveStore, async (req, res) => {
     });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Diagnose failed' });
+  }
+});
+
+/**
+ * Asset library — the "what does my FB account have?" view.
+ *
+ * Returns ad accounts / pages / businesses straight from Graph, joined
+ * with our DB so the frontend can render an enrollment table without a
+ * second round-trip.
+ */
+router.get('/assets', resolveStore, async (req, res) => {
+  try {
+    if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+    const token = await userToken.getRawToken(req.resolved.userId);
+    if (!token) {
+      return res.status(401).json({ error: 'No FB connection. Connect Facebook first.', reason: 'no_connection' });
+    }
+    const snapshot = await listAssets(req.resolved.userId, token);
+    await userToken.markUsed(req.resolved.userId);
+    res.json(snapshot);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to list FB assets' });
+  }
+});
+
+/** Enroll an ad account: creates / re-activates the FacebookAdAccount row. */
+router.post('/assets/ad-accounts/:accountId/enroll', resolveStore, async (req, res) => {
+  try {
+    if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+    const accountId = String(req.params.accountId).replace(/^act_/, '');
+    const name = String(req.body?.name || `act_${accountId}`);
+    const out = await enrollAdAccount(req.resolved.userId, accountId, name);
+    res.json(out);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to enroll' });
+  }
+});
+
+/** Unenroll an ad account: soft-delete (isActive=false). Historical
+ *  FacebookAdSpend rows stay so prior P&L numbers don't change. */
+router.delete('/assets/ad-accounts/:accountId', resolveStore, async (req, res) => {
+  try {
+    if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+    const accountId = String(req.params.accountId).replace(/^act_/, '');
+    const out = await unenrollAdAccount(req.resolved.userId, accountId);
+    res.json(out);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to unenroll' });
   }
 });
 
