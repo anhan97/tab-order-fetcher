@@ -18,22 +18,38 @@ model User {
   lastName    String?
   isVerified  Boolean   @default(false)
   verifyToken String?
+  // 'user' | 'admin'. Admins can see/manage every user's FB apps + connections
+  // through /api/admin/* endpoints. Bootstrapped from env ADMIN_EMAIL on
+  // first login of that email.
+  role        String    @default("user")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  
+
   // Tenant relationships
   shopifyStores ShopifyStore[]
-  fbAdAccounts  FacebookAdAccount[]
   orders        Order[]
-  adSpends      FacebookAdSpend[]
   productCosts  ProductCost[]
   cogsConfigs   COGSConfig[]
   comboPricing  ComboPricing[]
-  
+
   // New relationships
   productVariants ProductVariant[]
   combos          Combo[]
   pricebooks      Pricebook[]
+
+  // P&L
+  dailyPLSnapshots DailyPLSnapshot[]
+  operatingCosts   OperatingCost[]
+  orderTransactions OrderTransaction[]
+
+  // Adlux multi-tenant: which FB ad accounts this user can view
+  fbAccountAccess  FacebookAdAccountAccess[]
+  campaignMappings CampaignStoreMapping[]
+  // 1 user → many FB nicks (each with its own FB App + long-lived token).
+  fbConnections    UserFacebookConnection[]
+  fbApps           UserFacebookApp[]
+
+  @@index([role])
 }
 
 model ShopifyStore {
@@ -43,6 +59,10 @@ model ShopifyStore {
   accessToken String
   name        String?
   isActive    Boolean   @default(true)
+  // Default supplier/shipping company used when an order has no fulfillment
+  // tracking yet — falls back to this for COGS estimation.
+  defaultShippingCompany String?
+  defaultSupplier        String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   
@@ -51,7 +71,6 @@ model ShopifyStore {
   orders      Order[]
   cogsConfigs COGSConfig[]
   comboPricing ComboPricing[]
-  adSpends    FacebookAdSpend[]
   productCosts ProductCost[]
   
   // New relationships
@@ -59,23 +78,14 @@ model ShopifyStore {
   pricebooks      Pricebook[]
   combos          Combo[]
 
+  // P&L
+  dailyPLSnapshots DailyPLSnapshot[]
+  operatingCosts   OperatingCost[]
+  orderTransactions OrderTransaction[]
+
+  campaignMappings CampaignStoreMapping[]
+
   @@unique([userId, storeDomain])
-}
-
-model FacebookAdAccount {
-  id        String    @id @default(uuid())
-  userId    String
-  accountId String
-  name      String
-  isActive  Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  // Relationships
-  user      User      @relation(fields: [userId], references: [id])
-  adSpends  FacebookAdSpend[]
-
-  @@unique([userId, accountId])
 }
 
 model Order {
@@ -92,6 +102,27 @@ model Order {
   fulfillmentStatus String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+
+  // Financial breakdown (Shopify Order fields)
+  subtotalPrice    Decimal? @db.Decimal(12, 2)
+  totalDiscounts   Decimal? @db.Decimal(12, 2) @default(0)
+  totalShipping    Decimal? @db.Decimal(12, 2) @default(0) // shipping_lines sum (revenue khách trả)
+  totalTax         Decimal? @db.Decimal(12, 2) @default(0)
+  totalRefunded    Decimal? @db.Decimal(12, 2) @default(0)
+  paymentFee       Decimal? @db.Decimal(12, 2) @default(0) // sum of fees from Shopify Transactions API
+  paymentGateway   String?  // shopify_payments | paypal | manual | ...
+  presentmentCurrency String?
+  shopifyCreatedAt DateTime?
+  cancelledAt      DateTime?
+  closedAt         DateTime?
+  processedAt      DateTime?
+
+  // Fulfillment / supplier
+  shippingCountryCode String?  // from order.shipping_address.country_code
+  shippingCompany     String?  // from fulfillment.tracking_company OR derived from tracking number prefix OR store default
+  supplier            String?  // vendor/source — separate from shippingCompany (carrier). Defaults to store-level default.
+  // shippingCostSnapshot dropped — basecost on each line item now bakes in
+  // supplier shipping; no per-order shipping cost line in P&L.
 
   // UTM tracking fields
   utmSource   String?
@@ -113,30 +144,122 @@ model Order {
   // Relationships
   user        User      @relation(fields: [userId], references: [id])
   store       ShopifyStore @relation(fields: [storeId], references: [id])
-  adSpends    FacebookAdSpend[]
+  transactions OrderTransaction[]
+  lineItems   OrderLineItem[]
 
   @@unique([userId, storeId, shopifyOrderId])
+  @@index([storeId, processedAt])
+  @@index([userId, storeId, processedAt])
 }
 
-model FacebookAdSpend {
-  id        String    @id @default(uuid())
-  userId    String
-  storeId   String
-  accountId String
-  date      DateTime
-  spend     Float
-  currency  String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+model OrderLineItem {
+  id            String   @id @default(uuid())
+  orderId       String
+  shopifyLineItemId String
+  variantId     BigInt?  // null if Shopify returned no variant_id (custom item)
+  productId     BigInt?
+  sku           String?
+  title         String?
+  quantity      Int
+  price         Decimal  @db.Decimal(12, 2)
+  totalDiscount Decimal  @db.Decimal(12, 2) @default(0)
+  // Snapshot of per-unit landed cost at sync time. Includes product cost +
+  // supplier shipping (baked in). Frozen so historical Basecost doesn't drift
+  // if the variant's basecost is later edited.
+  unitBasecost Decimal? @db.Decimal(12, 2)
 
-  // Relationships
-  user      User      @relation(fields: [userId], references: [id])
-  store     ShopifyStore @relation(fields: [storeId], references: [id])
-  account   FacebookAdAccount @relation(fields: [accountId], references: [id])
-  order     Order?    @relation(fields: [orderId], references: [id])
-  orderId   String?
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, storeId, accountId, date])
+  @@unique([orderId, shopifyLineItemId])
+  @@index([orderId])
+  @@index([variantId])
+}
+
+model OrderTransaction {
+  id                  String   @id @default(uuid())
+  userId              String
+  storeId             String
+  orderId             String
+  shopifyTransactionId String
+  kind                String   // sale | refund | authorization | void | capture
+  status              String   // success | pending | failure | error
+  gateway             String?
+  amount              Decimal  @db.Decimal(12, 2)
+  fee                 Decimal  @db.Decimal(12, 2) @default(0)
+  net                 Decimal  @db.Decimal(12, 2) @default(0)
+  currency            String
+  presentmentCurrency String?
+  processedAt         DateTime?
+  createdAt           DateTime @default(now())
+
+  user  User         @relation(fields: [userId], references: [id])
+  store ShopifyStore @relation(fields: [storeId], references: [id])
+  order Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, shopifyTransactionId])
+  @@index([storeId, processedAt])
+}
+
+// One row per (store, calendar-day). EOD finalize cron writes once at the
+// end of the local day with isFinalized=true. After that, never recomputed
+// unless the user explicitly forces it.
+//
+// "Today" rows are NOT stored here — today is computed live from Order +
+// FB cache via GET /api/pl/today (memoised 5min/store).
+model DailyPLSnapshot {
+  id              String   @id @default(uuid())
+  userId          String
+  storeId         String
+  date            DateTime // calendar marker: UTC midnight of local Y/M/D
+
+  grossRevenue    Decimal  @db.Decimal(14, 2) @default(0) // Shopify Order.total — already includes shipping charged to customer
+  refunds         Decimal  @db.Decimal(14, 2) @default(0)
+  discounts       Decimal  @db.Decimal(14, 2) @default(0)
+  taxCollected    Decimal  @db.Decimal(14, 2) @default(0)
+  netRevenue      Decimal  @db.Decimal(14, 2) @default(0) // grossRevenue - refunds - taxCollected
+
+  basecost        Decimal  @db.Decimal(14, 2) @default(0) // sum(line.unitBasecost * qty); supplier shipping baked in
+  paymentFees     Decimal  @db.Decimal(14, 2) @default(0)
+  fbAdSpend       Decimal  @db.Decimal(14, 2) @default(0)
+  otherAdSpend    Decimal  @db.Decimal(14, 2) @default(0)
+  appFees         Decimal  @db.Decimal(14, 2) @default(0) // sum of OperatingCost.category='app_fee'
+  operatingCost   Decimal  @db.Decimal(14, 2) @default(0) // everything else (salary, domain, misc)
+
+  grossProfit     Decimal  @db.Decimal(14, 2) @default(0) // netRevenue - basecost - paymentFees
+  netProfit       Decimal  @db.Decimal(14, 2) @default(0) // grossProfit - fbAdSpend - otherAdSpend - appFees - operatingCost
+
+  orderCount      Int      @default(0)
+  refundedOrderCount Int   @default(0)
+  currency        String   @default("USD")
+
+  computedAt      DateTime @default(now())
+  isFinalized     Boolean  @default(false)
+
+  user  User         @relation(fields: [userId], references: [id])
+  store ShopifyStore @relation(fields: [storeId], references: [id])
+
+  @@unique([userId, storeId, date])
+  @@index([storeId, date])
+  @@index([userId, date])
+  @@index([isFinalized])
+}
+
+model OperatingCost {
+  id          String   @id @default(uuid())
+  userId      String
+  storeId     String
+  date        DateTime
+  category    String   // salary | app_fee | domain | other_ads | misc
+  description String?
+  amount      Decimal  @db.Decimal(12, 2)
+  currency    String   @default("USD")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user  User         @relation(fields: [userId], references: [id])
+  store ShopifyStore @relation(fields: [storeId], references: [id])
+
+  @@index([userId, storeId, date])
 }
 
 model ProductCost {
@@ -166,7 +289,9 @@ model ProductVariant {
   title            String
   productId        BigInt
   inventoryItemId  BigInt?  // for Shopify cost sync
-  baseCost         Decimal  @db.Decimal(10, 2) // pulled from Shopify or metafield
+  // Total per-unit landed cost: product cost + per-unit supplier shipping.
+  // OrderLineItem.unitBasecost is a frozen snapshot of this value at sync time.
+  basecost         Decimal  @db.Decimal(10, 2) @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -213,6 +338,10 @@ model Pricebook {
   pricebookId     String   @id @default(uuid())
   userId          String
   storeId         String
+  // Supplier (vendor/source) — separate concept from shippingCompany (carrier).
+  // Same supplier may use multiple carriers; same carrier may serve multiple
+  // suppliers. Defaults to 'Default' to support stores that have one supplier.
+  supplier        String   @default("Default")
   countryCode     String   // ISO 3166-1 alpha-2
   shippingCompany String   // e.g., 'YunTu', 'Shengtu Logistics'
   currency        String   // e.g., 'USD'
@@ -226,7 +355,7 @@ model Pricebook {
   variantCostOverrides PricebookVariantCostOverride[]
   comboOverrides  PricebookComboOverride[]
 
-  @@unique([userId, storeId, countryCode, shippingCompany])
+  @@unique([userId, storeId, supplier, countryCode, shippingCompany])
 }
 
 model PricebookShippingTier {
@@ -313,6 +442,206 @@ model ComboPricing {
 
   @@unique([cogsConfigId, supplier, country, quantity])
   @@index([supplier, country, comboType])
+}
+
+// Per-user, per-FB-app long-lived token. One row per (user, FB app).
+//
+// Migration note: the old shape was @unique on userId (1 connection per
+// user). We now scope by fbAppId so a user can connect multiple FB nicks,
+// each through a different FB App they own. Old rows get backfilled with
+// the user's first UserFacebookApp.fbAppId during migration.
+model UserFacebookConnection {
+  id                  String    @id @default(uuid())
+  userId              String
+  fbAppId             String                        // FK by value to UserFacebookApp.fbAppId (per user)
+  accessToken         String                        // long-lived (~60d) FB token, plaintext, server-only access
+  fbUserId            String
+  fbUserName          String?
+  expiresAt           DateTime?
+  dataAccessExpiresAt DateTime?
+  scopes              String?                       // JSON array as string
+  lastRefreshedAt     DateTime?
+  lastUsedAt          DateTime?
+  lastError           String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fbAppId])
+  @@index([userId])
+  @@index([fbAppId])
+}
+
+// Maps FB campaigns to Shopify stores so 1 ad account serving multiple
+// stores can attribute daily spend correctly. P&L per store sums spend
+// from all campaigns mapped to that store.
+model CampaignStoreMapping {
+  id           String   @id @default(uuid())
+  campaignId   String   @unique
+  campaignName String?
+  accountId    String                       // FB ad account id (no 'act_' prefix)
+  userId       String
+  storeId      String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store ShopifyStore @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([userId, storeId])
+  @@index([accountId])
+  @@index([storeId])
+}
+
+// Per-user, per-app FB credentials. One row per (user, fbAppId).
+//
+// Each user owns their OWN FB Apps rather than sharing one global app.
+// Why: linking many BMs through one App means one compliance flag can
+// take down everyone's ads — per-user isolation limits blast radius.
+// Because a single FB account is limited in how many ad accounts it can
+// own, we let one user register MULTIPLE apps so they can drive multiple
+// FB nicks from one logged-in account.
+//
+// Resolution: when a user authenticates / exchanges tokens for a specific
+// app, we look up THIS row by (userId, fbAppId). The global AdluxConfig
+// is no longer used for fallback — every user must register their own.
+model UserFacebookApp {
+  id          String   @id @default(uuid())
+  userId      String
+  fbAppId     String                       // user's own FB App ID
+  fbAppSecret String                       // user's own FB App Secret (plaintext, server-only access)
+  fbBmId      String?                      // user's Business Manager ID (optional)
+  appName     String?                      // optional human label, e.g. "Nick A"
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)     // marker for the user's "active" app — UI default
+  lastError   String?                      // last token exchange / debug error
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fbAppId])
+  @@index([userId])
+  @@index([isActive])
+}
+
+// Singleton config row. Lets admins manage Adlux BM ID + FB app
+// credentials through the UI rather than env vars.
+model AdluxConfig {
+  id          String   @id @default("singleton")
+  fbAppId     String?
+  fbAppSecret String?
+  adluxBmId   String?
+  updatedAt   DateTime @updatedAt
+}
+
+// One row per system-user token in Adlux BM. poolIndex is the slot in the
+// consistent-hashing pool; account_ids map to slots so traffic spreads
+// across multiple system users (raises app-level rate limit linearly).
+model AdluxSystemToken {
+  id                  String    @id @default(uuid())
+  poolIndex           Int       @unique
+  name                String
+  token               String
+  systemUserId        String?
+  isActive            Boolean   @default(true)
+  lastError           String?
+  lastUsedAt          DateTime?
+
+  // Cached from FB /debug_token. Refreshed on test or "Refresh info" click.
+  expiresAt           DateTime?  // null = never (typical for system-user tokens)
+  dataAccessExpiresAt DateTime?  // FB requires re-auth every ~90 days
+  scopes              String?    // JSON array as string
+  tokenType           String?    // SYSTEM_USER | USER | PAGE | APP
+  infoCheckedAt       DateTime?
+
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([isActive])
+}
+
+// Adlux BM auto-discovery: one row per FB ad account known to our BM,
+// tracking which system-user pool slot was auto-assigned and metadata.
+// Refreshed periodically by the BM sync job.
+model FacebookAdAccountAssignment {
+  id             String   @id @default(uuid())
+  accountId      String   @unique           // act_id without 'act_' prefix
+  accountName    String
+  poolIndex      Int                        // which FB_SYSTEM_TOKEN_N owns it
+  systemUserId   String                     // FB system user id (for /assigned_users)
+  status         String   @default("assigned") // pending | assigned | failed | removed
+  accountStatus  Int?                       // FB account_status (1=ACTIVE)
+  currency       String?
+  timezone       String?
+  lastError      String?
+  lastSyncAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  accesses       FacebookAdAccountAccess[]
+  snapshots      FacebookAdInsightSnapshot[]
+
+  @@index([poolIndex])
+  @@index([status])
+}
+
+// Per-user access to ad accounts. A user can have many accounts; an account
+// can be visible to many users (e.g. agency owner + media buyer team).
+model FacebookAdAccountAccess {
+  id          String   @id @default(uuid())
+  userId      String
+  accountId   String                          // FK to FacebookAdAccountAssignment.accountId
+  role        String   @default("viewer")     // viewer | manager | admin
+  isFavorite  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user        User                          @relation(fields: [userId], references: [id])
+  assignment  FacebookAdAccountAssignment   @relation(fields: [accountId], references: [accountId], onDelete: Cascade)
+
+  @@unique([userId, accountId])
+  @@index([userId])
+  @@index([accountId])
+}
+
+// End-of-day snapshot per FB ad entity. Lets historical views (yesterday,
+// last week, custom past ranges) read from DB rather than burning live
+// quota on data that won't change.
+model FacebookAdInsightSnapshot {
+  id               String   @id @default(uuid())
+  accountId        String                          // FK to FacebookAdAccountAssignment.accountId
+  date             DateTime                        // UTC midnight of the day represented
+  level            String                          // 'account' | 'campaign' | 'adset' | 'ad'
+  entityId         String                          // account_id | campaign_id | adset_id | ad_id
+  entityName       String?
+  parentId         String?                         // adset.campaign_id, ad.adset_id, etc.
+  status           String?
+
+  spend            Decimal  @db.Decimal(12, 2) @default(0)
+  impressions      BigInt   @default(0)
+  clicks           BigInt   @default(0)
+  reach            BigInt   @default(0)
+  uniqueClicks     BigInt   @default(0)
+  ctr              Float?
+  cpc              Float?
+  cpm              Float?
+  frequency        Float?
+
+  purchases        Int      @default(0)
+  purchaseValue    Decimal  @db.Decimal(12, 2) @default(0)
+  addToCart        Int      @default(0)
+  initiateCheckout Int      @default(0)
+  roas             Float?
+
+  raw              Json?                           // full FB insight payload for ad-hoc reporting
+  createdAt        DateTime @default(now())
+
+  assignment       FacebookAdAccountAssignment   @relation(fields: [accountId], references: [accountId], onDelete: Cascade)
+
+  @@unique([accountId, date, level, entityId])
+  @@index([accountId, date])
+  @@index([date])
 }
 
 model ShippingCompany {

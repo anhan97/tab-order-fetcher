@@ -27,7 +27,8 @@ import {
     Store as StoreIcon,
     Plus,
     User as UserIcon,
-    LogOut as SignOutIcon
+    LogOut as SignOutIcon,
+    ShieldCheck
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -38,7 +39,8 @@ const PAGE_SUBTITLES: Record<string, string> = {
     'P&L': 'Daily / period profit, costs, and operating expenses',
     COGS: 'Per-variant baseCost, supplier overrides, shipping tiers',
     Facebook: 'Ad accounts portfolio, campaigns, ad sets, ads',
-    Content: 'Content performance & engagement breakdown'
+    Content: 'Content performance & engagement breakdown',
+    Admin: 'Users, FB apps, and system-wide health'
 };
 
 export const Layout = () => {
@@ -67,7 +69,7 @@ export const Layout = () => {
         : '';
     const userInitials = (user?.firstName?.[0] || user?.email?.[0] || '?').toUpperCase();
 
-    const navItems = [
+    const baseNavItems = [
         // /orders is kept as the route for back-compat; the page itself is now
         // the merchant Dashboard (KPI cards, charts, full order list).
         { path: '/orders', label: 'Dashboard', icon: LayoutDashboard },
@@ -80,6 +82,12 @@ export const Layout = () => {
         // /adlux-settings removed — System User mode was retired in favour of
         // a single FB Login flow. Page file is still on disk if we need it back.
     ];
+    // Admin link — only rendered for users with role='admin'. The route is
+    // also gated server-side so a non-admin who pokes at /admin directly
+    // gets 403, not just a hidden nav item.
+    const navItems = user?.role === 'admin'
+        ? [...baseNavItems, { path: '/admin', label: 'Admin', icon: ShieldCheck }]
+        : baseNavItems;
 
     const activeNavItem = navItems.find(i => i.path === location.pathname);
     const subtitle = activeNavItem ? PAGE_SUBTITLES[activeNavItem.label] : '';

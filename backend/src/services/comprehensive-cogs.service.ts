@@ -716,12 +716,12 @@ export class ComprehensiveCOGSService {
 
             // Check for variant cost override
             const variantOverride = pricebook.variantCostOverrides.find(vo => vo.variantId === item.variantId);
-            const unitCost = variantOverride ? Number(variantOverride.overrideCost) : Number(variant.baseCost);
+            const unitCost = variantOverride ? Number(variantOverride.overrideCost) : Number(variant.basecost);
             
             if (variantOverride) {
               variantOverrides.push({
                 variant_id: Number(item.variantId),
-                original_cost: Number(variant.baseCost),
+                original_cost: Number(variant.basecost),
                 override_cost: Number(variantOverride.overrideCost)
               });
             }
@@ -766,12 +766,12 @@ export class ComprehensiveCOGSService {
 
           // Check for variant cost override
           const variantOverride = pricebook.variantCostOverrides.find(vo => vo.variantId === BigInt(line.variant_id));
-          const unitCost = variantOverride ? Number(variantOverride.overrideCost) : Number(variant.baseCost);
+          const unitCost = variantOverride ? Number(variantOverride.overrideCost) : Number(variant.basecost);
           
           if (variantOverride) {
             variantOverrides.push({
               variant_id: line.variant_id,
-              original_cost: Number(variant.baseCost),
+              original_cost: Number(variant.basecost),
               override_cost: Number(variantOverride.overrideCost)
             });
           }

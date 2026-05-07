@@ -202,10 +202,10 @@ export class COGSService {
               sku: data.productSKU,
               title: data.variantTitle,
               productId: BigInt(data.productId),
-              baseCost: data.baseCost
+              basecost: data.baseCost
             },
             update: {
-              baseCost: data.baseCost,
+              basecost: data.baseCost,
               sku: data.productSKU,
               title: data.variantTitle
             }
@@ -217,9 +217,10 @@ export class COGSService {
             // Note: Pricebook unique constraint is [userId, storeId, countryCode, shippingCompany]
             let pricebook = await prisma.pricebook.findUnique({
               where: {
-                userId_storeId_countryCode_shippingCompany: {
+                userId_storeId_supplier_countryCode_shippingCompany: {
                   userId,
                   storeId,
+                  supplier: 'Default',
                   countryCode: override.country,
                   shippingCompany: override.shipping_company
                 }
@@ -385,10 +386,10 @@ export class COGSService {
               sku: config.productSKU,
               title: config.variantTitle,
               productId: BigInt(config.productId),
-              baseCost: config.baseCost
+              basecost: config.baseCost
             },
             update: {
-              baseCost: config.baseCost,
+              basecost: config.baseCost,
               sku: config.productSKU,
               title: config.variantTitle
             }
@@ -403,9 +404,10 @@ export class COGSService {
             // Find or create Pricebook
             let pricebook = await prisma.pricebook.findUnique({
               where: {
-                userId_storeId_countryCode_shippingCompany: {
+                userId_storeId_supplier_countryCode_shippingCompany: {
                   userId,
                   storeId,
+                  supplier: 'Default',
                   countryCode: override.country,
                   shippingCompany: override.shipping_company
                 }

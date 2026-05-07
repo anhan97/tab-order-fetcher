@@ -26,6 +26,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/context/AppContext';
 import { ProfitApiClient, PLSnapshot, OperatingCostItem } from '@/utils/profitApi';
 import { formatInTimeZone } from 'date-fns-tz';
+import { format } from 'date-fns';
 import { detectMarginAlerts, computeMargins, MarginAlert } from '@/utils/marginAlerts';
 import { todayInTz, addDaysToDateString } from '@/utils/dateUtils';
 import { cn } from '@/lib/utils';
@@ -52,8 +53,7 @@ interface PeriodBucket {
   grossRevenue: number;
   refunds: number;
   netRevenue: number;
-  cogs: number;
-  shippingCost: number;
+  basecost: number;
   paymentFees: number;
   fbAdSpend: number;
   otherAdSpend: number;
@@ -64,12 +64,37 @@ interface PeriodBucket {
   orderCount: number;
 }
 
-/** UTC instant whose Y/M/D match the picked calendar date (start or end). */
+/**
+ * UTC instant whose Y/M/D match the picked calendar date (start or end).
+ * Used for backend API params — backend interprets these in the store tz.
+ */
 const dateAtUTC = (s: string, eod = false): Date =>
   new Date(`${s}T${eod ? '23:59:59' : '00:00:00'}Z`);
 
+/**
+ * Display-only Date for UI rendering. Constructs a browser-local Date at
+ * NOON so neither tz conversion nor DST can ever shift the displayed Y/M/D.
+ * NEVER hand this to backend — use dateAtUTC for that.
+ */
+const localNoonDate = (s: string): Date => {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0);
+};
+
+/**
+ * Convert a browser-local Date (from react-day-picker) into a YYYY-MM-DD
+ * string using the date's LOCAL Y/M/D — never UTC. Picker hands us
+ * Date(local-midnight); converting via toISOString() would shift days.
+ */
+const dateToYmd = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 export const ProfitView = () => {
-  const { shopifyConfig, isShopifyConnected, timezone } = useAppContext();
+  const { shopifyConfig, isShopifyConnected, timezone, mappingVersion } = useAppContext();
   const { toast } = useToast();
 
   const client = useMemo(() => {
@@ -99,6 +124,11 @@ export const ProfitView = () => {
   // --- Operating cost form
   const [costForm, setCostForm] = useState({ date: todayInTz(timezone), category: 'misc', amount: '', description: '' });
 
+  // PLSnapshot fields can arrive as strings (from DB Decimal serialisation)
+  // or numbers (from the live today branch) — coerce uniformly.
+  const num = (v: string | number | null | undefined) =>
+    typeof v === 'number' ? v : parseFloat(v || '0');
+
   const load = async () => {
     if (!client) return;
     setLoading(true);
@@ -106,24 +136,24 @@ export const ProfitView = () => {
       const fromD = dateAtUTC(from, false);
       const toD = dateAtUTC(to, true);
       if (period === 'day') {
-        // Day-level: just fetch the daily snapshots — same shape as buckets after mapping.
+        // Day-level: snapshots endpoint returns historical rows + today live
+        // (when range includes today) merged into a single uniform array.
         const r = await client.listSnapshots(fromD, toD);
         const mapped: PeriodBucket[] = r.snapshots.map(s => ({
           periodKey: s.date.slice(0, 10),
           periodStart: s.date,
           periodEnd: s.date,
-          grossRevenue: parseFloat(s.grossRevenue),
-          refunds: parseFloat(s.refunds),
-          netRevenue: parseFloat(s.netRevenue),
-          cogs: parseFloat(s.cogs),
-          shippingCost: parseFloat(s.shippingCost),
-          paymentFees: parseFloat(s.paymentFees),
-          fbAdSpend: parseFloat(s.fbAdSpend),
-          otherAdSpend: parseFloat(s.otherAdSpend),
-          appFees: parseFloat(s.appFees),
-          operatingCost: parseFloat(s.operatingCost),
-          grossProfit: parseFloat(s.grossProfit),
-          netProfit: parseFloat(s.netProfit),
+          grossRevenue: num(s.grossRevenue),
+          refunds: num(s.refunds),
+          netRevenue: num(s.netRevenue),
+          basecost: num(s.basecost),
+          paymentFees: num(s.paymentFees),
+          fbAdSpend: num(s.fbAdSpend),
+          otherAdSpend: num(s.otherAdSpend),
+          appFees: num(s.appFees),
+          operatingCost: num(s.operatingCost),
+          grossProfit: num(s.grossProfit),
+          netProfit: num(s.netProfit),
           orderCount: s.orderCount
         }));
         setBuckets(mapped);
@@ -140,7 +170,20 @@ export const ProfitView = () => {
     }
   };
 
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [client, from, to, period]);
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [client, from, to, period, mappingVersion]);
+
+  // Auto-refresh every 5 min when the range includes today — matches the
+  // backend's today-cache TTL so each refresh either gets the cached payload
+  // (instant) or pulls fresh FB cache + recomputes orders for today.
+  useEffect(() => {
+    if (!client) return;
+    const today = todayInTz(timezone);
+    const includesToday = from <= today && to >= today;
+    if (!includesToday) return;
+    const id = setInterval(() => { void load(); }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, from, to, timezone, period]);
 
   // Load settings + carriers once
   useEffect(() => {
@@ -173,8 +216,7 @@ export const ProfitView = () => {
     return {
       grossRevenue: sum('grossRevenue'),
       netRevenue: sum('netRevenue'),
-      cogs: sum('cogs'),
-      shippingCost: sum('shippingCost'),
+      basecost: sum('basecost'),
       paymentFees: sum('paymentFees'),
       fbAdSpend: sum('fbAdSpend'),
       otherAdSpend: sum('otherAdSpend'),
@@ -204,18 +246,21 @@ export const ProfitView = () => {
   );
 
   const rangeLabel = () => {
-    if (from === to) return formatInTimeZone(dateAtUTC(from, false), timezone, 'MMM dd, yyyy');
-    return `${formatInTimeZone(dateAtUTC(from, false), timezone, 'MMM dd, yyyy')} → ${formatInTimeZone(dateAtUTC(to, false), timezone, 'MMM dd, yyyy')}`;
+    // Display the calendar string verbatim — no UTC round-trip → no off-by-one.
+    if (from === to) return format(localNoonDate(from), 'MMM dd, yyyy');
+    return `${format(localNoonDate(from), 'MMM dd, yyyy')} → ${format(localNoonDate(to), 'MMM dd, yyyy')}`;
   };
 
   // --- Date picker handlers ---
 
   const applyTempRange = () => {
     if (!tempRange.from) return;
-    const f = formatInTimeZone(tempRange.from, timezone, 'yyyy-MM-dd');
-    const t = tempRange.to
-      ? formatInTimeZone(tempRange.to, timezone, 'yyyy-MM-dd')
-      : f;
+    // react-day-picker hands us a browser-local Date for whatever cell the
+    // user clicked. Use its LOCAL Y/M/D directly — converting through tz
+    // shifts the day for users whose store tz differs from browser tz
+    // (e.g. browser=Asia/Saigon, store=America/Los_Angeles → off by 1).
+    const f = dateToYmd(tempRange.from);
+    const t = tempRange.to ? dateToYmd(tempRange.to) : f;
     setFrom(f);
     setTo(t);
     setPickerOpen(false);
@@ -334,14 +379,13 @@ export const ProfitView = () => {
   // --- CSV export ---
 
   const exportCsv = () => {
-    const header = ['Period', 'Orders', 'Net revenue', 'Refunds', 'COGS', 'Ship cost', 'Fees', 'FB ads', 'Other ads', 'App fees', 'OpEx', 'Gross profit', 'Net profit'];
+    const header = ['Period', 'Orders', 'Net revenue', 'Refunds', 'Basecost', 'Fees', 'FB ads', 'Other ads', 'App fees', 'OpEx', 'Gross profit', 'Net profit'];
     const rows = sortedBuckets.map(b => [
       b.periodKey,
       b.orderCount,
       b.netRevenue.toFixed(2),
       b.refunds.toFixed(2),
-      b.cogs.toFixed(2),
-      b.shippingCost.toFixed(2),
+      b.basecost.toFixed(2),
       b.paymentFees.toFixed(2),
       b.fbAdSpend.toFixed(2),
       b.otherAdSpend.toFixed(2),
@@ -434,14 +478,14 @@ export const ProfitView = () => {
                       selected={tempRange.from ? { from: tempRange.from, to: tempRange.to } : undefined}
                       onSelect={r => setTempRange({ from: r?.from, to: r?.to })}
                       numberOfMonths={2}
-                      defaultMonth={dateAtUTC(from, false)}
+                      defaultMonth={localNoonDate(from)}
                       className="rounded-md border"
                     />
                     <div className="flex items-center justify-between">
                       <p className="text-xs text-slate-500">
                         {tempRange.from ? (
-                          <>From <span className="font-medium">{formatInTimeZone(tempRange.from, timezone, 'MMM dd')}</span>
-                          {tempRange.to ? <> to <span className="font-medium">{formatInTimeZone(tempRange.to, timezone, 'MMM dd')}</span></> : ' (single day)'}
+                          <>From <span className="font-medium">{format(tempRange.from, 'MMM dd')}</span>
+                          {tempRange.to ? <> to <span className="font-medium">{format(tempRange.to, 'MMM dd')}</span></> : ' (single day)'}
                           </>
                         ) : 'Pick a day or drag a range, then Apply.'}
                       </p>
@@ -636,8 +680,7 @@ export const ProfitView = () => {
                     <TableHead className="text-right">Orders</TableHead>
                     <TableHead className="text-right">Net rev</TableHead>
                     <TableHead className="text-right">Refunds</TableHead>
-                    <TableHead className="text-right">COGS</TableHead>
-                    <TableHead className="text-right">Ship</TableHead>
+                    <TableHead className="text-right">Basecost</TableHead>
                     <TableHead className="text-right">Fees</TableHead>
                     <TableHead className="text-right">FB ads</TableHead>
                     <TableHead className="text-right">Other ads</TableHead>
@@ -649,10 +692,10 @@ export const ProfitView = () => {
                 </TableHeader>
                 <TableBody>
                   {loading && (
-                    <TableRow><TableCell colSpan={13} className="text-center text-slate-400">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} className="text-center text-slate-400">Loading…</TableCell></TableRow>
                   )}
                   {!loading && sortedBuckets.length === 0 && (
-                    <TableRow><TableCell colSpan={13} className="text-center text-slate-400">No data — bấm <em>Sync + recompute</em> để bắt đầu.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} className="text-center text-slate-400">No data — bấm <em>Sync + recompute</em> để bắt đầu.</TableCell></TableRow>
                   )}
                   {sortedBuckets.map(b => (
                     <TableRow key={b.periodKey}>
@@ -660,8 +703,7 @@ export const ProfitView = () => {
                       <TableCell className="text-right tabular-nums">{b.orderCount}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.netRevenue)}</TableCell>
                       <TableCell className="text-right tabular-nums text-rose-600">{fmtUSD(b.refunds)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmtUSD(b.cogs)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmtUSD(b.shippingCost)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{fmtUSD(b.basecost)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.paymentFees)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.fbAdSpend)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.otherAdSpend)}</TableCell>

@@ -7,6 +7,7 @@ export interface AuthUser {
   firstName: string | null;
   lastName: string | null;
   isVerified: boolean;
+  role?: string;
 }
 
 export interface UserStore {

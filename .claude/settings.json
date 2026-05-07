@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "echo 'BLOCKED: Use code-review-graph MCP tools first for codebase exploration (semantic_search_nodes_tool, query_graph_tool, get_minimal_context_tool, get_architecture_overview_tool). Only fall back to Grep/Glob when the graph genuinely does not cover your question (e.g. logs, config files, non-indexed languages). If you truly need Grep/Glob for this query, state why in text to the user, then retry.' 1>&2; exit 2"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "code-review-graph update --skip-flows",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "code-review-graph status",
+            "timeout": 3000
+          }
+        ]
+      }
+    ]
+  }
+}

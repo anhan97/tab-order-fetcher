@@ -8,6 +8,7 @@ import { FacebookAdsConnection } from '@/components/FacebookAdsConnection';
 import { FacebookAdsManager } from '@/components/FacebookAdsManager';
 import { CampaignMappingPanel } from '@/components/CampaignMappingPanel';
 import { MyFacebookAppCard } from '@/components/MyFacebookAppCard';
+import { FacebookAppsManager } from '@/components/FacebookAppsManager';
 import { AutoLaunchAds } from '@/components/AutoLaunchAds';
 import { FacebookDiagnostics } from '@/components/FacebookDiagnostics';
 import { FacebookAssetManager } from '@/components/FacebookAssetManager';
@@ -183,7 +184,7 @@ export const FacebookPage = () => {
         </TabsContent>
 
         <TabsContent value="app" className="m-0">
-          <MyFacebookAppCard />
+          <FacebookAppsManager />
         </TabsContent>
       </Tabs>
 

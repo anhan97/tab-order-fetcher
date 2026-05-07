@@ -8,8 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/context/AppContext';
-import { Search, RefreshCw, Plus, Trash2, CheckCircle2, Loader2, Building2, FileText, Wallet, Instagram, Globe } from 'lucide-react';
+import { Search, RefreshCw, Plus, Trash2, CheckCircle2, Loader2, Building2, FileText, Wallet, Instagram, Globe, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { CampaignMappingDialog } from './CampaignMappingDialog';
 
 interface AdAccountAsset {
   accountId: string;
@@ -54,6 +55,9 @@ export const FacebookAssetManager = () => {
   const [search, setSearch] = useState('');
   const [enrolmentFilter, setEnrolmentFilter] = useState<'all' | 'enrolled' | 'available'>('all');
   const [busyId, setBusyId] = useState<string | null>(null);
+  /** When set, open the per-account mapping dialog. Auto-set after enroll
+   *  so the user can map campaigns immediately without switching tabs. */
+  const [mapTarget, setMapTarget] = useState<{ accountId: string; name: string } | null>(null);
 
   const headers = (): Record<string, string> => {
     if (!shopifyConfig) return {};
@@ -94,6 +98,10 @@ export const FacebookAssetManager = () => {
       }
       toast({ title: 'Đã thêm vào hệ thống', description: account.name });
       await load();
+      // Pop the mapping dialog so the user can immediately wire campaigns
+      // to their stores — same flow they'd reach via the Mapping tab, but
+      // pre-filtered to this account so they don't get lost in the full list.
+      setMapTarget({ accountId: account.accountId, name: account.name });
     } catch (e: any) {
       toast({ title: 'Enroll failed', description: e?.message || String(e), variant: 'destructive' });
     } finally {
@@ -292,16 +300,27 @@ export const FacebookAssetManager = () => {
                               </TableCell>
                               <TableCell className="text-right">
                                 {a.enrolled ? (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => unenroll(a)}
-                                    disabled={busyId === a.accountId}
-                                    className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5 mr-1" />
-                                    Xóa
-                                  </Button>
+                                  <div className="inline-flex items-center gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => setMapTarget({ accountId: a.accountId, name: a.name })}
+                                      className="text-blue-700 hover:text-blue-800 border-blue-200 hover:border-blue-300 hover:bg-blue-50"
+                                    >
+                                      <Link2 className="h-3.5 w-3.5 mr-1" />
+                                      Map
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => unenroll(a)}
+                                      disabled={busyId === a.accountId}
+                                      className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5 mr-1" />
+                                      Xóa
+                                    </Button>
+                                  </div>
                                 ) : (
                                   <Button
                                     size="sm"
@@ -419,6 +438,15 @@ export const FacebookAssetManager = () => {
               </p>
             </TabsContent>
           </Tabs>
+        )}
+
+        {mapTarget && (
+          <CampaignMappingDialog
+            open={!!mapTarget}
+            onOpenChange={(open) => { if (!open) setMapTarget(null); }}
+            accountId={mapTarget.accountId}
+            accountName={mapTarget.name}
+          />
         )}
       </div>
     </TooltipProvider>

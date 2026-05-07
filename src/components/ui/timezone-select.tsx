@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Select, SelectContent, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface TimezoneSelectProps {
   value: string;
@@ -70,19 +70,23 @@ export function TimezoneSelect({ value, onValueChange, 'aria-label': ariaLabel }
         </SelectValue>
       </SelectTrigger>
       <SelectContent className="max-h-[400px]">
-        <SelectLabel>Region</SelectLabel>
-        {NAMED_ZONES.map(tz => (
-          <SelectItem key={tz.value} value={tz.value}>
-            {tz.label}
-          </SelectItem>
-        ))}
+        <SelectGroup>
+          <SelectLabel>Region</SelectLabel>
+          {NAMED_ZONES.map(tz => (
+            <SelectItem key={tz.value} value={tz.value}>
+              {tz.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
         <SelectSeparator />
-        <SelectLabel>Fixed offset</SelectLabel>
-        {FIXED_OFFSETS.map(tz => (
-          <SelectItem key={tz.value} value={tz.value}>
-            {tz.label}
-          </SelectItem>
-        ))}
+        <SelectGroup>
+          <SelectLabel>Fixed offset</SelectLabel>
+          {FIXED_OFFSETS.map(tz => (
+            <SelectItem key={tz.value} value={tz.value}>
+              {tz.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
       </SelectContent>
     </Select>
   );

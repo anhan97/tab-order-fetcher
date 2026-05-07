@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { LineChart, PieChart, Line, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { format, subDays, subWeeks, subMonths, startOfDay, startOfWeek, startOfMonth } from 'date-fns';
+import { format, subDays, startOfWeek, startOfMonth } from 'date-fns';
 import { Order, COGSConfig } from '@/types/order';
+import { useAppContext } from '@/context/AppContext';
 
 interface EnhancedAnalyticsProps {
   orders: Order[];
@@ -39,11 +40,62 @@ interface TimeframeData {
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28'];
 
 export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, globalDateRange }: EnhancedAnalyticsProps) => {
+  const { shopifyConfig, mappingVersion } = useAppContext();
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly' | 'monthly'>('daily');
-  const [dateRange, setDateRange] = useState<'7' | '30' | '90'>('30');
+  // Default range "today" — matches the rest of the app and avoids the
+  // confusing "first-load shows 30-day total" Total Ad Spend bug.
+  const [dateRange, setDateRange] = useState<'today' | '7' | '30' | '90'>('today');
   const [timeframeData, setTimeframeData] = useState<TimeframeData[]>([]);
   const [metrics, setMetrics] = useState<MetricCard[]>([]);
   const [costBreakdown, setCostBreakdown] = useState<{ name: string; value: number }[]>([]);
+
+  // Mapped ad spend — comes from /api/pl/* which sums spend across the
+  // CampaignStoreMapping entries for the active store. ALWAYS used in place
+  // of facebookConfigs.spend (which is account-total and unmapped). Falls
+  // back to 0 while loading.
+  const [mappedAdSpend, setMappedAdSpend] = useState<number>(0);
+
+  // Pull mapped ad spend whenever the date range changes. /today is special-
+  // cased because it's served from the 5min live cache, no DB write; other
+  // ranges aggregate from DailyPLSnapshot (historical) + today live.
+  useEffect(() => {
+    if (!shopifyConfig) return;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+      'X-Shopify-Access-Token': shopifyConfig.accessToken
+    };
+    let cancelled = false;
+
+    const fetchSpend = async () => {
+      try {
+        if (dateRange === 'today') {
+          const r = await fetch('/api/pl/today', { headers });
+          if (!r.ok) throw new Error(`${r.status}`);
+          const j = await r.json();
+          if (!cancelled) setMappedAdSpend(j?.breakdown?.fbAdSpend || 0);
+        } else {
+          const days = dateRange === '7' ? 7 : dateRange === '30' ? 30 : 90;
+          const to = new Date();
+          const from = new Date(to.getTime() - days * 86400000);
+          const q = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+          const r = await fetch(`/api/pl/daily?${q}`, { headers });
+          if (!r.ok) throw new Error(`${r.status}`);
+          const j = await r.json();
+          const total = (j?.snapshots || []).reduce((s: number, row: any) => {
+            const v = typeof row.fbAdSpend === 'number' ? row.fbAdSpend : parseFloat(row.fbAdSpend || '0');
+            return s + (Number.isFinite(v) ? v : 0);
+          }, 0);
+          if (!cancelled) setMappedAdSpend(total);
+        }
+      } catch (e: any) {
+        console.warn('[EnhancedAnalytics] mapped ad spend fetch failed:', e?.message || e);
+        if (!cancelled) setMappedAdSpend(0);
+      }
+    };
+    void fetchSpend();
+    return () => { cancelled = true; };
+  }, [dateRange, shopifyConfig?.storeUrl, shopifyConfig?.accessToken, mappingVersion]);
 
   const calculateMetrics = (data: TimeframeData[]) => {
     const totals = data.reduce((acc, day) => ({
@@ -56,7 +108,10 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
     }), {
       revenue: 0,
       orders: 0,
-      adSpend: facebookConfigs.reduce((sum, config) => sum + config.spend, 0),
+      // Seed totals.adSpend with the MAPPED ad spend (per store, via
+      // CampaignStoreMapping) — NOT the raw facebookConfigs sum which is
+      // account-total and includes campaigns belonging to other stores.
+      adSpend: mappedAdSpend,
       cogs: 0,
       shippingCost: 0,
       netProfit: 0
@@ -82,9 +137,11 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
 
   const aggregateData = (startDate: Date) => {
     const groupedData = new Map<string, TimeframeData>();
-    
-    // Calculate total Facebook ad spend
-    const totalAdSpend = facebookConfigs.reduce((sum, config) => sum + config.spend, 0);
+
+    // Use the MAPPED ad spend (per CampaignStoreMapping) so the chart
+    // matches Total Ad Spend KPI and the P&L table. facebookConfigs.spend
+    // is account-total and would inflate the number.
+    const totalAdSpend = mappedAdSpend;
     
     orders.forEach(order => {
       // Parse local time string to Date object
@@ -137,12 +194,14 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
     return Array.from(groupedData.values()).sort((a, b) => a.date.localeCompare(b.date));
   };
 
-  // Sync with global date range when provided
+  // Sync with global date range when provided. Map sub-day windows to
+  // 'today' so KPIs match what the dashboard / mapping panel show.
   useEffect(() => {
     if (globalDateRange) {
-      // Calculate days difference to determine appropriate preset
       const daysDiff = Math.ceil((globalDateRange.to.getTime() - globalDateRange.from.getTime()) / (1000 * 60 * 60 * 24));
-      if (daysDiff <= 7) {
+      if (daysDiff <= 1) {
+        setDateRange('today');
+      } else if (daysDiff <= 7) {
         setDateRange('7');
       } else if (daysDiff <= 30) {
         setDateRange('30');
@@ -154,18 +213,19 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
 
   useEffect(() => {
     let startDate: Date;
-    
-    // Use global date range if provided, otherwise use local date range
+
     if (globalDateRange) {
       startDate = globalDateRange.from;
+    } else if (dateRange === 'today') {
+      const t = new Date();
+      t.setHours(0, 0, 0, 0);
+      startDate = t;
+    } else if (dateRange === '7') {
+      startDate = subDays(new Date(), 7); startDate.setHours(0, 0, 0, 0);
+    } else if (dateRange === '30') {
+      startDate = subDays(new Date(), 30); startDate.setHours(0, 0, 0, 0);
     } else {
-      if (dateRange === '7') {
-        startDate = subDays(startOfDay(new Date()), 7);
-      } else if (dateRange === '30') {
-        startDate = subDays(startOfDay(new Date()), 30);
-      } else {
-        startDate = subDays(startOfDay(new Date()), 90);
-      }
+      startDate = subDays(new Date(), 90); startDate.setHours(0, 0, 0, 0);
     }
 
     const data = aggregateData(startDate);
@@ -182,7 +242,7 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
       { name: 'Ad Spend', value: metrics.find(m => m.title === 'Total Ad Spend')?.value || 0 }
     ];
     setCostBreakdown(breakdown);
-  }, [orders, cogsConfigs, timeframe, dateRange, globalDateRange]);
+  }, [orders, cogsConfigs, timeframe, dateRange, globalDateRange, mappedAdSpend]);
 
   return (
     <div className="space-y-6">
@@ -199,11 +259,12 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
               <SelectItem value="monthly">Monthly</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={dateRange} onValueChange={(value: '7' | '30' | '90') => setDateRange(value)}>
+          <Select value={dateRange} onValueChange={(value: 'today' | '7' | '30' | '90') => setDateRange(value)}>
             <SelectTrigger className="w-[180px]">
               <SelectValue placeholder="Select date range" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="today">Today</SelectItem>
               <SelectItem value="7">Last 7 days</SelectItem>
               <SelectItem value="30">Last 30 days</SelectItem>
               <SelectItem value="90">Last 90 days</SelectItem>

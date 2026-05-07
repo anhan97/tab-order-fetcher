@@ -18,6 +18,8 @@ const Select = React.forwardRef<
 ))
 Select.displayName = SelectPrimitive.Root.displayName
 
+const SelectGroup = SelectPrimitive.Group
+
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
@@ -132,6 +134,7 @@ SelectValue.displayName = SelectPrimitive.Value.displayName
 
 export {
   Select,
+  SelectGroup,
   SelectTrigger,
   SelectContent,
   SelectLabel,

@@ -49,6 +49,11 @@ interface AppContextType {
     setSelectedDatePreset: (preset: DatePreset) => void;
     dateRange: { from: Date; to: Date };
     setDateRange: (range: { from: Date; to: Date }) => void;
+
+    // Bumped every time campaign↔store mapping is saved. Dashboards put
+    // it in their useEffect deps to auto-refetch fbAdSpend without F5.
+    mappingVersion: number;
+    bumpMappingVersion: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -85,6 +90,12 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
 
     const [cogsConfigs, setCogsConfigs] = useState<COGSConfig[]>([]);
     const [minimalCogsConfig, setMinimalCogsConfig] = useState<CogsConfig | null>(null);
+
+    // Mapping version bump — anyone who depends on CampaignStoreMapping
+    // (Dashboard, ProfitView, Analytics) puts this in their useEffect deps
+    // and re-fetches when it changes. Avoids manual F5 after saving mapping.
+    const [mappingVersion, setMappingVersion] = useState(0);
+    const bumpMappingVersion = () => setMappingVersion(v => v + 1);
 
     const [timezone, setTimezone] = useState(() => {
         // Default to the merchant's Shopify store timezone (LA). The app
@@ -476,6 +487,8 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
             setSelectedDatePreset,
             dateRange,
             setDateRange,
+            mappingVersion,
+            bumpMappingVersion,
         }}>
             {children}
         </AppContext.Provider>

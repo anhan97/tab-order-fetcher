@@ -7,6 +7,7 @@ import facebookRoutes from './src/routes/facebook.routes';
 import plRoutes from './src/routes/pl.routes';
 import adsLaunchRoutes from './src/routes/ads-launch.routes';
 import authRoutes from './src/routes/auth.routes';
+import adminRoutes from './src/routes/admin.routes';
 import { startPLScheduler } from './src/jobs/pl-scheduler';
 // Adlux scheduler retired — System User mode was rolled back to a simple
 // FB Login flow. Import kept commented for the rollback path.
@@ -43,6 +44,7 @@ app.use('/api/shopify', shopifyRoutes);
 app.use('/api/cogs', cogsRoutes);
 app.use('/api/comprehensive-cogs', comprehensiveCogsRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/facebook', facebookRoutes);
 app.use('/api/pl', plRoutes);
 app.use('/api/ads', adsLaunchRoutes);

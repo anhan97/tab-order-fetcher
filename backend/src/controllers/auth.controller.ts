@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { sendVerificationEmail } from '../services/email.service';
+import { ensureAdminByEmail } from '../middleware/require-admin';
 
 const prisma = new PrismaClient();
 
@@ -103,6 +104,14 @@ export class AuthController {
       // (or unset) to allow unverified users to log in.
       if (!user.isVerified && process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === '1') {
         return res.status(401).json({ error: 'Please verify your email before logging in' });
+      }
+
+      // Bootstrap admin role from env. Idempotent — only updates the matching
+      // email when not already admin. Lets self-hosted deployments designate
+      // an owner without manual SQL.
+      const adminEmail = process.env.ADMIN_EMAIL;
+      if (adminEmail && adminEmail.toLowerCase() === user.email.toLowerCase()) {
+        await ensureAdminByEmail(adminEmail);
       }
 
       // Generate JWT

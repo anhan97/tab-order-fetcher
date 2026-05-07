@@ -17,8 +17,7 @@ export interface PLTotals {
   netRevenue: number;
   grossProfit: number;
   netProfit: number;
-  cogs: number;
-  shippingCost: number;
+  basecost: number;          // product + supplier shipping (per-unit landed cost × qty)
   paymentFees: number;
   fbAdSpend: number;
   otherAdSpend: number;
@@ -44,7 +43,7 @@ export interface ComputedMargins {
   gpm: number | null;        // null when netRevenue = 0
   cm: number | null;
   npm: number | null;
-  variableCosts: number;     // COGS + ship + fees + ads
+  variableCosts: number;     // basecost + fees + ads
   fixedCosts: number;        // appFees + operatingCost
   refundRate: number | null; // refunds / grossRevenue (if grossRevenue tracked) — fallback to refunds/netRevenue
 }
@@ -54,7 +53,7 @@ export interface ComputedMargins {
  * denominator is zero so callers can render "—" instead of NaN.
  */
 export function computeMargins(t: PLTotals): ComputedMargins {
-  const variableCosts = t.cogs + t.shippingCost + t.paymentFees + t.fbAdSpend + t.otherAdSpend;
+  const variableCosts = t.basecost + t.paymentFees + t.fbAdSpend + t.otherAdSpend;
   const fixedCosts = t.appFees + t.operatingCost;
   const gpm = t.netRevenue > 0 ? t.grossProfit / t.netRevenue : null;
   const cm = t.netRevenue > 0 ? (t.netRevenue - variableCosts) / t.netRevenue : null;
@@ -190,8 +189,7 @@ export function detectMarginAlerts(t: PLTotals, margins: ComputedMargins = compu
 
 function biggestVariable(t: PLTotals): string {
   const items = [
-    { name: 'COGS', v: t.cogs },
-    { name: 'Shipping', v: t.shippingCost },
+    { name: 'Basecost', v: t.basecost },
     { name: 'Payment fees', v: t.paymentFees },
     { name: 'FB ads', v: t.fbAdSpend },
     { name: 'Other ads', v: t.otherAdSpend }

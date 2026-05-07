@@ -24,6 +24,7 @@ export default defineConfig(({ mode }) => {
       port: 8080,
       host: 'localhost',
       cors: true,
+      allowedHosts: ['.adumie.com', '.ngrok-free.app', '.ngrok.app', '.ngrok.io', '.trycloudflare.com'],
       proxy: {
         '/api': {
           target: 'http://localhost:3001',

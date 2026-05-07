@@ -17,20 +17,72 @@ interface ShopifyShop {
 interface ShopifyOrder {
   id: number;
   order_number: string;
+  name?: string;
   total_price: string;
+  subtotal_price?: string;
+  total_discounts?: string;
+  total_tax?: string;
+  total_shipping_price_set?: { shop_money?: { amount: string } };
+  total_refunded?: string;
   currency: string;
+  presentment_currency?: string;
   customer: {
     email: string;
+    first_name?: string;
+    last_name?: string;
   };
   fulfillment_status: string | null;
   financial_status: string;
+  gateway?: string;
+  payment_gateway_names?: string[];
   created_at: string;
   updated_at: string;
+  processed_at?: string;
+  cancelled_at?: string | null;
+  closed_at?: string | null;
+  refunds?: Array<{
+    id: number;
+    transactions?: Array<{
+      amount: string;
+      kind: string;
+    }>;
+  }>;
   note_attributes?: Array<{
     name: string;
     value: string;
   }>;
   tags?: string;
+  line_items?: Array<{
+    id: number;
+    variant_id?: number | null;
+    product_id?: number | null;
+    sku?: string | null;
+    title?: string | null;
+    quantity?: number;
+    price?: string;
+    total_discount?: string;
+  }>;
+  shipping_address?: {
+    country_code?: string;
+    country?: string;
+  };
+}
+
+export interface ShopifyTransaction {
+  id: number;
+  order_id: number;
+  kind: string;
+  status: string;
+  gateway: string | null;
+  amount: string;
+  currency: string;
+  presentment_currency?: string;
+  fee?: string;
+  total_unsettled_set?: any;
+  processed_at: string | null;
+  created_at: string;
+  payment_details?: any;
+  receipt?: any;
 }
 
 interface ShopifyOrdersResponse {
@@ -189,7 +241,7 @@ export async function fetchShopifyOrders(
     }
 
     console.log('Orders fetched successfully:', responseData.orders.length);
-    return { 
+    return {
       orders: responseData.orders,
       pageInfo
     };
@@ -197,6 +249,146 @@ export async function fetchShopifyOrders(
     console.error('Failed to fetch orders:', error);
     throw error;
   }
+}
+
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-10';
+
+export async function fetchOrderTransactions(
+  storeDomain: string,
+  accessToken: string,
+  shopifyOrderId: string | number,
+  options: { maxRetries?: number } = {}
+): Promise<ShopifyTransaction[]> {
+  const formattedDomain = formatStoreDomain(storeDomain);
+  const url = `https://${formattedDomain}/admin/api/${SHOPIFY_API_VERSION}/orders/${shopifyOrderId}/transactions.json`;
+  const maxRetries = options.maxRetries ?? 4;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken }
+    });
+
+    if (response.ok) {
+      const data = await response.json() as { transactions?: ShopifyTransaction[] };
+      return data.transactions || [];
+    }
+
+    // 429 = rate limit, 503 = transient overload — exponential backoff and retry.
+    if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+      const retryAfterHeader = response.headers.get('Retry-After');
+      const waitMs = retryAfterHeader
+        ? parseFloat(retryAfterHeader) * 1000
+        : 1000 * Math.pow(2, attempt); // 1s, 2s, 4s, 8s
+      await new Promise(r => setTimeout(r, waitMs));
+      continue;
+    }
+
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch transactions for order ${shopifyOrderId}: ${response.status} ${errorText}`);
+  }
+
+  throw new Error(`Failed to fetch transactions for order ${shopifyOrderId}: exhausted retries`);
+}
+
+export interface ShopifyBalanceTransaction {
+  id: number;
+  type: string; // charge | refund | adjustment | payout | ...
+  test: boolean;
+  payout_id: number | null;
+  payout_status: string | null;
+  currency: string;
+  amount: string;
+  fee: string;
+  net: string;
+  source_id: number | null;
+  source_type: string | null; // 'Payments::Balance::ChargeEntry', 'Payments::Balance::RefundEntry', etc
+  source_order_id: number | null;
+  source_order_transaction_id: number | null; // ← maps to /orders/{id}/transactions.json id
+  processed_at: string | null;
+}
+
+/**
+ * Pull Shopify Payments balance transactions for a date window.
+ * `fee` and `net` here are authoritative — populated even when /orders/transactions
+ * still has fee=0 (unsettled). Use this to retroactively fill in fees.
+ */
+export async function fetchBalanceTransactions(
+  storeDomain: string,
+  accessToken: string,
+  since: Date,
+  until: Date
+): Promise<ShopifyBalanceTransaction[]> {
+  const formatted = formatStoreDomain(storeDomain);
+  const all: ShopifyBalanceTransaction[] = [];
+  // The endpoint paginates with page_info via Link header, like other REST endpoints.
+  let url: string | null = `https://${formatted}/admin/api/${SHOPIFY_API_VERSION}/shopify_payments/balance/transactions.json?` +
+    new URLSearchParams({
+      processed_at_min: since.toISOString(),
+      processed_at_max: until.toISOString(),
+      limit: '250'
+    }).toString();
+
+  while (url !== null) {
+    const res: Response = await fetch(url, {
+      headers: { 'X-Shopify-Access-Token': accessToken, 'Accept': 'application/json' }
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Balance transactions API ${res.status}: ${text}`);
+    }
+    const body = await res.json() as { transactions?: ShopifyBalanceTransaction[] };
+    if (body.transactions?.length) all.push(...body.transactions);
+
+    const link: string | null = res.headers.get('Link') || res.headers.get('link');
+    let next: string | null = null;
+    if (link) {
+      const part: string | undefined = link.split(',').find((p: string) => p.includes('rel="next"'));
+      if (part) {
+        const m: RegExpMatchArray | null = part.match(/<([^>]+)>/);
+        if (m) next = m[1];
+      }
+    }
+    url = next;
+  }
+  return all;
+}
+
+/**
+ * Sum payment fees across successful sale/capture transactions, minus refund fees if Shopify returns them.
+ * Shopify Payments fills the `fee` field; PayPal/manual transactions do not (returns 0).
+ */
+export function summarizeTransactionFees(transactions: ShopifyTransaction[]): {
+  totalFee: number;
+  totalNet: number;
+  primaryGateway: string | null;
+} {
+  let totalFee = 0;
+  let totalNet = 0;
+  const gatewayCounts = new Map<string, number>();
+
+  for (const tx of transactions) {
+    if (tx.status !== 'success') continue;
+    const fee = parseFloat(tx.fee || '0') || 0;
+    const amount = parseFloat(tx.amount) || 0;
+    const sign = tx.kind === 'refund' ? -1 : 1;
+    totalFee += sign * fee;
+    totalNet += sign * (amount - fee);
+    if (tx.gateway) {
+      gatewayCounts.set(tx.gateway, (gatewayCounts.get(tx.gateway) || 0) + 1);
+    }
+  }
+
+  let primaryGateway: string | null = null;
+  let max = 0;
+  for (const [gw, count] of gatewayCounts) {
+    if (count > max) { max = count; primaryGateway = gw; }
+  }
+
+  return {
+    totalFee: Math.round(totalFee * 100) / 100,
+    totalNet: Math.round(totalNet * 100) / 100,
+    primaryGateway
+  };
 }
 
 function extractUtmFromUrl(url: string): {

@@ -19,6 +19,15 @@ dist-ssr
 backend/.env
 backend/.env.local
 
+# Claude Code local overrides
+.claude/settings.local.json
+
+# Accidental nested working dirs (avoid double-committing prisma migrations)
+backend/backend/
+
+# Local supplier CSVs / runtime data — may contain customer-identifying rows
+backend/data/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

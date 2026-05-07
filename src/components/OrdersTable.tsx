@@ -25,6 +25,7 @@ import { TimezoneSelect } from '@/components/ui/timezone-select';
 import { cn } from '@/lib/utils';
 import { FacebookAdAccount } from '@/types/facebook';
 import { DashboardInsights } from '@/components/DashboardInsights';
+import { useAppContext } from '@/context/AppContext';
 import {
   getShopifyDateRange,
   getDateRangeFromPreset,
@@ -94,14 +95,25 @@ export const OrdersTable = ({
   globalDateRange,
   onAccountsSpendUpdate
 }: OrdersTableProps) => {
+  // Mapping version — bumps when CampaignStoreMapping changes; we re-fetch
+  // mapped fbAdSpend so the KPI strip reflects the new mapping without F5.
+  const { mappingVersion } = useAppContext();
+
   const [isLoading, setIsLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   // Map of shopifyOrderId → payment fee (from Shopify Payments balance API).
   // Keyed by string because Shopify order IDs are very large numbers.
   const [orderFees, setOrderFees] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<string>('any');
-  const [datePreset, setDatePreset] = useState<DatePreset>('30days');
-  const [dateRange, setDateRange] = useState<DateRange>(() => getDateRangeFromPreset('30days', timezone));
+  // Default to today — matches dashboards/P&L. Old "30 days" default surfaced
+  // a 30-day total ad spend that confused users on first load.
+  const [datePreset, setDatePreset] = useState<DatePreset>('today');
+  const [dateRange, setDateRange] = useState<DateRange>(() => getDateRangeFromPreset('today', timezone));
+  // Store-mapped ad spend for the active range. Single source-of-truth =
+  // /api/pl which sums spend across CampaignStoreMapping rows for the
+  // resolved store. Replaces the per-account `accountsSpend` sum which
+  // included unmapped campaigns and didn't match the P&L numbers.
+  const [mappedAdSpend, setMappedAdSpend] = useState<number>(0);
   const [comparisonRange, setComparisonRange] = useState<DateRange | null>(null);
   const [showComparison, setShowComparison] = useState(false);
   const [periodType, setPeriodType] = useState<'daily' | 'weekly' | 'monthly'>('daily');
@@ -183,140 +195,74 @@ export const OrdersTable = ({
     return () => ctrl.abort();
   }, [shopifyConfig, dateRange]);
 
-  const [lastFetchedDateRange, setLastFetchedDateRange] = useState<string>('');
   const [isLoadingAdSpend, setIsLoadingAdSpend] = useState(false);
-  const [fetchTimeout, setFetchTimeout] = useState<NodeJS.Timeout | null>(null);
 
-  // Fetch Facebook Ads spend data when date range changes (single API call per date range)
+  // Fetch the STORE-MAPPED ad spend for the active date range from /api/pl.
+  //
+  // Why /api/pl instead of FB SDK directly:
+  //   - /api/pl filters by CampaignStoreMapping for THIS store — orders here
+  //     belong to one store, so spend should too. Per-account sum from the
+  //     FB SDK includes campaigns running for OTHER stores → inflates KPIs.
+  //   - Same backend cache (5min today / tiered older) as ProfitView and
+  //     Analytics page → identical numbers across views.
+  //   - Removes the legacy /api/pl/sync-fb call which 404'd after the
+  //     basecost-redesign dropped FacebookAdSpend.
   useEffect(() => {
-    if (isFacebookConnected && facebookAccounts.length > 0) {
-      // Create a unique key for the current date range
-      const dateRangeKey = `${dateRange.from.toISOString()}-${dateRange.to.toISOString()}`;
+    if (!shopifyConfig?.storeUrl || !shopifyConfig?.accessToken) return;
+    const ctrl = new AbortController();
+    setIsLoadingAdSpend(true);
+    (async () => {
+      try {
+        const headers = {
+          'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+          'X-Shopify-Access-Token': shopifyConfig.accessToken,
+          ...(timezone ? { 'X-Tz': timezone } : {})
+        };
+        // Decide: today endpoint (live, memo 5min) for single-day TODAY;
+        // /daily otherwise (sums historical snapshots + merges live today
+        // when today is in range).
+        const dayMs = 24 * 3600_000;
+        const isSingleToday = (() => {
+          const now = Date.now();
+          const fromDay = Math.floor(dateRange.from.getTime() / dayMs);
+          const toDay = Math.floor(dateRange.to.getTime() / dayMs);
+          const todayDay = Math.floor(now / dayMs);
+          return fromDay === todayDay && toDay === todayDay;
+        })();
 
-      // Only fetch if this is a new date range
-      if (dateRangeKey !== lastFetchedDateRange) {
-        console.log('OrdersTable: New date range detected, scheduling ad spend fetch:', {
-          from: dateRange.from.toISOString(),
-          to: dateRange.to.toISOString(),
-          previousKey: lastFetchedDateRange,
-          newKey: dateRangeKey
-        });
-
-        // Clear any existing timeout
-        if (fetchTimeout) {
-          clearTimeout(fetchTimeout);
-        }
-
-        // Clear existing ad spend data immediately
-        const enabledAccounts = facebookAccounts.filter(account => account.isEnabled);
-        enabledAccounts.forEach(account => {
-          if (onAccountsSpendUpdate) {
-            console.log(`OrdersTable: Clearing spend data for account ${account.id}`);
-            onAccountsSpendUpdate(account.id, 0); // Clear the spend data
+        let total = 0;
+        if (isSingleToday) {
+          const res = await fetch('/api/pl/today', { headers, signal: ctrl.signal });
+          if (res.ok) {
+            const j = await res.json();
+            total = j?.breakdown?.fbAdSpend || 0;
           }
-        });
-
-        // Update the last fetched date range key
-        setLastFetchedDateRange(dateRangeKey);
-
-        // Debounce the API call to prevent rapid successive calls
-        const timeout = setTimeout(() => {
-          console.log('OrdersTable: Executing debounced ad spend fetch');
-          fetchFacebookAdsSpend();
-        }, 300); // 300ms debounce
-
-        setFetchTimeout(timeout);
-      } else {
-        console.log('OrdersTable: Date range unchanged, skipping API call');
-      }
-    }
-
-    // Cleanup timeout on unmount
-    return () => {
-      if (fetchTimeout) {
-        clearTimeout(fetchTimeout);
-      }
-    };
-  }, [dateRange, isFacebookConnected, facebookAccounts]);
-
-  const fetchFacebookAdsSpend = async () => {
-    try {
-      setIsLoadingAdSpend(true);
-      console.log('OrdersTable: Fetching Facebook Ads spend for date range:', {
-        from: dateRange.from.toISOString(),
-        to: dateRange.to.toISOString()
-      });
-
-      const enabledAccounts = facebookAccounts.filter(account => account.isEnabled);
-      console.log('OrdersTable: Enabled accounts:', enabledAccounts.length);
-
-      if (enabledAccounts.length === 0) {
-        console.log('OrdersTable: No enabled accounts found, skipping ad spend loading');
+        } else {
+          const q = new URLSearchParams({
+            from: dateRange.from.toISOString(),
+            to: dateRange.to.toISOString()
+          });
+          const res = await fetch(`/api/pl/daily?${q}`, { headers, signal: ctrl.signal });
+          if (res.ok) {
+            const j = await res.json();
+            total = (j?.snapshots || []).reduce((s: number, row: any) => {
+              const v = typeof row.fbAdSpend === 'number' ? row.fbAdSpend : parseFloat(row.fbAdSpend || '0');
+              return s + (Number.isFinite(v) ? v : 0);
+            }, 0);
+          }
+        }
+        setMappedAdSpend(total);
+      } catch (e) {
+        if ((e as any)?.name !== 'AbortError') {
+          console.warn('OrdersTable: mapped ad spend fetch failed:', (e as Error).message);
+          setMappedAdSpend(0);
+        }
+      } finally {
         setIsLoadingAdSpend(false);
-        return;
       }
-
-      // Import the fetchAdAccountData function
-      const { fetchAdAccountData } = await import('@/utils/facebookAdsApi');
-
-      for (const account of enabledAccounts) {
-        try {
-          console.log(`OrdersTable: Fetching data for account ${account.id} with date range:`, dateRange);
-          const data = await fetchAdAccountData(account.id, account.accessToken, dateRange);
-          console.log(`OrdersTable: Raw data for account ${account.id}:`, data);
-          console.log(`OrdersTable: Campaigns data:`, data.campaigns);
-
-          const totalSpend = data.campaigns.reduce((sum, campaign) => {
-            const campaignSpend = campaign.spend || 0;
-            console.log(`OrdersTable: Campaign ${campaign.id} spend:`, campaignSpend);
-            return sum + campaignSpend;
-          }, 0);
-
-          console.log(`OrdersTable: Account ${account.id} total spend:`, totalSpend);
-
-          // Update parent component with ad spend data
-          if (onAccountsSpendUpdate) {
-            onAccountsSpendUpdate(account.id, totalSpend);
-          }
-
-          // Persist daily ad spend to backend so it survives token expiry —
-          // calls the FB Insights API server-side with time_increment=1, which
-          // gives us frozen daily rows in the FacebookAdSpend table. P&L
-          // snapshots and the dashboard then read from DB instead of re-fetching
-          // live each session.
-          if (shopifyConfig?.storeUrl && shopifyConfig?.accessToken) {
-            const externalId = String(account.id).replace(/^act_/, '');
-            fetch('/api/pl/sync-fb', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Shopify-Store-Domain': shopifyConfig.storeUrl,
-                'X-Shopify-Access-Token': shopifyConfig.accessToken
-              },
-              body: JSON.stringify({
-                fbAccountExternalId: externalId,
-                accessToken: account.accessToken,
-                since: dateRange.from.toISOString(),
-                until: dateRange.to.toISOString(),
-                name: account.name
-              })
-            }).catch(err => {
-              // Persistence is best-effort — UI already has the live total
-              // from the React state above. Log so we can spot widespread
-              // backend failures, but don't surface to the user.
-              console.warn(`Failed to persist ad spend for ${account.id}:`, err);
-            });
-          }
-        } catch (error) {
-          console.error(`OrdersTable: Failed to load spend for account ${account.id}:`, error);
-        }
-      }
-    } catch (error) {
-      console.error('OrdersTable: Error fetching Facebook Ads spend:', error);
-    } finally {
-      setIsLoadingAdSpend(false);
-    }
-  };
+    })();
+    return () => ctrl.abort();
+  }, [shopifyConfig?.storeUrl, shopifyConfig?.accessToken, dateRange, timezone, mappingVersion]);
 
   const fetchOrders = async () => {
     try {
@@ -480,20 +426,11 @@ export const OrdersTable = ({
     }
     const totalShippingCost = orders.reduce((sum, order) => sum + (order.shippingCost || 0), 0);
 
-    // Calculate total Facebook ad spend from enabled accounts
-    const enabledAccounts = facebookAccounts.filter(account => account.isEnabled);
-    const totalAdSpend = enabledAccounts.reduce((sum, account) => {
-      const spend = accountsSpend[account.id] || 0;
-      console.log(`OrdersTable: Metrics calculation - Account ${account.id} spend: $${spend}`);
-      return sum + spend;
-    }, 0);
-
-    console.log('OrdersTable: Total ad spend calculation for metrics:', {
-      dateRange: { from: dateRange.from.toISOString(), to: dateRange.to.toISOString() },
-      enabledAccounts: enabledAccounts.length,
-      accountsSpend,
-      totalAdSpend
-    });
+    // Total Ad Spend = mapped campaign spend for this store, sourced from
+    // /api/pl (same as ProfitView + Analytics). NOT the per-account sum of
+    // accountsSpend, which is account-wide and would include campaigns
+    // running for OTHER stores sharing the same FB ad account.
+    const totalAdSpend = mappedAdSpend;
 
     const netProfit = totalRevenue - totalCogs - totalShippingCost - totalAdSpend;
     const netProfitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
@@ -931,7 +868,11 @@ export const OrdersTable = ({
 
       calculateAllMetrics();
     }
-  }, [accountsSpend]);
+    // Recompute KPIs whenever the store-mapped ad spend changes. accountsSpend
+    // is no longer the source of truth for Total Ad Spend, but legacy
+    // per-account state may still drive other inner widgets — keep it as an
+    // additional trigger so those refresh in lockstep.
+  }, [accountsSpend, mappedAdSpend]);
 
   const handleDatePresetChange = (preset: DatePreset) => {
     setDatePreset(preset);

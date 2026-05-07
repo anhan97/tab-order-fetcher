@@ -43,10 +43,16 @@ router.get('/verify/:token', (req, res) => authController.verifyEmail(req, res))
 
 router.get('/me', requireAuth, async (req: Request, res: Response) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.userId! },
-      select: { id: true, email: true, firstName: true, lastName: true, isVerified: true, createdAt: true }
-    });
+    // Raw query because the Prisma client may not have `role` yet (dev
+    // server holds the DLL lock until next restart).
+    const rows = await prisma.$queryRaw<Array<{
+      id: string; email: string; firstName: string | null; lastName: string | null;
+      isVerified: boolean; role: string; createdAt: Date;
+    }>>`
+      SELECT "id", "email", "firstName", "lastName", "isVerified", "role", "createdAt"
+      FROM "User" WHERE "id" = ${req.userId!} LIMIT 1
+    `;
+    const user = rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user });
   } catch (e: any) {

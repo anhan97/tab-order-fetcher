@@ -614,6 +614,134 @@ router.delete('/my-app', resolveStore, async (req, res) => {
   }
 });
 
+// ─── Multi-app per user ─────────────────────────────────────────────────
+// New endpoints introduced when we relaxed the (1 user → 1 FB App) constraint.
+// One user can now register N apps (one per FB nick). The legacy /my-app
+// endpoints above still work — they operate on the user's "default" app.
+
+/** GET /my-apps — list every app this user has registered (masked secrets). */
+router.get('/my-apps', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const apps = await userFbApp.listForUser(req.resolved.userId);
+    res.json({ apps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /my-apps — register a new FB app (or update one if fbAppId matches). */
+router.post('/my-apps', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  const { fbAppId, fbAppSecret, fbBmId, appName, makeDefault } = req.body || {};
+  if (typeof fbAppId !== 'string' || !/^\d{8,20}$/.test(fbAppId.trim())) {
+    return res.status(400).json({ error: 'fbAppId must be a numeric FB App ID (8-20 digits)' });
+  }
+  if (typeof fbAppSecret !== 'string' || fbAppSecret.length < 16) {
+    return res.status(400).json({ error: 'fbAppSecret looks too short — paste the full App Secret from FB' });
+  }
+  try {
+    const out = await userFbApp.upsert(req.resolved.userId, {
+      fbAppId: fbAppId.trim(),
+      fbAppSecret: fbAppSecret.trim(),
+      fbBmId: fbBmId !== undefined ? (String(fbBmId).trim() || null) : undefined,
+      appName: appName !== undefined ? (String(appName).trim() || null) : undefined,
+      makeDefault: !!makeDefault
+    });
+    res.json({ app: out });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/** PUT /my-apps/:fbAppId — update one app's secret / name / BM. */
+router.put('/my-apps/:fbAppId', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  const fbAppId = String(req.params.fbAppId || '').trim();
+  if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
+  const { fbAppSecret, fbBmId, appName, makeDefault } = req.body || {};
+  try {
+    const out = await userFbApp.upsert(req.resolved.userId, {
+      fbAppId,
+      fbAppSecret: typeof fbAppSecret === 'string' && fbAppSecret.length >= 16 ? fbAppSecret.trim() : undefined,
+      fbBmId: fbBmId !== undefined ? (String(fbBmId).trim() || null) : undefined,
+      appName: appName !== undefined ? (String(appName).trim() || null) : undefined,
+      makeDefault: !!makeDefault
+    });
+    res.json({ app: out });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/** PUT /my-apps/:fbAppId/default — promote this app to the user's default. */
+router.put('/my-apps/:fbAppId/default', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  const fbAppId = String(req.params.fbAppId || '').trim();
+  if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
+  try {
+    await userFbApp.setDefault(req.resolved.userId, fbAppId);
+    const apps = await userFbApp.listForUser(req.resolved.userId);
+    res.json({ apps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** DELETE /my-apps/:fbAppId — drop one app + its connection. */
+router.delete('/my-apps/:fbAppId', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  const fbAppId = String(req.params.fbAppId || '').trim();
+  if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
+  try {
+    await userFbApp.deleteApp(req.resolved.userId, fbAppId);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /connections — list every (app, FB nick) connection the user has. */
+router.get('/connections', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const connections = await userToken.listConnections(req.resolved.userId);
+    res.json({ connections });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /connections — connect a specific app (frontend sends fbAppId + short token). */
+router.post('/connections', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  const { token, fbAppId } = req.body || {};
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ error: 'token required' });
+  }
+  try {
+    const status = await userToken.connect(req.resolved.userId, token, fbAppId || null);
+    res.json(status);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/** DELETE /connections/:fbAppId — drop one connection without deleting the app. */
+router.delete('/connections/:fbAppId', resolveStore, async (req, res) => {
+  if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
+  const fbAppId = String(req.params.fbAppId || '').trim();
+  if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
+  try {
+    await userToken.disconnect(req.resolved.userId, fbAppId);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── /my-app/test (legacy) ───────────────────────────────────────────────
+
 /**
  * Test the user's app credentials against FB by calling /oauth/access_token
  * with grant_type=client_credentials (returns an app token if creds work).
