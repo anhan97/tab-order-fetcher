@@ -350,6 +350,10 @@ function shapeAdRow(insight: FbInsightRow, ad: any) {
     cost_per_unique_click: parseFloat(insight.cost_per_unique_click || '0'),
     reach: parseInt(insight.reach || '0', 10),
     frequency: parseFloat(insight.frequency || '0'),
+    // Link clicks (clicks on the ad's destination URL) — distinct from
+    // total clicks which counts profile clicks, post-engagements etc.
+    // Required for accurate CVR / link-CTR in P&L.
+    link_clicks: parseInt(insight.inline_link_clicks || '0', 10),
     add_to_cart: pickAction(insight.actions, 'add_to_cart'),
     initiate_checkout: pickAction(insight.actions, 'initiate_checkout'),
     purchase,
@@ -407,6 +411,7 @@ function rollupParents(ads: ReturnType<typeof shapeAdRow>[], structure: FbStruct
       cpc: clicks ? spend / clicks : 0,
       cpm: impressions ? (spend / impressions) * 1000 : 0,
       cost_per_unique_click: 0,
+      link_clicks: sumOf(rows, 'link_clicks'),
       add_to_cart: sumOf(rows, 'add_to_cart'),
       initiate_checkout: sumOf(rows, 'initiate_checkout'),
       purchase,

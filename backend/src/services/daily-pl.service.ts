@@ -1,5 +1,5 @@
 import { PrismaClient, Prisma } from '@prisma/client';
-import { storeHasMappings, computeStoreFbSpendForDay } from './campaign-mapping.service';
+import { storeHasMappings, computeStoreFbSpendForDay, computeStoreFbMetricsForDay } from './campaign-mapping.service';
 
 const prisma = new PrismaClient();
 
@@ -23,6 +23,15 @@ export interface PLBreakdown {
   // counts
   orderCount: number;
   refundedOrderCount: number;
+  // ── FB ad metrics (live cache only — historical snapshot rows leave these
+  // null/0 because DailyPLSnapshot doesn't persist them; frontend renders
+  // dashes for older days). Driven by computeStoreFbMetricsForDay → sums
+  // the mapped campaigns from the live FB cache for the given day.
+  fbImpressions?: number;
+  fbClicks?: number;
+  fbLinkClicks?: number;
+  fbPurchases?: number;
+  fbPurchaseValue?: number;
 }
 
 /**
@@ -194,8 +203,29 @@ export async function aggregateForDate(userId: string, storeId: string, date: Da
   // don't run ads). The legacy account-level FacebookAdSpend table has
   // been dropped.
   let fbAdSpend = 0;
+  // Optional FB-side metrics (impressions / clicks / link-clicks / pixel
+  // purchases / pixel revenue). Populated from the live cache only — DB
+  // snapshots don't carry these yet. Frontend uses them to render CPC,
+  // CTR, CVR, ROAS, CPM in the Daily breakdown.
+  let fbImpressions = 0;
+  let fbClicks = 0;
+  let fbLinkClicks = 0;
+  let fbPurchases = 0;
+  let fbPurchaseValue = 0;
   if (await storeHasMappings(userId, storeId)) {
-    fbAdSpend = await computeStoreFbSpendForDay(userId, storeId, date);
+    const m = await computeStoreFbMetricsForDay(userId, storeId, date);
+    fbAdSpend = m.spend;
+    fbImpressions = m.impressions;
+    fbClicks = m.clicks;
+    fbLinkClicks = m.linkClicks;
+    fbPurchases = m.purchases;
+    fbPurchaseValue = m.purchaseValue;
+    // Fallback: if metrics call returned 0 spend (cache miss + snapshot fallback
+    // doesn't carry full metrics), still surface the spend via the legacy path
+    // so historical days remain accurate.
+    if (fbAdSpend === 0) {
+      fbAdSpend = await computeStoreFbSpendForDay(userId, storeId, date);
+    }
   }
 
   // Operating cost — split categories so the UI can show them separately:
@@ -242,7 +272,12 @@ export async function aggregateForDate(userId: string, storeId: string, date: Da
     grossProfit: round(grossProfit),
     netProfit: round(netProfit),
     orderCount,
-    refundedOrderCount
+    refundedOrderCount,
+    fbImpressions,
+    fbClicks,
+    fbLinkClicks,
+    fbPurchases,
+    fbPurchaseValue: round(fbPurchaseValue)
   };
 }
 

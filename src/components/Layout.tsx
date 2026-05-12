@@ -69,25 +69,26 @@ export const Layout = () => {
         : '';
     const userInitials = (user?.firstName?.[0] || user?.email?.[0] || '?').toUpperCase();
 
-    const baseNavItems = [
-        // /orders is kept as the route for back-compat; the page itself is now
-        // the merchant Dashboard (KPI cards, charts, full order list).
-        { path: '/orders', label: 'Dashboard', icon: LayoutDashboard },
-        { path: '/tracking', label: 'Tracking', icon: Upload },
-        { path: '/analytics', label: 'Analytics', icon: BarChart3 },
-        { path: '/profit', label: 'P&L', icon: TrendingUp },
-        { path: '/cogs', label: 'COGS', icon: DollarSign },
-        { path: '/facebook', label: 'Facebook', icon: BarChart3 },
-        { path: '/content', label: 'Content', icon: PieChartIcon }
-        // /adlux-settings removed — System User mode was retired in favour of
-        // a single FB Login flow. Page file is still on disk if we need it back.
+    // Role-aware nav. Each item tags which roles can SEE it; the menu is
+    // filtered at render time. Server endpoints are still the source of
+    // truth — hiding a link only cleans up the UI, it doesn't grant access.
+    //
+    //   admin    — all
+    //   user     — merchant (their stores + ads)
+    //   cs       — fulfillment only (orders + tracking)
+    //   finance  — money only (P&L / COGS, no ads management)
+    const role = (user?.role || 'user') as 'admin' | 'user' | 'cs' | 'finance';
+    const ALL_ROLES = ['admin', 'user', 'cs', 'finance'] as const;
+    type NavRole = typeof ALL_ROLES[number];
+    const navCatalog: Array<{ path: string; label: string; icon: typeof LayoutDashboard; roles: NavRole[] }> = [
+        { path: '/orders',   label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'user', 'cs', 'finance'] },
+        { path: '/tracking', label: 'Tracking',  icon: Upload,          roles: ['admin', 'user', 'cs'] },
+        { path: '/cogs',     label: 'COGS',      icon: DollarSign,      roles: ['admin', 'user', 'finance'] },
+        { path: '/facebook', label: 'Facebook',  icon: BarChart3,       roles: ['admin', 'user'] },
+        { path: '/content',  label: 'Content',   icon: PieChartIcon,    roles: ['admin', 'user'] },
+        { path: '/admin',    label: 'Admin',     icon: ShieldCheck,     roles: ['admin'] }
     ];
-    // Admin link — only rendered for users with role='admin'. The route is
-    // also gated server-side so a non-admin who pokes at /admin directly
-    // gets 403, not just a hidden nav item.
-    const navItems = user?.role === 'admin'
-        ? [...baseNavItems, { path: '/admin', label: 'Admin', icon: ShieldCheck }]
-        : baseNavItems;
+    const navItems = navCatalog.filter(i => i.roles.includes(role));
 
     const activeNavItem = navItems.find(i => i.path === location.pathname);
     const subtitle = activeNavItem ? PAGE_SUBTITLES[activeNavItem.label] : '';
@@ -238,6 +239,16 @@ export const Layout = () => {
                                         <div className="flex flex-col gap-0.5">
                                             <span className="text-xs text-slate-500">Signed in as</span>
                                             <span className="text-sm font-medium truncate">{user.email}</span>
+                                            <span className={cn(
+                                                "text-[10px] uppercase tracking-wider font-semibold mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded w-fit",
+                                                role === 'admin'   ? "bg-amber-100 text-amber-700"   :
+                                                role === 'finance' ? "bg-violet-100 text-violet-700" :
+                                                role === 'cs'      ? "bg-sky-100 text-sky-700"       :
+                                                                     "bg-slate-100 text-slate-600"
+                                            )}>
+                                                {role === 'admin' && <ShieldCheck className="h-3 w-3" />}
+                                                {role}
+                                            </span>
                                         </div>
                                     </DropdownMenuLabel>
                                     <DropdownMenuSeparator />

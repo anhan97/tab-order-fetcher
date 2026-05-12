@@ -94,7 +94,10 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
       }
     };
     void fetchSpend();
-    return () => { cancelled = true; };
+    // Every range here includes today (today / last 7 / 30 / 90), so always
+    // poll. Matches /api/pl/today's 5min memo TTL.
+    const interval = setInterval(() => { void fetchSpend(); }, 5 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [dateRange, shopifyConfig?.storeUrl, shopifyConfig?.accessToken, mappingVersion]);
 
   const calculateMetrics = (data: TimeframeData[]) => {

@@ -28,7 +28,7 @@ import { ProfitApiClient, PLSnapshot, OperatingCostItem } from '@/utils/profitAp
 import { formatInTimeZone } from 'date-fns-tz';
 import { format } from 'date-fns';
 import { detectMarginAlerts, computeMargins, MarginAlert } from '@/utils/marginAlerts';
-import { todayInTz, addDaysToDateString } from '@/utils/dateUtils';
+import { todayInTz, addDaysToDateString, tzDayBoundsUtc } from '@/utils/dateUtils';
 import { cn } from '@/lib/utils';
 
 type Period = 'day' | 'week' | 'month' | 'quarter' | 'year';
@@ -62,14 +62,34 @@ interface PeriodBucket {
   grossProfit: number;
   netProfit: number;
   orderCount: number;
+  // ── FB metrics — populated for live/recent days (today + recent_recompute
+  // window from the backend). Older days from frozen DailyPLSnapshot rows
+  // leave these undefined; the table renders '—' for them.
+  fbImpressions?: number;
+  fbClicks?: number;
+  fbLinkClicks?: number;
+  fbPurchases?: number;
+  fbPurchaseValue?: number;
 }
 
 /**
- * UTC instant whose Y/M/D match the picked calendar date (start or end).
- * Used for backend API params — backend interprets these in the store tz.
+ * UTC instant marking either the START or END of the given calendar date
+ * IN THE STORE TIMEZONE.
+ *
+ * Was: `new Date('YYYY-MM-DDT00:00:00Z')` — produced UTC midnight, which
+ * for a GMT+7 user picking "today=2026-05-08" came out as 07:00 local
+ * (May 8) → 06:59 next day local. Backend then bucketed that 24h window
+ * across TWO local calendar days → /daily returned 2 rows for what the
+ * user picked as a single day.
+ *
+ * Now: routes the YMD through `tzDayBoundsUtc` which calls
+ * `fromZonedTime`, giving us the ACTUAL UTC instant of local midnight in
+ * the store tz. Matches what Orders does (it already used this helper).
  */
-const dateAtUTC = (s: string, eod = false): Date =>
-  new Date(`${s}T${eod ? '23:59:59' : '00:00:00'}Z`);
+const dateBoundUTC = (s: string, eod: boolean, tz: string): Date => {
+  const { from, to } = tzDayBoundsUtc(s, tz);
+  return eod ? to : from;
+};
 
 /**
  * Display-only Date for UI rendering. Constructs a browser-local Date at
@@ -93,7 +113,17 @@ const dateToYmd = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
-export const ProfitView = () => {
+interface ProfitViewProps {
+  /**
+   * When mounted inside the unified Orders page (tab host), the parent
+   * passes its date range through this prop so the P&L tab's dates stay
+   * in sync with the Overview + Orders tabs. Standalone use leaves this
+   * undefined and the component falls back to its own picker default.
+   */
+  externalRange?: { from: Date; to: Date };
+}
+
+export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
   const { shopifyConfig, isShopifyConnected, timezone, mappingVersion } = useAppContext();
   const { toast } = useToast();
 
@@ -129,6 +159,13 @@ export const ProfitView = () => {
   const num = (v: string | number | null | undefined) =>
     typeof v === 'number' ? v : parseFloat(v || '0');
 
+  // Closure wrapper that injects the user's timezone into dateBoundUTC so
+  // every callsite below stays succinct — and stays correct regardless of
+  // store tz. Without this, "today=2026-05-08" picked in GMT+7 used to be
+  // sent as 00:00 UTC … 23:59 UTC, which spans two GMT+7 days.
+  const dateAtUTC = (s: string, eod = false): Date =>
+    dateBoundUTC(s, eod, timezone);
+
   const load = async () => {
     if (!client) return;
     setLoading(true);
@@ -139,23 +176,39 @@ export const ProfitView = () => {
         // Day-level: snapshots endpoint returns historical rows + today live
         // (when range includes today) merged into a single uniform array.
         const r = await client.listSnapshots(fromD, toD);
-        const mapped: PeriodBucket[] = r.snapshots.map(s => ({
-          periodKey: s.date.slice(0, 10),
-          periodStart: s.date,
-          periodEnd: s.date,
-          grossRevenue: num(s.grossRevenue),
-          refunds: num(s.refunds),
-          netRevenue: num(s.netRevenue),
-          basecost: num(s.basecost),
-          paymentFees: num(s.paymentFees),
-          fbAdSpend: num(s.fbAdSpend),
-          otherAdSpend: num(s.otherAdSpend),
-          appFees: num(s.appFees),
-          operatingCost: num(s.operatingCost),
-          grossProfit: num(s.grossProfit),
-          netProfit: num(s.netProfit),
-          orderCount: s.orderCount
-        }));
+        const mapped: PeriodBucket[] = r.snapshots.map(s => {
+          // FB metrics are emitted by the live aggregateForDate path only.
+          // The Prisma client typing for PLSnapshot doesn't know about them
+          // since they're not persisted columns — read via index access.
+          const sx = s as unknown as Record<string, unknown>;
+          const numOpt = (k: string) => {
+            const v = sx[k];
+            if (v === undefined || v === null) return undefined;
+            return typeof v === 'number' ? v : parseFloat(String(v) || '0');
+          };
+          return {
+            periodKey: s.date.slice(0, 10),
+            periodStart: s.date,
+            periodEnd: s.date,
+            grossRevenue: num(s.grossRevenue),
+            refunds: num(s.refunds),
+            netRevenue: num(s.netRevenue),
+            basecost: num(s.basecost),
+            paymentFees: num(s.paymentFees),
+            fbAdSpend: num(s.fbAdSpend),
+            otherAdSpend: num(s.otherAdSpend),
+            appFees: num(s.appFees),
+            operatingCost: num(s.operatingCost),
+            grossProfit: num(s.grossProfit),
+            netProfit: num(s.netProfit),
+            orderCount: s.orderCount,
+            fbImpressions: numOpt('fbImpressions'),
+            fbClicks: numOpt('fbClicks'),
+            fbLinkClicks: numOpt('fbLinkClicks'),
+            fbPurchases: numOpt('fbPurchases'),
+            fbPurchaseValue: numOpt('fbPurchaseValue')
+          };
+        });
         setBuckets(mapped);
       } else {
         const r = await client.byPeriod(fromD, toD, period);
@@ -171,6 +224,15 @@ export const ProfitView = () => {
   };
 
   useEffect(() => { void load(); /* eslint-disable-next-line */ }, [client, from, to, period, mappingVersion]);
+
+  // Sync to the parent's range when mounted as a tab inside OrdersPage.
+  // Keeps the picker visible (so users can still narrow within this tab)
+  // but defaults to whatever the page-level filter is.
+  useEffect(() => {
+    if (!externalRange) return;
+    setFrom(dateToYmd(externalRange.from));
+    setTo(dateToYmd(externalRange.to));
+  }, [externalRange?.from?.getTime(), externalRange?.to?.getTime()]);
 
   // Auto-refresh every 5 min when the range includes today — matches the
   // backend's today-cache TTL so each refresh either gets the cached payload
@@ -225,7 +287,15 @@ export const ProfitView = () => {
       grossProfit: sum('grossProfit'),
       netProfit: sum('netProfit'),
       refunds: sum('refunds'),
-      orderCount: buckets.reduce((s, x) => s + (x.orderCount || 0), 0)
+      orderCount: buckets.reduce((s, x) => s + (x.orderCount || 0), 0),
+      // FB metric sums for the row totals + derived KPIs in the breakdown
+      // header. Days where FB metrics are missing contribute 0 — the totals
+      // therefore only reflect days that are actually covered.
+      fbImpressions: sum('fbImpressions'),
+      fbClicks: sum('fbClicks'),
+      fbLinkClicks: sum('fbLinkClicks'),
+      fbPurchases: sum('fbPurchases'),
+      fbPurchaseValue: sum('fbPurchaseValue')
     };
   }, [buckets]);
 

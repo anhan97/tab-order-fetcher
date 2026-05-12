@@ -13,6 +13,7 @@ import { startPLScheduler } from './src/jobs/pl-scheduler';
 // FB Login flow. Import kept commented for the rollback path.
 // import { startAdluxScheduler } from './src/jobs/fb-adlux-scheduler';
 import { startFbTokenRefreshScheduler } from './src/jobs/fb-token-refresh';
+import { startFbMetricsScheduler } from './src/jobs/fb-metrics-scheduler';
 import config from './src/config/app';
 
 const app = express();
@@ -68,4 +69,7 @@ app.listen(port, () => {
   }
   // startAdluxScheduler() — retired with the System User mode rollback.
   startFbTokenRefreshScheduler();
+  if (process.env.FB_METRICS_SCHEDULER_DISABLED !== '1') {
+    startFbMetricsScheduler();
+  }
 });

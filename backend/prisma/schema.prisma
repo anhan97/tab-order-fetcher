@@ -526,6 +526,30 @@ model UserFacebookApp {
   @@index([isActive])
 }
 
+// Many-to-many between FB Apps (admin-owned) and users who are allowed
+// to connect Facebook through that app.
+//
+// Why pivot rather than copying creds onto each user's UserFacebookApp:
+// the App Secret should have ONE source of truth (the admin's row). A
+// pivot row grants access; revoking it doesn't touch the underlying app
+// or any other user's access. Rotating the secret is also a one-row
+// update on UserFacebookApp instead of N row updates across copies.
+//
+// Reads: when user X tries to connect FB, resolution checks
+//   (a) X's own UserFacebookApp rows (admins / legacy single-user installs)
+//   (b) UserFacebookApp rows reachable via this pivot (assignedUserId = X)
+// and lets the frontend choose if more than one is available.
+model FacebookAppUserAccess {
+  id              String   @id @default(uuid())
+  userFbAppId     String                       // FK → UserFacebookApp.id (admin's row PK)
+  assignedUserId  String                       // who is allowed to connect via this app
+  createdAt       DateTime @default(now())
+
+  @@unique([userFbAppId, assignedUserId])
+  @@index([assignedUserId])
+  @@index([userFbAppId])
+}
+
 // Singleton config row. Lets admins manage Adlux BM ID + FB app
 // credentials through the UI rather than env vars.
 model AdluxConfig {
@@ -603,6 +627,56 @@ model FacebookAdAccountAccess {
   @@unique([userId, accountId])
   @@index([userId])
   @@index([accountId])
+}
+
+// Per-campaign, per-day FB metrics — the single source of truth that
+// Dashboard + P&L + Daily breakdown all read from.
+//
+// Why this exists: we used to read the FB live cache on every page render,
+// which meant (a) Dashboard and P&L could show divergent numbers when the
+// 5-min cache expired between two calls, (b) any momentary FB API failure
+// returned $0 instead of the last known good value, and (c) "today=$0"
+// became the default failure mode users kept hitting.
+//
+// Write path: a 5-minute scheduler tick + immediate sync on mapping save
+// fetches each mapped account's campaigns and upserts one row per
+// (userId, accountId, campaignId, date). The row is keyed by date so
+// multiple days of history coexist; the scheduler keeps a rolling 14-day
+// window fresh and old rows survive untouched.
+//
+// Read path: aggregateForDate / Dashboard KPI / Daily breakdown all join
+// this table with CampaignStoreMapping on (userId, accountId, campaignId)
+// to get per-store sums. No FB call on the request path.
+model FbCampaignDailyMetric {
+  id            String   @id @default(uuid())
+  userId        String
+  accountId     String                       // FB ad account id (no 'act_' prefix)
+  campaignId    String
+  campaignName  String?
+  date          DateTime                     // UTC midnight of the day represented (YYYY-MM-DD)
+
+  spend         Decimal  @db.Decimal(14, 2) @default(0)
+  impressions   BigInt   @default(0)
+  clicks        BigInt   @default(0)
+  linkClicks    BigInt   @default(0)
+  uniqueClicks  BigInt   @default(0)
+  reach         BigInt   @default(0)
+  purchases     Int      @default(0)
+  purchaseValue Decimal  @db.Decimal(14, 2) @default(0)
+  ctr           Float?
+  cpc           Float?
+  cpm           Float?
+  roas          Float?
+  currency      String   @default("USD")
+
+  lastSyncedAt  DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, accountId, campaignId, date])
+  @@index([userId, date])
+  @@index([accountId, date])
+  @@index([campaignId, date])
 }
 
 // End-of-day snapshot per FB ad entity. Lets historical views (yesterday,

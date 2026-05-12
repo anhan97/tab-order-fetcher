@@ -9,13 +9,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Edit, Trash2, Package, Calculator, Upload, Download, Save, FileText, Settings } from 'lucide-react';
+import { Plus, Edit, Trash2, Package, Upload, Download, Save, FileText, Settings } from 'lucide-react';
 import { ShippingCompanyManager } from './ShippingCompanyManager';
 import { useToast } from '@/hooks/use-toast';
-import { CogsConfig, ProductCog, ComboCog, CogsResult } from '@/types/minimalCogs';
+import { CogsConfig, ProductCog, ComboCog } from '@/types/minimalCogs';
 import {
-  calculateProductCogs,
-  calculateComboCogs,
   calculateOrderCogs,
   validateCogsConfig
 } from '@/utils/minimalCogsResolver';
@@ -38,10 +36,8 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   const [showEditProductDialog, setShowEditProductDialog] = useState(false);
   const [showAddComboDialog, setShowAddComboDialog] = useState(false);
   const [showEditComboDialog, setShowEditComboDialog] = useState(false);
-  const [showCalculatorDialog, setShowCalculatorDialog] = useState(false);
   const [showJsonEditor, setShowJsonEditor] = useState(false);
   const [jsonText, setJsonText] = useState('');
-  const [calculatorResult, setCalculatorResult] = useState<CogsResult | null>(null);
   const [editingProduct, setEditingProduct] = useState<ProductCog | null>(null);
   const [editingCombo, setEditingCombo] = useState<ComboCog | null>(null);
   const { toast } = useToast();
@@ -65,6 +61,13 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   const [selectedProducts, setSelectedProducts] = useState<{ variant_id: number, qty: number }[]>([]);
   const [comboDiscountType, setComboDiscountType] = useState<'percent' | 'fixed'>('fixed');
   const [comboDiscountValue, setComboDiscountValue] = useState<number>(0);
+  // Pricing mode toggle. 'sum' (default) = sum of items minus optional discount;
+  // 'flat' = a hard combo total in $ regardless of item costs (e.g. supplier
+  // negotiates 2x BAG-BLACK at $30 even though 1x is $22).
+  const [comboPricingMode, setComboPricingMode] = useState<'sum' | 'flat'>('sum');
+  const [comboFlatTotal, setComboFlatTotal] = useState<number>(0);
+  // Search filter for the product picker grid in the combo dialogs.
+  const [comboProductSearch, setComboProductSearch] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Debounced auto-save to database
@@ -248,12 +251,6 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   });
 
   // Calculator states
-  const [calcVariantId, setCalcVariantId] = useState<number>(0);
-  const [calcComboId, setCalcComboId] = useState<string>('');
-  const [calcCountry, setCalcCountry] = useState<string>('US');
-  const [calcShipper, setCalcShipper] = useState<string>('YunTu');
-  const [calcQuantity, setCalcQuantity] = useState<number>(1);
-  const [calcType, setCalcType] = useState<'product' | 'combo'>('product');
 
   useEffect(() => {
     setJsonText(JSON.stringify(config, null, 2));
@@ -399,13 +396,43 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     });
   };
 
+  /** Auto-generate a stable combo_id when the user only types a Name. */
+  const autoComboId = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `combo-${crypto.randomUUID().slice(0, 8)}`;
+    }
+    return `combo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  };
+
+  const buildCogsRule = (): ComboCog['cogs_rule'] => {
+    if (comboPricingMode === 'flat') {
+      return { mode: 'flat', total_cost: comboFlatTotal };
+    }
+    return { mode: 'sum', discount_type: comboDiscountType, discount_value: comboDiscountValue };
+  };
+
+  const resetComboForm = () => {
+    setNewCombo({ combo_id: '', name: '', items: [], cogs_rule: { mode: 'sum', discount_type: 'fixed', discount_value: 0 }, overrides: [] });
+    setSelectedProducts([]);
+    setComboQuantity(1);
+    setComboDiscountType('fixed');
+    setComboDiscountValue(0);
+    setComboPricingMode('sum');
+    setComboFlatTotal(0);
+    setComboProductSearch('');
+  };
+
   const handleAddCombo = () => {
-    if (!newCombo.combo_id || !newCombo.name || selectedProducts.length === 0) {
+    if (!newCombo.name || selectedProducts.length === 0) {
       toast({
         title: "Error",
-        description: "Please fill in all required fields and select at least one product",
+        description: "Please enter a Name and select at least one product",
         variant: "destructive",
       });
+      return;
+    }
+    if (comboPricingMode === 'flat' && (!Number.isFinite(comboFlatTotal) || comboFlatTotal < 0)) {
+      toast({ title: "Error", description: "Flat combo price must be a non-negative number", variant: "destructive" });
       return;
     }
 
@@ -415,14 +442,10 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     }));
 
     const combo: ComboCog = {
-      combo_id: newCombo.combo_id!,
+      combo_id: newCombo.combo_id || autoComboId(),
       name: newCombo.name!,
       items: comboItems,
-      cogs_rule: {
-        mode: 'sum',
-        discount_type: comboDiscountType,
-        discount_value: comboDiscountValue
-      },
+      cogs_rule: buildCogsRule(),
       trigger_quantity: comboQuantity,
       overrides: []
     };
@@ -435,11 +458,7 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     onUpdateCOGS?.(updatedConfig);
     debouncedSave(updatedConfig);
     setShowAddComboDialog(false);
-    setNewCombo({ combo_id: '', name: '', items: [], cogs_rule: { mode: 'sum', discount_type: 'fixed', discount_value: 0 }, overrides: [] });
-    setSelectedProducts([]);
-    setComboQuantity(1);
-    setComboDiscountType('fixed');
-    setComboDiscountValue(0);
+    resetComboForm();
     toast({
       title: "Success",
       description: "Combo added successfully",
@@ -450,19 +469,40 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     setEditingCombo(combo);
     setNewCombo(combo);
     setSelectedProducts(combo.items.map(item => ({ variant_id: item.variant_id, qty: item.qty })));
-    setComboDiscountType(combo.cogs_rule.discount_type || 'fixed');
-    setComboDiscountValue(combo.cogs_rule.discount_value || 0);
+    if (combo.cogs_rule.mode === 'flat') {
+      setComboPricingMode('flat');
+      setComboFlatTotal(combo.cogs_rule.total_cost || 0);
+      // keep discount fields for if user toggles back
+      setComboDiscountType('fixed');
+      setComboDiscountValue(0);
+    } else if (combo.cogs_rule.mode === 'sum') {
+      setComboPricingMode('sum');
+      setComboDiscountType(combo.cogs_rule.discount_type || 'fixed');
+      setComboDiscountValue(combo.cogs_rule.discount_value || 0);
+      setComboFlatTotal(0);
+    } else {
+      // mode === 'override' — treat as sum without discount in the editor.
+      setComboPricingMode('sum');
+      setComboDiscountType('fixed');
+      setComboDiscountValue(0);
+      setComboFlatTotal(0);
+    }
     setComboQuantity(combo.trigger_quantity || combo.items.reduce((sum, item) => sum + item.qty, 0));
+    setComboProductSearch('');
     setShowEditComboDialog(true);
   };
 
   const handleUpdateCombo = () => {
-    if (!editingCombo || !newCombo.combo_id || !newCombo.name || selectedProducts.length === 0) {
+    if (!editingCombo || !newCombo.name || selectedProducts.length === 0) {
       toast({
         title: "Error",
-        description: "Please fill in all required fields and select at least one product",
+        description: "Please enter a Name and select at least one product",
         variant: "destructive",
       });
+      return;
+    }
+    if (comboPricingMode === 'flat' && (!Number.isFinite(comboFlatTotal) || comboFlatTotal < 0)) {
+      toast({ title: "Error", description: "Flat combo price must be a non-negative number", variant: "destructive" });
       return;
     }
 
@@ -472,16 +512,12 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     }));
 
     const updatedCombo: ComboCog = {
-      combo_id: newCombo.combo_id!,
+      combo_id: editingCombo.combo_id,  // never change combo_id on edit
       name: newCombo.name!,
       items: comboItems,
-      cogs_rule: {
-        mode: 'sum',
-        discount_type: comboDiscountType,
-        discount_value: comboDiscountValue
-      },
+      cogs_rule: buildCogsRule(),
       trigger_quantity: comboQuantity,
-      overrides: []
+      overrides: editingCombo.overrides || []  // preserve existing per-country overrides
     };
 
     const updatedConfig = {
@@ -495,11 +531,7 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     debouncedSave(updatedConfig);
     setShowEditComboDialog(false);
     setEditingCombo(null);
-    setNewCombo({ combo_id: '', name: '', items: [], cogs_rule: { mode: 'sum', discount_type: 'fixed', discount_value: 0 }, overrides: [] });
-    setSelectedProducts([]);
-    setComboQuantity(1);
-    setComboDiscountType('fixed');
-    setComboDiscountValue(0);
+    resetComboForm();
     toast({
       title: "Success",
       description: "Combo updated successfully",
@@ -583,30 +615,6 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     }
 
     return null;
-  };
-
-  const handleCalculate = () => {
-    try {
-      let result: CogsResult;
-
-      if (calcType === 'product') {
-        result = calculateProductCogs(config, calcVariantId, calcCountry, calcShipper, calcQuantity);
-      } else {
-        result = calculateComboCogs(config, calcComboId, calcCountry, calcShipper, calcQuantity);
-      }
-
-      setCalculatorResult(result);
-      toast({
-        title: "Success",
-        description: "COGS calculated successfully",
-      });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
   };
 
   const handleExportConfig = () => {
@@ -703,13 +711,12 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
         <TabsList>
           <TabsTrigger value="products">Products</TabsTrigger>
           <TabsTrigger value="combos">Combos</TabsTrigger>
-          <TabsTrigger value="calculator">Calculator</TabsTrigger>
         </TabsList>
 
         <TabsContent value="products" className="space-y-4">
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="text-lg font-semibold">Products</h3>
-            <div className="flex space-x-2">
+            <div className="flex space-x-2 flex-wrap">
               <Button onClick={loadProducts} variant="outline" disabled={isLoading}>
                 <Package className="h-4 w-4 mr-2" />
                 {isLoading ? 'Loading...' : 'Refresh Products'}
@@ -1092,33 +1099,81 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                                                   </TableRow>
                                                 </TableHeader>
                                                 <TableBody>
-                                                  {existingProduct.overrides?.map((override, idx) => (
-                                                    <TableRow key={idx}>
-                                                      <TableCell>{override.country}</TableCell>
-                                                      <TableCell>{override.shipping_company}</TableCell>
-                                                      <TableCell>${override.cost}</TableCell>
-                                                      <TableCell>
-                                                        <Button
-                                                          size="sm"
-                                                          variant="ghost"
-                                                          className="h-8 w-8 p-0 text-red-500"
-                                                          onClick={() => {
-                                                            const overrides = existingProduct.overrides?.filter((_, i) => i !== idx);
-                                                            const updatedConfig = {
-                                                              ...config,
-                                                              products: config.products.map(p =>
-                                                                p.variant_id === variant.id ? { ...p, overrides } : p
-                                                              )
-                                                            };
-                                                            setConfig(updatedConfig);
-                                                            onUpdateCOGS?.(updatedConfig);
-                                                          }}
-                                                        >
-                                                          <Trash2 className="h-4 w-4" />
-                                                        </Button>
-                                                      </TableCell>
-                                                    </TableRow>
-                                                  ))}
+                                                  {/* Sort overrides by country (alphabetical) so the list stays stable
+                                                      regardless of insertion order — easier to scan when many rows. */}
+                                                  {(() => {
+                                                    const sorted = (existingProduct.overrides || [])
+                                                      .map((o, originalIdx) => ({ o, originalIdx }))
+                                                      .sort((a, b) => {
+                                                        const c = a.o.country.localeCompare(b.o.country);
+                                                        return c !== 0 ? c : a.o.shipping_company.localeCompare(b.o.shipping_company);
+                                                      });
+                                                    return sorted.map(({ o: override, originalIdx }) => (
+                                                      <TableRow key={`${override.country}-${override.shipping_company}`}>
+                                                        <TableCell>{override.country}</TableCell>
+                                                        <TableCell>{override.shipping_company}</TableCell>
+                                                        <TableCell>
+                                                          {/* Inline cost edit: uncontrolled Input, commits on blur or Enter.
+                                                              We read the typed value from the event target rather than
+                                                              tracking a per-row state map — simpler and avoids re-render
+                                                              every keystroke. Country + shipper stay read-only because
+                                                              changing them effectively renames the row's natural key. */}
+                                                          <Input
+                                                            type="number"
+                                                            step="0.01"
+                                                            min={0}
+                                                            defaultValue={override.cost}
+                                                            className="h-8 w-24"
+                                                            onBlur={(e) => {
+                                                              const next = parseFloat(e.currentTarget.value);
+                                                              if (!Number.isFinite(next) || next < 0) {
+                                                                e.currentTarget.value = String(override.cost);
+                                                                return;
+                                                              }
+                                                              if (next === override.cost) return;
+                                                              const overrides = [...(existingProduct.overrides || [])];
+                                                              overrides[originalIdx] = { ...overrides[originalIdx], cost: next };
+                                                              const updatedConfig = {
+                                                                ...config,
+                                                                products: config.products.map(p =>
+                                                                  p.variant_id === variant.id ? { ...p, overrides } : p
+                                                                )
+                                                              };
+                                                              setConfig(updatedConfig);
+                                                              onUpdateCOGS?.(updatedConfig);
+                                                            }}
+                                                            onKeyDown={(e) => {
+                                                              if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+                                                              if (e.key === 'Escape') {
+                                                                (e.currentTarget as HTMLInputElement).value = String(override.cost);
+                                                                (e.currentTarget as HTMLInputElement).blur();
+                                                              }
+                                                            }}
+                                                          />
+                                                        </TableCell>
+                                                        <TableCell>
+                                                          <Button
+                                                            size="sm"
+                                                            variant="ghost"
+                                                            className="h-8 w-8 p-0 text-red-500"
+                                                            onClick={() => {
+                                                              const overrides = (existingProduct.overrides || []).filter((_, i) => i !== originalIdx);
+                                                              const updatedConfig = {
+                                                                ...config,
+                                                                products: config.products.map(p =>
+                                                                  p.variant_id === variant.id ? { ...p, overrides } : p
+                                                                )
+                                                              };
+                                                              setConfig(updatedConfig);
+                                                              onUpdateCOGS?.(updatedConfig);
+                                                            }}
+                                                          >
+                                                            <Trash2 className="h-4 w-4" />
+                                                          </Button>
+                                                        </TableCell>
+                                                      </TableRow>
+                                                    ));
+                                                  })()}
                                                   {(!existingProduct.overrides || existingProduct.overrides.length === 0) && (
                                                     <TableRow>
                                                       <TableCell colSpan={4} className="text-center text-gray-500 py-4">
@@ -1264,40 +1319,62 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-6">
-                  {/* Basic Info */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="comboId">Combo ID</Label>
-                      <Input
-                        id="comboId"
-                        placeholder="e.g., BUNDLE-2"
-                        value={newCombo.combo_id || ''}
-                        onChange={(e) => setNewCombo(prev => ({ ...prev, combo_id: e.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="comboName">Combo Name</Label>
-                      <Input
-                        id="comboName"
-                        placeholder="e.g., 2-Pack Bundle"
-                        value={newCombo.name || ''}
-                        onChange={(e) => setNewCombo(prev => ({ ...prev, name: e.target.value }))}
-                      />
-                    </div>
+                  {/* Basic Info — combo_id auto-generated on save, only Name required. */}
+                  <div>
+                    <Label htmlFor="comboName">Combo Name</Label>
+                    <Input
+                      id="comboName"
+                      placeholder="e.g., 2-Pack Black Bag Bundle"
+                      value={newCombo.name || ''}
+                      onChange={(e) => setNewCombo(prev => ({ ...prev, name: e.target.value }))}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Combo ID will be generated automatically.</p>
                   </div>
 
                   {/* Product Selection */}
                   <div>
-                    <Label className="text-base font-semibold">Select Products for Combo</Label>
-                    <div className="mt-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto border rounded-md p-3">
+                    <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                      <Label className="text-base font-semibold">Select Products for Combo</Label>
+                      <Input
+                        type="search"
+                        placeholder="Search by product / variant / SKU…"
+                        value={comboProductSearch}
+                        onChange={(e) => setComboProductSearch(e.target.value)}
+                        className="max-w-xs h-9"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto border rounded-md p-3">
                       {products.length === 0 ? (
                         <div className="col-span-full text-center py-8">
                           <Package className="h-12 w-12 mx-auto text-gray-400 mb-2" />
                           <p className="text-sm text-gray-500">No products loaded. Click "Refresh Products" to load from Shopify.</p>
                         </div>
                       ) : (
-                        products.map(product =>
-                          product.variants.map((variant: any) => (
+                        (() => {
+                          const q = comboProductSearch.trim().toLowerCase();
+                          // Flatten product → variant pairs, filter by search.
+                          const pairs: Array<{ product: any; variant: any }> = [];
+                          for (const product of products) {
+                            for (const variant of product.variants) {
+                              if (q) {
+                                const hay = [
+                                  product.title || '',
+                                  variant.title || '',
+                                  variant.sku || ''
+                                ].join(' ').toLowerCase();
+                                if (!hay.includes(q)) continue;
+                              }
+                              pairs.push({ product, variant });
+                            }
+                          }
+                          if (pairs.length === 0) {
+                            return (
+                              <div className="col-span-full text-center py-6 text-sm text-gray-400">
+                                No variants match "{comboProductSearch}".
+                              </div>
+                            );
+                          }
+                          return pairs.map(({ product, variant }) => (
                             <div key={variant.id} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50 hover:border-blue-300 transition-colors">
                               {/* Variant Image */}
                               <div className="flex-shrink-0">
@@ -1347,8 +1424,8 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                                 </Button>
                               </div>
                             </div>
-                          ))
-                        )
+                          ));
+                        })()
                       )}
                     </div>
                   </div>
@@ -1429,31 +1506,24 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                   {/* Pricing Rules */}
                   <div>
                     <Label className="text-base font-semibold">Pricing Rules</Label>
-                    <div className="mt-2 grid grid-cols-3 gap-4">
+                    {/* Mode toggle. 'sum' applies optional discount on top of summed
+                        item costs; 'flat' uses a hard total entered by the merchant
+                        (e.g. supplier-negotiated combo price like 2x = $30). */}
+                    <div className="mt-2 grid grid-cols-2 gap-4">
                       <div>
-                        <Label>Discount Type</Label>
+                        <Label>Pricing Mode</Label>
                         <Select
-                          value={comboDiscountType}
-                          onValueChange={(value) => setComboDiscountType(value as 'percent' | 'fixed')}
+                          value={comboPricingMode}
+                          onValueChange={(value) => setComboPricingMode(value as 'sum' | 'flat')}
                         >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="fixed">Fixed Amount ($)</SelectItem>
-                            <SelectItem value="percent">Percentage (%)</SelectItem>
+                            <SelectItem value="sum">Sum of items (with optional discount)</SelectItem>
+                            <SelectItem value="flat">Flat combo price (hard total $)</SelectItem>
                           </SelectContent>
                         </Select>
-                      </div>
-                      <div>
-                        <Label>Discount Value</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          placeholder={comboDiscountType === 'percent' ? '10' : '5.00'}
-                          value={comboDiscountValue}
-                          onChange={(e) => setComboDiscountValue(parseFloat(e.target.value) || 0)}
-                        />
                       </div>
                       <div>
                         <Label>Trigger Quantity</Label>
@@ -1469,6 +1539,51 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                         </p>
                       </div>
                     </div>
+                    {comboPricingMode === 'flat' ? (
+                      <div className="mt-3">
+                        <Label>Flat combo total ($)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="e.g. 30.00"
+                          value={comboFlatTotal}
+                          onChange={(e) => setComboFlatTotal(parseFloat(e.target.value) || 0)}
+                          className="max-w-xs"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          Final combo cost. Item costs are ignored — useful for supplier-negotiated combo prices.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="mt-3 grid grid-cols-2 gap-4 max-w-md">
+                        <div>
+                          <Label>Discount Type</Label>
+                          <Select
+                            value={comboDiscountType}
+                            onValueChange={(value) => setComboDiscountType(value as 'percent' | 'fixed')}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="fixed">Fixed Amount ($)</SelectItem>
+                              <SelectItem value="percent">Percentage (%)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label>Discount Value</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder={comboDiscountType === 'percent' ? '10' : '5.00'}
+                            value={comboDiscountValue}
+                            onChange={(e) => setComboDiscountValue(parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Preview */}
@@ -1476,10 +1591,13 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                     <div className="p-4 bg-gray-50 rounded-md">
                       <Label className="text-base font-semibold">Combo Preview</Label>
                       <div className="mt-2 text-sm">
-                        <p><strong>Combo ID:</strong> {newCombo.combo_id || 'Not set'}</p>
                         <p><strong>Name:</strong> {newCombo.name || 'Not set'}</p>
                         <p><strong>Products:</strong> {selectedProducts.length} product(s)</p>
-                        <p><strong>Discount:</strong> {comboDiscountValue} {comboDiscountType === 'percent' ? '%' : '$'} off</p>
+                        {comboPricingMode === 'flat' ? (
+                          <p><strong>Flat price:</strong> ${comboFlatTotal.toFixed(2)}</p>
+                        ) : (
+                          <p><strong>Discount:</strong> {comboDiscountValue} {comboDiscountType === 'percent' ? '%' : '$'} off</p>
+                        )}
                         <p><strong>Trigger:</strong> Any {comboQuantity} product{comboQuantity !== 1 ? 's' : ''} from {selectedProducts.length} selected</p>
                       </div>
                     </div>
@@ -1488,14 +1606,11 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                   <DialogFooter>
                     <Button variant="outline" onClick={() => {
                       setShowAddComboDialog(false);
-                      setSelectedProducts([]);
-                      setComboQuantity(1);
-                      setComboDiscountType('fixed');
-                      setComboDiscountValue(0);
+                      resetComboForm();
                     }}>
                       Cancel
                     </Button>
-                    <Button onClick={handleAddCombo} disabled={selectedProducts.length === 0}>
+                    <Button onClick={handleAddCombo} disabled={selectedProducts.length === 0 || !newCombo.name}>
                       Create Combo
                     </Button>
                   </DialogFooter>
@@ -1534,13 +1649,24 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                   </TableCell>
                   <TableCell>
                     <div className="text-sm">
-                      <Badge variant="secondary">
-                        {combo.cogs_rule.discount_type === 'percent' ? '%' : '$'}
-                      </Badge>
-                      <span className="ml-1">
-                        {combo.cogs_rule.discount_value || 0}
-                        {combo.cogs_rule.discount_type === 'percent' ? '%' : ''}
-                      </span>
+                      {combo.cogs_rule.mode === 'flat' ? (
+                        <>
+                          <Badge variant="secondary">Flat</Badge>
+                          <span className="ml-1">${(combo.cogs_rule.total_cost || 0).toFixed(2)}</span>
+                        </>
+                      ) : combo.cogs_rule.mode === 'sum' ? (
+                        <>
+                          <Badge variant="secondary">
+                            {combo.cogs_rule.discount_type === 'percent' ? '%' : '$'}
+                          </Badge>
+                          <span className="ml-1">
+                            {combo.cogs_rule.discount_value || 0}
+                            {combo.cogs_rule.discount_type === 'percent' ? '%' : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <Badge variant="outline">override</Badge>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -1581,14 +1707,16 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-6">
-                {/* Basic Info */}
+                {/* Basic Info — combo_id is read-only on edit (natural key). */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="editComboId">Combo ID</Label>
                     <Input
                       id="editComboId"
                       value={newCombo.combo_id || ''}
-                      onChange={(e) => setNewCombo(prev => ({ ...prev, combo_id: e.target.value }))}
+                      readOnly
+                      disabled
+                      className="font-mono"
                     />
                   </div>
                   <div>
@@ -1603,16 +1731,43 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
 
                 {/* Product Selection */}
                 <div>
-                  <Label className="text-base font-semibold">Select Products for Combo</Label>
-                  <div className="mt-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto border rounded-md p-3">
+                  <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                    <Label className="text-base font-semibold">Select Products for Combo</Label>
+                    <Input
+                      type="search"
+                      placeholder="Search by product / variant / SKU…"
+                      value={comboProductSearch}
+                      onChange={(e) => setComboProductSearch(e.target.value)}
+                      className="max-w-xs h-9"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto border rounded-md p-3">
                     {products.length === 0 ? (
                       <div className="col-span-full text-center py-8">
                         <Package className="h-12 w-12 mx-auto text-gray-400 mb-2" />
                         <p className="text-sm text-gray-500">No products loaded. Click "Refresh Products" to load from Shopify.</p>
                       </div>
                     ) : (
-                      products.map(product =>
-                        product.variants.map((variant: any) => (
+                      (() => {
+                        const q = comboProductSearch.trim().toLowerCase();
+                        const pairs: Array<{ product: any; variant: any }> = [];
+                        for (const product of products) {
+                          for (const variant of product.variants) {
+                            if (q) {
+                              const hay = [product.title || '', variant.title || '', variant.sku || ''].join(' ').toLowerCase();
+                              if (!hay.includes(q)) continue;
+                            }
+                            pairs.push({ product, variant });
+                          }
+                        }
+                        if (pairs.length === 0) {
+                          return (
+                            <div className="col-span-full text-center py-6 text-sm text-gray-400">
+                              No variants match "{comboProductSearch}".
+                            </div>
+                          );
+                        }
+                        return pairs.map(({ product, variant }) => (
                           <div key={variant.id} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50 hover:border-blue-300 transition-colors">
                             {/* Variant Image */}
                             <div className="flex-shrink-0">
@@ -1662,8 +1817,8 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                               </Button>
                             </div>
                           </div>
-                        ))
-                      )
+                        ));
+                      })()
                     )}
                   </div>
                 </div>
@@ -1741,33 +1896,24 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                   </div>
                 )}
 
-                {/* Pricing Rules */}
+                {/* Pricing Rules — same toggle as Create dialog. */}
                 <div>
                   <Label className="text-base font-semibold">Pricing Rules</Label>
-                  <div className="mt-2 grid grid-cols-3 gap-4">
+                  <div className="mt-2 grid grid-cols-2 gap-4">
                     <div>
-                      <Label>Discount Type</Label>
+                      <Label>Pricing Mode</Label>
                       <Select
-                        value={comboDiscountType}
-                        onValueChange={(value) => setComboDiscountType(value as 'percent' | 'fixed')}
+                        value={comboPricingMode}
+                        onValueChange={(value) => setComboPricingMode(value as 'sum' | 'flat')}
                       >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="fixed">Fixed Amount ($)</SelectItem>
-                          <SelectItem value="percent">Percentage (%)</SelectItem>
+                          <SelectItem value="sum">Sum of items (with optional discount)</SelectItem>
+                          <SelectItem value="flat">Flat combo price (hard total $)</SelectItem>
                         </SelectContent>
                       </Select>
-                    </div>
-                    <div>
-                      <Label>Discount Value</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={comboDiscountValue}
-                        onChange={(e) => setComboDiscountValue(parseFloat(e.target.value) || 0)}
-                      />
                     </div>
                     <div>
                       <Label>Trigger Quantity</Label>
@@ -1782,19 +1928,57 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
                       </p>
                     </div>
                   </div>
+                  {comboPricingMode === 'flat' ? (
+                    <div className="mt-3">
+                      <Label>Flat combo total ($)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min={0}
+                        value={comboFlatTotal}
+                        onChange={(e) => setComboFlatTotal(parseFloat(e.target.value) || 0)}
+                        className="max-w-xs"
+                      />
+                    </div>
+                  ) : (
+                    <div className="mt-3 grid grid-cols-2 gap-4 max-w-md">
+                      <div>
+                        <Label>Discount Type</Label>
+                        <Select
+                          value={comboDiscountType}
+                          onValueChange={(value) => setComboDiscountType(value as 'percent' | 'fixed')}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="fixed">Fixed Amount ($)</SelectItem>
+                            <SelectItem value="percent">Percentage (%)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label>Discount Value</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={comboDiscountValue}
+                          onChange={(e) => setComboDiscountValue(parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <DialogFooter>
                   <Button variant="outline" onClick={() => {
                     setShowEditComboDialog(false);
-                    setSelectedProducts([]);
-                    setComboQuantity(1);
-                    setComboDiscountType('fixed');
-                    setComboDiscountValue(0);
+                    setEditingCombo(null);
+                    resetComboForm();
                   }}>
                     Cancel
                   </Button>
-                  <Button onClick={handleUpdateCombo} disabled={selectedProducts.length === 0}>
+                  <Button onClick={handleUpdateCombo} disabled={selectedProducts.length === 0 || !newCombo.name}>
                     Update Combo
                   </Button>
                 </DialogFooter>
@@ -1803,134 +1987,6 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
           </Dialog>
         </TabsContent>
 
-        <TabsContent value="calculator" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Calculator className="h-5 w-5" />
-                <span>COGS Calculator</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Type</Label>
-                    <Select value={calcType} onValueChange={(value: 'product' | 'combo') => setCalcType(value)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="product">Product</SelectItem>
-                        <SelectItem value="combo">Combo</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Country</Label>
-                    <Select value={calcCountry} onValueChange={setCalcCountry}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {COUNTRIES.map(country => (
-                          <SelectItem key={country} value={country}>{country}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Shipping Company</Label>
-                    <Select value={calcShipper} onValueChange={setCalcShipper}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {shippingCompanies.map(company => (
-                          <SelectItem key={company} value={company}>{company}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Quantity</Label>
-                    <Input
-                      type="number"
-                      min="1"
-                      value={calcQuantity}
-                      onChange={(e) => setCalcQuantity(parseInt(e.target.value) || 1)}
-                    />
-                  </div>
-                </div>
-
-                {calcType === 'product' ? (
-                  <div>
-                    <Label>Select Product Variant</Label>
-                    <Select
-                      value={calcVariantId.toString()}
-                      onValueChange={(value) => setCalcVariantId(parseInt(value))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a product variant" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {products.map(product =>
-                          product.variants.map((variant: any) => (
-                            <SelectItem key={variant.id} value={variant.id.toString()}>
-                              {product.title} - {variant.title} ({variant.sku || 'No SKU'})
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : (
-                  <div>
-                    <Label>Combo ID</Label>
-                    <Select value={calcComboId} onValueChange={setCalcComboId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select combo" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {config.combos?.map(combo => (
-                          <SelectItem key={combo.combo_id} value={combo.combo_id}>
-                            {combo.name} ({combo.combo_id})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                <Button onClick={handleCalculate} className="w-full">
-                  <Calculator className="h-4 w-4 mr-2" />
-                  Calculate COGS
-                </Button>
-
-                {calculatorResult && (
-                  <div className="bg-green-50 p-4 rounded-lg">
-                    <h4 className="font-semibold text-green-800 mb-2">Calculation Result</h4>
-                    <div className="space-y-1 text-sm">
-                      <div>Unit Cost: ${calculatorResult.unit_cost.toFixed(2)}</div>
-                      <div>Total Cost: ${calculatorResult.total_cost.toFixed(2)}</div>
-                      <div>Method: {calculatorResult.calculation_method}</div>
-                      {calculatorResult.applied_discount && (
-                        <div>
-                          Discount: {calculatorResult.applied_discount.type} {calculatorResult.applied_discount.value}
-                          {calculatorResult.applied_discount.type === 'percent' ? '%' : '$'}
-                          (${calculatorResult.applied_discount.amount.toFixed(2)})
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
 
       {/* JSON Editor Dialog */}

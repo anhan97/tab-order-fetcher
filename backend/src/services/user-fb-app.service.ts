@@ -102,8 +102,15 @@ export async function listForUser(userId: string): Promise<SafeFbApp[]> {
 
 /**
  * Resolve a specific FB app for the user. If `fbAppId` is null, resolve
- * the user's default app (or first by createdAt). Returns null if the
- * user has no apps yet.
+ * the user's default app (or first by createdAt).
+ *
+ * Resolution order:
+ *   1. user's own UserFacebookApp row (admins / legacy installs)
+ *   2. an app the user has been granted access to via FacebookAppUserAccess
+ *      (non-admin users — admin assigns one of their own apps to user X,
+ *       and X's FB Login resolves through the admin's credentials)
+ *
+ * Returns null if neither side has a row.
  */
 export async function resolveForUser(userId: string, fbAppId?: string | null): Promise<ResolvedFbApp | null> {
   const k = cacheKey(userId, fbAppId || 'default');
@@ -128,6 +135,40 @@ export async function resolveForUser(userId: string, fbAppId?: string | null): P
       ORDER BY "isDefault" DESC, "createdAt" ASC
       LIMIT 1
     `)[0];
+  }
+
+  // Pivot fallback: user doesn't own a row → see if admin has assigned an
+  // app to them. We mirror the admin's row into the ResolvedFbApp shape so
+  // every downstream consumer (token exchange, debug-token lookup, etc.)
+  // sees the same fields regardless of how the resolution happened.
+  if (!row) {
+    if (fbAppId) {
+      row = (await prisma.$queryRaw<UserFbAppRow[]>`
+        SELECT a."id", a."userId", a."fbAppId", a."fbAppSecret", a."fbBmId",
+               a."appName", a."isActive",
+               FALSE AS "isDefault",            -- assigned apps are never the user's "default"
+               a."lastError", a."createdAt", a."updatedAt"
+        FROM "FacebookAppUserAccess" p
+        JOIN "UserFacebookApp" a ON a."id" = p."userFbAppId"
+        WHERE p."assignedUserId" = ${userId}
+          AND a."fbAppId" = ${fbAppId}
+          AND a."isActive" = TRUE
+        LIMIT 1
+      `)[0];
+    } else {
+      row = (await prisma.$queryRaw<UserFbAppRow[]>`
+        SELECT a."id", a."userId", a."fbAppId", a."fbAppSecret", a."fbBmId",
+               a."appName", a."isActive",
+               FALSE AS "isDefault",
+               a."lastError", a."createdAt", a."updatedAt"
+        FROM "FacebookAppUserAccess" p
+        JOIN "UserFacebookApp" a ON a."id" = p."userFbAppId"
+        WHERE p."assignedUserId" = ${userId}
+          AND a."isActive" = TRUE
+        ORDER BY p."createdAt" ASC
+        LIMIT 1
+      `)[0];
+    }
   }
   if (!row) return null;
 
@@ -337,7 +378,15 @@ export async function getForUser(userId: string): Promise<LegacyResolvedFbApp> {
   };
 }
 
-/** Legacy single-row "own app" view for the old MyFacebookAppCard UI. */
+/**
+ * Legacy single-row "effective app" view.
+ *
+ * Returns the user's default app — first by checking their own
+ * UserFacebookApp rows (admins / legacy installs), then falling back to
+ * `resolveForUser` which consults the FacebookAppUserAccess pivot. This
+ * lets non-admin users see the App ID the admin has assigned them so
+ * Facebook SDK init + /facebook UI render the right info.
+ */
 export async function getOwnAppSafe(userId: string): Promise<{
   hasOwnApp: boolean;
   fbAppId: string | null;
@@ -349,7 +398,21 @@ export async function getOwnAppSafe(userId: string): Promise<{
 }> {
   const apps = await listForUser(userId);
   const def = apps.find(a => a.isDefault) || apps[0];
-  if (!def) {
+  if (def) {
+    return {
+      hasOwnApp: true,
+      fbAppId: def.fbAppId,
+      fbBmId: def.fbBmId,
+      appName: def.appName,
+      secretFingerprint: def.secretFingerprint,
+      isActive: def.isActive,
+      lastError: def.lastError
+    };
+  }
+  // Pivot fallback — user has no row of their own; surface whichever app
+  // the admin has assigned them so the SDK + UI can still render.
+  const resolved = await resolveForUser(userId, null);
+  if (!resolved) {
     return {
       hasOwnApp: false, fbAppId: null, fbBmId: null, appName: null,
       secretFingerprint: null, isActive: false, lastError: null
@@ -357,16 +420,27 @@ export async function getOwnAppSafe(userId: string): Promise<{
   }
   return {
     hasOwnApp: true,
-    fbAppId: def.fbAppId,
-    fbBmId: def.fbBmId,
-    appName: def.appName,
-    secretFingerprint: def.secretFingerprint,
-    isActive: def.isActive,
-    lastError: def.lastError
+    fbAppId: resolved.fbAppId,
+    fbBmId: resolved.fbBmId,
+    appName: resolved.appName,
+    secretFingerprint: fingerprint(resolved.fbAppSecret),
+    isActive: true,
+    lastError: null
   };
 }
 
-/** Legacy upsert (no fbAppId in input, treats as "the user's only app"). */
+/**
+ * Legacy upsert from the singleton `MyFacebookAppCard` UI.
+ *
+ * That card pretends "1 user = 1 FB App", so any fbAppId it sends is THE
+ * app the user wants to use. We honour that by always promoting the
+ * incoming row to default — without this step, typing a new App ID in
+ * the form just inserted a non-default row and `getOwnAppSafe` kept
+ * returning the OLD default ("admin thêm app nhưng không được, cứ bị
+ * reset" was the symptom).
+ *
+ * The multi-app `/my-apps` endpoints don't go through here.
+ */
 export async function upsertForUser(userId: string, input: {
   fbAppId?: string;
   fbAppSecret?: string;
@@ -382,7 +456,8 @@ export async function upsertForUser(userId: string, input: {
       fbAppId: existing.fbAppId,
       fbAppSecret: input.fbAppSecret,
       fbBmId: input.fbBmId,
-      appName: input.appName
+      appName: input.appName,
+      makeDefault: true
     });
     return;
   }
@@ -390,7 +465,8 @@ export async function upsertForUser(userId: string, input: {
     fbAppId: input.fbAppId,
     fbAppSecret: input.fbAppSecret,
     fbBmId: input.fbBmId,
-    appName: input.appName
+    appName: input.appName,
+    makeDefault: true       // singleton UI → make this THE default app
   });
 }
 

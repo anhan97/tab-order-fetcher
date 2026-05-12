@@ -88,13 +88,25 @@ router.get('/daily', async (req, res) => {
     const tz = readTz(req);
     const to = parseDate(req.query.to, new Date());
     const from = parseDate(req.query.from, new Date(to.getTime() - 30 * 86400000));
-    const snapshots = await listSnapshots(userId, storeId, from, to, tz);
 
-    // Calendar marker for today (UTC midnight of local Y/M/D in store tz).
+    // Convert the raw ISO timestamps into LOCAL-TZ calendar markers before
+    // doing any range/equality comparisons. Without this step a "yesterday"
+    // range in GMT+7 — whose UTC bounds straddle two UTC dates — leaks an
+    // extra calendar day into recentDays and into the today-inclusion
+    // check, so /daily returns one row too many and Dashboard double-counts.
+    // Snapshot rows are stored keyed by local-calendar marker too, so this
+    // is the right canonical form to compare against.
+    const fromCal = localCalendarDateUTC(from, tz);
+    const toCal = localCalendarDateUTC(to, tz);
     const todayCal = localCalendarDateUTC(new Date(), tz);
+    const fromKey = fromCal.toISOString().slice(0, 10);
+    const toKey = toCal.toISOString().slice(0, 10);
     const todayKey = todayCal.toISOString().slice(0, 10);
-    const toKey = to.toISOString().slice(0, 10);
-    const fromKey = from.toISOString().slice(0, 10);
+
+    // Pass the canonical local-calendar bounds to listSnapshots so it
+    // doesn't include rows for adjacent UTC days that fall outside the
+    // user's local range.
+    const snapshots = await listSnapshots(userId, storeId, fromCal, toCal, tz);
 
     // Build the set of recent days that need live re-aggregation (excluding
     // today which is handled separately by getTodayLive).
@@ -190,6 +202,127 @@ router.get('/today', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/pl/today/debug — diagnose why today's fbAdSpend is $0.
+ *
+ * Walks the same chain as /today but returns every intermediate result:
+ *   - how many CampaignStoreMapping rows exist for this store
+ *   - which accountIds those campaigns belong to
+ *   - per-account: how many campaigns FB returned, how many matched the
+ *     mapped IDs, what their summed spend is, and any FB error encountered
+ *   - the final breakdown getTodayLive returns
+ *
+ * If you're staring at a $0 today on the dashboard with mappings in place,
+ * hit this URL in the browser and the response shows exactly which step
+ * went wrong (FB call failed, no campaigns matched, account_total > 0 but
+ * mapped_total = 0 → wrong campaign IDs mapped, etc.).
+ */
+router.get('/today/debug', async (req, res) => {
+  try {
+    const { userId, storeId } = req.resolved!;
+    const tz = readTz(req);
+    const { getAccountData } = await import('../services/fb-account-data.service');
+    const userTokenSvc = await import('../services/fb-user-token.service');
+    const poolSvc = await import('../services/fb-system-token.service');
+
+    const mapped = await prisma.$queryRaw<Array<{ campaignId: string; campaignName: string | null; accountId: string }>>`
+      SELECT "campaignId", "campaignName", "accountId"
+      FROM "CampaignStoreMapping"
+      WHERE "userId" = ${userId} AND "storeId" = ${storeId}
+    `;
+
+    if (mapped.length === 0) {
+      return res.json({
+        userId, storeId, tz,
+        mappingCount: 0,
+        diagnosis: 'No CampaignStoreMapping rows for this store. Map at least one campaign in the Mapping tab.',
+        breakdown: null
+      });
+    }
+
+    const today = localCalendarDateUTC(new Date(), tz);
+    const dayStart = new Date(today);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+
+    const accountIds = Array.from(new Set(mapped.map(m => m.accountId)));
+    const campaignSet = new Set(mapped.map(m => m.campaignId));
+
+    // Prefer user's own FB Login token. Pool only as last resort — pool
+    // belongs to the Adlux BM, not the user's BM, so querying a user's
+    // ad account with a pool token returns code 190/465.
+    const fallbackToken = (await userTokenSvc.getRawToken(userId)) || '';
+
+    const accounts: any[] = [];
+    let totalMappedSpend = 0;
+    let totalAccountSpend = 0;
+
+    for (const acc of accountIds) {
+      const entry: any = { accountId: acc };
+      try {
+        const data = await getAccountData(acc, fallbackToken, dayStart, dayEnd);
+        entry.cacheHit = data.meta?.cacheHit;
+        entry.totalCampaignsReturned = data.campaigns?.length || 0;
+        entry.matched = 0;
+        entry.mappedSpend = 0;
+        entry.accountTotalSpend = 0;
+        const topUnmapped: any[] = [];
+        for (const c of data.campaigns || []) {
+          const sp = c.spend || 0;
+          entry.accountTotalSpend += sp;
+          if (campaignSet.has(c.id)) {
+            entry.matched++;
+            entry.mappedSpend += sp;
+          } else if (sp > 0) {
+            topUnmapped.push({ id: c.id, name: c.name || '', spend: sp });
+          }
+        }
+        entry.mappedSpend = +entry.mappedSpend.toFixed(2);
+        entry.accountTotalSpend = +entry.accountTotalSpend.toFixed(2);
+        entry.topUnmappedEarners = topUnmapped.sort((a, b) => b.spend - a.spend).slice(0, 5);
+        totalMappedSpend += entry.mappedSpend;
+        totalAccountSpend += entry.accountTotalSpend;
+      } catch (err: any) {
+        entry.error = err?.message || String(err);
+        entry.fbCode = err?.fbCode;
+        entry.fbSubcode = err?.fbSubcode;
+      }
+      accounts.push(entry);
+    }
+
+    // Build a one-line diagnosis the user can act on.
+    let diagnosis = 'OK';
+    const erroring = accounts.filter(a => a.error);
+    if (erroring.length === accountIds.length) {
+      diagnosis = `All ${accountIds.length} accounts errored on FB call. First error: ${erroring[0].error}`;
+    } else if (totalAccountSpend === 0) {
+      diagnosis = 'FB returned $0 spend across all accounts for today. Either accounts truly have no spend yet or the FB cache is stale.';
+    } else if (totalMappedSpend === 0 && totalAccountSpend > 0) {
+      diagnosis = `Account total = $${totalAccountSpend.toFixed(2)} but mapped sum = $0. Your CampaignStoreMapping rows point to campaign IDs that did NOT return spend — check 'topUnmappedEarners' to see which campaigns actually have spend; map those instead.`;
+    }
+
+    res.json({
+      userId, storeId, tz,
+      todayCalUTC: today.toISOString(),
+      windowUTC: { start: dayStart.toISOString(), end: dayEnd.toISOString() },
+      mappingCount: mapped.length,
+      mappedCampaigns: mapped.slice(0, 50),
+      accountIds,
+      hasUserToken: !!fallbackToken,
+      poolConfigured: poolSvc.isPoolConfigured(),
+      accounts,
+      totals: {
+        mappedSpend: +totalMappedSpend.toFixed(2),
+        accountTotalSpend: +totalAccountSpend.toFixed(2)
+      },
+      diagnosis
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Debug failed' });
+  }
+});
+
 // POST /api/pl/today/invalidate — drop the today cache for this store. Called
 // after data-changing actions that should be reflected immediately (CSV
 // import, manual recompute) instead of waiting for the 5min TTL.
@@ -198,6 +331,25 @@ router.post('/today/invalidate', async (req, res) => {
     const { userId, storeId } = req.resolved!;
     invalidateTodayCache(userId, storeId);
     res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+// POST /api/pl/refresh-fb-metrics — force a fresh sync of FB metrics for
+// this user's mapped campaigns and persist into FbCampaignDailyMetric. Use
+// when the user wants the dashboard / P&L numbers updated NOW instead of
+// waiting for the 5-min scheduler. Returns counts of accounts / rows
+// written. Today's P&L cache is also invalidated so the next /today call
+// re-aggregates from the freshly-persisted rows.
+router.post('/refresh-fb-metrics', async (req, res) => {
+  try {
+    const { userId, storeId } = req.resolved!;
+    const { syncCampaignMetricsForUser, DEFAULT_SYNC_DAYS_BACK } = await import('../services/fb-metrics-store.service');
+    const daysBack = parseInt(req.body?.daysBack ?? String(DEFAULT_SYNC_DAYS_BACK), 10) || DEFAULT_SYNC_DAYS_BACK;
+    const result = await syncCampaignMetricsForUser(userId, daysBack);
+    invalidateTodayCache(userId, storeId);
+    res.json({ ok: true, daysBack, ...result });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Internal error' });
   }

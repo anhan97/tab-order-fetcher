@@ -335,4 +335,7 @@ router.delete('/shipping-companies/:id', async (req, res) => {
   }
 });
 
+// (Basecost CSV import endpoints removed — JSON config import is the
+// canonical bulk-edit flow now.)
+
 export default router;

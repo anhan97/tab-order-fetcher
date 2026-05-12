@@ -17,6 +17,7 @@ import { FACEBOOK_CONFIG } from '../config/facebook';
 import * as pool from './fb-system-token.service';
 import { getAccountData } from './fb-account-data.service';
 import * as userToken from './fb-user-token.service';
+import { readStoreMetricsForDay, syncAccountDay } from './fb-metrics-store.service';
 
 const prisma = new PrismaClient();
 const FB_API = `https://graph.facebook.com/${FACEBOOK_CONFIG.version}`;
@@ -310,6 +311,28 @@ export async function saveCampaignsForStore(input: {
     }
 
     return { added, removed, transferred };
+  }).then(async (result) => {
+    // Fire-and-forget: warm FbCampaignDailyMetric so the dashboard / P&L
+    // see real numbers on the very next render (instead of waiting up to
+    // 5 min for the next scheduler tick). Errors are logged but don't
+    // fail the save — the scheduler will catch up.
+    void (async () => {
+      try {
+        const { syncCampaignMetricsForUser } = await import('./fb-metrics-store.service');
+        const r = await syncCampaignMetricsForUser(userId);
+        console.log(
+          `[campaign-mapping] post-save metrics sync user=${userId} ` +
+          `wrote=${r.written} accounts=${r.accounts} errors=${r.errors}`
+        );
+        // Drop the per-store today cache so getTodayLive recomputes from
+        // the freshly-populated rows on next call.
+        const { invalidateTodayCache } = await import('./daily-pl.service');
+        invalidateTodayCache(userId, storeId);
+      } catch (err: any) {
+        console.warn('[campaign-mapping] post-save metrics sync failed:', err?.message || err);
+      }
+    })();
+    return result;
   });
 }
 
@@ -353,10 +376,10 @@ async function fetchDaySpendFromCache(
   // would silently 400, the catch below would swallow it, and the result
   // would be a deceptive $0. The fallback ensures legacy single-user accounts
   // also see real numbers.
-  let fallbackToken = '';
-  if (!pool.isPoolConfigured()) {
-    fallbackToken = (await userToken.getRawToken(userId)) || '';
-  }
+  // Prefer user's own FB Login token over the Adlux pool. Pool tokens
+  // belong to a different BM and cannot query user-owned ad accounts —
+  // FB returns code 190/465 if we use the wrong one.
+  const fallbackToken = (await userToken.getRawToken(userId)) || '';
 
   const campaignSet = new Set(campaignIds);
   const dateKey = date.toISOString().slice(0, 10);
@@ -451,30 +474,110 @@ function shouldLogSpendOnce(key: string): boolean {
  * For dates older than the TTL window, snapshots act as a permanent record
  * (data stops changing; no need to keep refetching).
  */
+/**
+ * Like `computeStoreFbSpendForDay` but returns the full FB metrics bundle
+ * (spend + impressions + clicks + link_clicks + purchases + purchase value)
+ * summed across the campaigns mapped to (userId, storeId) for the given day.
+ *
+ * Lives next to `computeStoreFbSpendForDay` because it's the same query
+ * pattern; the only difference is what we extract from each campaign row.
+ * Frontend uses these to derive CPC / CTR / CVR / ROAS / CPM in the
+ * Daily breakdown table.
+ *
+ * Old days (outside the live cache TTL window) hit `getAccountData` which
+ * may still serve from snapshot — but the snapshot row only carries spend,
+ * not the rest of the metrics. Caller should treat 0s for impressions etc
+ * on very old days as "not available", not as "really zero".
+ */
+export interface StoreFbMetrics {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
+  purchases: number;
+  purchaseValue: number;
+}
+export async function computeStoreFbMetricsForDay(
+  userId: string,
+  storeId: string,
+  date: Date
+): Promise<StoreFbMetrics> {
+  const empty: StoreFbMetrics = {
+    spend: 0, impressions: 0, clicks: 0, linkClicks: 0, purchases: 0, purchaseValue: 0
+  };
+  const mapped = await prisma.$queryRaw<Array<{ campaignId: string; accountId: string }>>`
+    SELECT "campaignId", "accountId"
+    FROM "CampaignStoreMapping"
+    WHERE "userId" = ${userId} AND "storeId" = ${storeId}
+  `;
+  if (mapped.length === 0) return empty;
+
+  // ── Read path: pull aggregated metrics from FbCampaignDailyMetric.
+  // The 5-min scheduler + saveCampaignsForStore keep this table fresh, so
+  // this is normally the only path the dashboard / P&L touches. No FB
+  // call on the request side, no $0 from a transient FB hiccup.
+  const persisted = await readStoreMetricsForDay(userId, storeId, date);
+  if (persisted.hasData) {
+    return {
+      spend:         persisted.spend,
+      impressions:   persisted.impressions,
+      clicks:        persisted.clicks,
+      linkClicks:    persisted.linkClicks,
+      purchases:     persisted.purchases,
+      purchaseValue: persisted.purchaseValue
+    };
+  }
+
+  // ── Cold-start safety net: nothing in DB for this (store, day). Sync
+  // each mapped account for that day on-demand, then re-read. Keeps the
+  // first ever request after deploy / migration from showing $0 while
+  // the background scheduler hasn't fired yet.
+  const accountIds = Array.from(new Set(mapped.map(m => m.accountId)));
+  const dateKey = date.toISOString().slice(0, 10);
+  const logKey = `cold-start:${userId}:${storeId}:${dateKey}`;
+  if (shouldLogSpendOnce(logKey)) {
+    console.log(
+      `[store-metrics] cold start user=${userId} store=${storeId} day=${dateKey} ` +
+      `accounts=${accountIds.length} — fetching from FB and persisting`
+    );
+  }
+  for (const acc of accountIds) {
+    await syncAccountDay(userId, acc, date);
+  }
+  const second = await readStoreMetricsForDay(userId, storeId, date);
+  if (second.hasData) {
+    return {
+      spend:         second.spend,
+      impressions:   second.impressions,
+      clicks:        second.clicks,
+      linkClicks:    second.linkClicks,
+      purchases:     second.purchases,
+      purchaseValue: second.purchaseValue
+    };
+  }
+  return empty;
+}
+
 export async function computeStoreFbSpendForDay(
   userId: string,
   storeId: string,
   date: Date
 ): Promise<number> {
+  const m = await computeStoreFbMetricsForDay(userId, storeId, date);
+  if (m.spend > 0) return m.spend;
+
+  // Final fallback: very old days where FbCampaignDailyMetric was never
+  // populated (rolling sync window only goes back ~14 days). Read from
+  // the EOD snapshot table that historical data was archived into.
   const mapped = await prisma.$queryRaw<Array<{ campaignId: string; accountId: string }>>`
     SELECT "campaignId", "accountId"
     FROM "CampaignStoreMapping"
     WHERE "userId" = ${userId} AND "storeId" = ${storeId}
   `;
   if (mapped.length === 0) return 0;
-
-  const campaignIds = mapped.map(m => m.campaignId);
-  const accountIds = Array.from(new Set(mapped.map(m => m.accountId)));
+  const campaignIds = mapped.map(x => x.campaignId);
+  const accountIds = Array.from(new Set(mapped.map(x => x.accountId)));
   const day = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-
-  // Live cache first — single source of truth for any recent-enough day.
-  // The cache itself decides freshness via tiered TTL.
-  const liveSpend = await fetchDaySpendFromCache(userId, accountIds, campaignIds, day);
-  if (liveSpend > 0) return liveSpend;
-
-  // Live returned 0 — could be a real $0 day OR FB call failed/empty.
-  // Try the snapshot as a backup so we don't lose historical values for
-  // days where the live call no longer returns data (very old dates).
   const rows = await prisma.$queryRaw<Array<{ spend: any }>>`
     SELECT "spend" FROM "FacebookAdInsightSnapshot"
     WHERE "level" = 'campaign'
@@ -535,12 +638,33 @@ export async function getStoreAdSpend(
 
   const dailyMap = new Map<string, { spend: number; campaigns: Set<string> }>();
 
+  // Read the whole window from FbCampaignDailyMetric in one query — single
+  // source of truth for the entire system. The 5-min sync scheduler keeps
+  // this fresh; this read never hits FB.
+  const persistedRows = await prisma.$queryRaw<Array<{ date: Date; spend: any; campaignId: string }>>`
+    SELECT m."date", m."spend", m."campaignId"
+    FROM "FbCampaignDailyMetric" m
+    WHERE m."userId"     = ${userId}
+      AND m."campaignId" = ANY(${campaignIds}::text[])
+      AND m."date"       >= ${sinceDay}
+      AND m."date"       <= ${untilDay}
+  `;
   for (let d = new Date(sinceDay); d.getTime() <= untilDay.getTime(); d.setUTCDate(d.getUTCDate() + 1)) {
-    const dayCopy = new Date(d);
-    const dateKey = dayCopy.toISOString().slice(0, 10);
-    const live = await fetchDaySpendFromCache(userId, accountIds, campaignIds, dayCopy);
-    dailyMap.set(dateKey, { spend: live, campaigns: new Set<string>() });
+    const dateKey = new Date(d).toISOString().slice(0, 10);
+    dailyMap.set(dateKey, { spend: 0, campaigns: new Set<string>() });
   }
+  for (const r of persistedRows) {
+    const k = (r.date instanceof Date ? r.date : new Date(r.date as any)).toISOString().slice(0, 10);
+    const cur = dailyMap.get(k) || { spend: 0, campaigns: new Set<string>() };
+    cur.spend += parseFloat(String(r.spend) || '0');
+    cur.campaigns.add(r.campaignId);
+    dailyMap.set(k, cur);
+  }
+  // Suppress "fetchDaySpendFromCache is unused" — `accountIds` no longer
+  // drives the per-day pull. Reading from the persisted table makes it
+  // unnecessary, but we still need accountIds for the snapshot fallback
+  // below.
+  void accountIds;
 
   // Fill in campaign counts (and rescue 0-spend days) from snapshots —
   // useful for very old dates where live cache may have evicted, plus

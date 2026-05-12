@@ -41,6 +41,13 @@ export function comboCogs(
     return direct.override_cost;
   }
 
+  // Flat mode: a hard combo price set by the merchant. Useful when combo
+  // cost is negotiated rather than derived (e.g. 2x BAG-BLACK costs $30
+  // with the supplier even though 1x costs $22).
+  if (c.cogs_rule.mode === "flat") {
+    return +(+c.cogs_rule.total_cost || 0).toFixed(2);
+  }
+
   // mode === "sum"
   const sum = c.items.reduce((acc, it) =>
     acc + it.qty * productCogs(cfg, it.variant_id, country, shipper), 0);
@@ -121,6 +128,19 @@ export function calculateComboCogs(
       unit_cost: direct.override_cost,
       total_cost: direct.override_cost * quantity,
       calculation_method: 'combo_override'
+    };
+  }
+
+  if (c.cogs_rule.mode === "flat") {
+    const unit = +(+c.cogs_rule.total_cost || 0).toFixed(2);
+    return {
+      combo_id: comboId,
+      country,
+      shipping_company: shipper,
+      quantity,
+      unit_cost: unit,
+      total_cost: +(unit * quantity).toFixed(2),
+      calculation_method: 'combo_flat'
     };
   }
 
@@ -291,12 +311,20 @@ export function validateCogsConfig(cfg: CogsConfig): { valid: boolean; errors: s
     });
 
     if (combo.cogs_rule.mode === "sum") {
-      if (combo.cogs_rule.discount_type === "percent" && 
+      if (combo.cogs_rule.discount_type === "percent" &&
+          combo.cogs_rule.discount_value !== undefined &&
           (combo.cogs_rule.discount_value < 0 || combo.cogs_rule.discount_value > 100)) {
         errors.push(`Combo ${index}: Invalid percent discount value`);
       }
-      if (combo.cogs_rule.discount_type === "fixed" && combo.cogs_rule.discount_value < 0) {
+      if (combo.cogs_rule.discount_type === "fixed" &&
+          combo.cogs_rule.discount_value !== undefined &&
+          combo.cogs_rule.discount_value < 0) {
         errors.push(`Combo ${index}: Invalid fixed discount value`);
+      }
+    }
+    if (combo.cogs_rule.mode === "flat") {
+      if (typeof combo.cogs_rule.total_cost !== 'number' || combo.cogs_rule.total_cost < 0) {
+        errors.push(`Combo ${index}: Flat combo total_cost must be a non-negative number`);
       }
     }
   });

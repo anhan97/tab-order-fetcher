@@ -209,27 +209,38 @@ export const OrdersTable = ({
   //     basecost-redesign dropped FacebookAdSpend.
   useEffect(() => {
     if (!shopifyConfig?.storeUrl || !shopifyConfig?.accessToken) return;
-    const ctrl = new AbortController();
-    setIsLoadingAdSpend(true);
-    (async () => {
+    const dayMs = 24 * 3600_000;
+    const rangeIncludesToday = (() => {
+      const now = Date.now();
+      const fromDay = Math.floor(dateRange.from.getTime() / dayMs);
+      const toDay = Math.floor(dateRange.to.getTime() / dayMs);
+      const todayDay = Math.floor(now / dayMs);
+      return fromDay <= todayDay && toDay >= todayDay;
+    })();
+    const isSingleToday = (() => {
+      const now = Date.now();
+      const fromDay = Math.floor(dateRange.from.getTime() / dayMs);
+      const toDay = Math.floor(dateRange.to.getTime() / dayMs);
+      const todayDay = Math.floor(now / dayMs);
+      return fromDay === todayDay && toDay === todayDay;
+    })();
+
+    let cancelled = false;
+    let ctrl: AbortController | null = null;
+
+    const fetchOnce = async () => {
+      ctrl?.abort();
+      ctrl = new AbortController();
+      setIsLoadingAdSpend(true);
       try {
         const headers = {
           'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
           'X-Shopify-Access-Token': shopifyConfig.accessToken,
           ...(timezone ? { 'X-Tz': timezone } : {})
         };
-        // Decide: today endpoint (live, memo 5min) for single-day TODAY;
-        // /daily otherwise (sums historical snapshots + merges live today
-        // when today is in range).
-        const dayMs = 24 * 3600_000;
-        const isSingleToday = (() => {
-          const now = Date.now();
-          const fromDay = Math.floor(dateRange.from.getTime() / dayMs);
-          const toDay = Math.floor(dateRange.to.getTime() / dayMs);
-          const todayDay = Math.floor(now / dayMs);
-          return fromDay === todayDay && toDay === todayDay;
-        })();
-
+        // Today single-day → /api/pl/today (5min memo). Multi-day or
+        // historical → /api/pl/daily (recent days re-aggregated live, older
+        // from snapshot). Both honour CampaignStoreMapping for this store.
         let total = 0;
         if (isSingleToday) {
           const res = await fetch('/api/pl/today', { headers, signal: ctrl.signal });
@@ -251,17 +262,30 @@ export const OrdersTable = ({
             }, 0);
           }
         }
-        setMappedAdSpend(total);
+        if (!cancelled) setMappedAdSpend(total);
       } catch (e) {
-        if ((e as any)?.name !== 'AbortError') {
+        if ((e as any)?.name !== 'AbortError' && !cancelled) {
           console.warn('OrdersTable: mapped ad spend fetch failed:', (e as Error).message);
           setMappedAdSpend(0);
         }
       } finally {
-        setIsLoadingAdSpend(false);
+        if (!cancelled) setIsLoadingAdSpend(false);
       }
-    })();
-    return () => ctrl.abort();
+    };
+
+    void fetchOnce();
+    // Auto-refresh every 5 min while range includes today — matches
+    // /api/pl/today's memo TTL so each tick lands on a fresh recompute.
+    // Avoids the "F5 to update" complaint.
+    let interval: ReturnType<typeof setInterval> | null = null;
+    if (rangeIncludesToday) {
+      interval = setInterval(() => { void fetchOnce(); }, 5 * 60 * 1000);
+    }
+    return () => {
+      cancelled = true;
+      ctrl?.abort();
+      if (interval) clearInterval(interval);
+    };
   }, [shopifyConfig?.storeUrl, shopifyConfig?.accessToken, dateRange, timezone, mappingVersion]);
 
   const fetchOrders = async () => {

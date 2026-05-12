@@ -8,7 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger
 } from '@/components/ui/dialog';
-import { Loader2, Plus, Trash2, Star, ExternalLink, Eye, EyeOff, AlertCircle, Save, CheckCircle2, LogIn } from 'lucide-react';
+import { Loader2, Plus, Trash2, Star, ExternalLink, Eye, EyeOff, AlertCircle, Save, CheckCircle2, LogIn, Users as UsersIcon } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiFetch } from '@/utils/apiClient';
 import { FacebookAdsApiClient } from '@/utils/facebookAdsApi';
@@ -55,6 +55,21 @@ export function FacebookAppsManager() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<SafeFbApp | null>(null);
   const [creating, setCreating] = useState(false);
+  const [managingUsers, setManagingUsers] = useState<SafeFbApp | null>(null);
+  const [usersByApp, setUsersByApp] = useState<Record<string, number>>({});
+
+  // Load assignee counts for every app so the card can show "N users".
+  const loadAssigneeCounts = async (apps: SafeFbApp[]) => {
+    const entries = await Promise.all(apps.map(async a => {
+      try {
+        const r = await apiFetch<{ users: Array<unknown> }>(`/api/facebook/my-apps/${a.fbAppId}/users`);
+        return [a.fbAppId, r.users.length] as const;
+      } catch {
+        return [a.fbAppId, 0] as const;
+      }
+    }));
+    setUsersByApp(Object.fromEntries(entries));
+  };
 
   const load = async () => {
     setLoading(true);
@@ -65,6 +80,8 @@ export function FacebookAppsManager() {
       ]);
       setApps(a.apps);
       setConnections(c.connections);
+      // Fire-and-forget — assignee counts shouldn't block the main view.
+      void loadAssigneeCounts(a.apps);
     } catch (e: any) {
       toast({ title: 'Load failed', description: e.message, variant: 'destructive' });
     } finally {
@@ -241,6 +258,16 @@ export function FacebookAppsManager() {
                     <LogIn className="h-3.5 w-3.5 mr-1" />
                     {conn?.connected ? 'Reconnect' : 'Connect'}
                   </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setManagingUsers(app)}
+                    title="Assign which users can connect through this app">
+                    <UsersIcon className="h-4 w-4 mr-1" />
+                    Users
+                    {usersByApp[app.fbAppId] > 0 && (
+                      <Badge className="ml-1 bg-slate-100 text-slate-700 text-[10px] h-4 px-1.5">
+                        {usersByApp[app.fbAppId]}
+                      </Badge>
+                    )}
+                  </Button>
                   <Button size="sm" variant="ghost" onClick={() => setEditing(app)}>
                     Edit
                   </Button>
@@ -266,6 +293,16 @@ export function FacebookAppsManager() {
             onClose={() => setEditing(null)}
             onSaved={async () => { setEditing(null); await load(); }}
           />
+        </Dialog>
+
+        <Dialog open={!!managingUsers} onOpenChange={(open) => { if (!open) setManagingUsers(null); }}>
+          {managingUsers && (
+            <AppUsersDialog
+              app={managingUsers}
+              onClose={() => setManagingUsers(null)}
+              onSaved={async () => { setManagingUsers(null); await load(); }}
+            />
+          )}
         </Dialog>
 
         <p className="text-xs text-slate-500 leading-relaxed pt-1">
@@ -405,6 +442,156 @@ function AppDialog({
         <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700">
           {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
           {isEdit ? 'Update' : 'Save'}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+/**
+ * Manage which users (besides admin) can connect FB through this app.
+ *
+ * Loads the full user list via /api/admin/users and the current assignees
+ * via /api/facebook/my-apps/:fbAppId/users. Saving sends the new full
+ * assignee set with PUT — backend reconciles add/remove atomically. The
+ * admin themselves is never an assignee (they own the app), so we hide
+ * the admin row from the picker.
+ */
+function AppUsersDialog({
+  app, onClose, onSaved
+}: {
+  app: SafeFbApp;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const { toast } = useToast();
+  interface UserRow {
+    id: string; email: string; firstName: string | null; lastName: string | null; role: string;
+  }
+  interface AssignedRow { assignedUserId: string }
+
+  const [allUsers, setAllUsers] = useState<UserRow[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        // Pull users + current assignees in parallel.
+        const [u, a] = await Promise.all([
+          apiFetch<{ users: UserRow[] }>('/api/admin/users?limit=500'),
+          apiFetch<{ users: AssignedRow[] }>(`/api/facebook/my-apps/${app.fbAppId}/users`)
+        ]);
+        if (cancelled) return;
+        setAllUsers(u.users);
+        setSelected(new Set(a.users.map(r => r.assignedUserId)));
+      } catch (e: any) {
+        toast({ title: 'Load failed', description: e.message, variant: 'destructive' });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [app.fbAppId]);
+
+  const toggle = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await apiFetch(`/api/facebook/my-apps/${app.fbAppId}/users`, {
+        method: 'PUT',
+        body: JSON.stringify({ userIds: Array.from(selected) })
+      });
+      toast({ title: 'Users updated', description: `${selected.size} user(s) can connect via ${app.appName || app.fbAppId}` });
+      await onSaved();
+    } catch (e: any) {
+      toast({ title: 'Save failed', description: e.message, variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Hide admins from the assignee picker — admins use their OWN registered
+  // apps, they don't get pivot rows. The dialog header makes that clear.
+  const candidates = allUsers
+    .filter(u => u.role !== 'admin')
+    .filter(u => !search || u.email.toLowerCase().includes(search.toLowerCase())
+              || `${u.firstName || ''} ${u.lastName || ''}`.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <DialogContent className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle>
+          Assign users to {app.appName || `App ${app.fbAppId}`}
+        </DialogTitle>
+      </DialogHeader>
+      <div className="space-y-3">
+        <Alert>
+          <UsersIcon className="h-4 w-4" />
+          <AlertDescription className="text-sm">
+            Selected users see a <strong>Connect</strong> button on /facebook
+            and log in through this app's credentials. The App Secret stays
+            on your row — they never see it. Admins are not listed (they
+            already access their own apps directly).
+          </AlertDescription>
+        </Alert>
+        <Input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by email or name…"
+          className="h-9"
+        />
+        <div className="border border-slate-200 rounded-md max-h-80 overflow-y-auto">
+          {loading && (
+            <div className="p-6 flex items-center justify-center text-slate-400">
+              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading users…
+            </div>
+          )}
+          {!loading && candidates.length === 0 && (
+            <div className="p-6 text-center text-sm text-slate-400">
+              No matching non-admin users.
+            </div>
+          )}
+          {!loading && candidates.map(u => (
+            <label
+              key={u.id}
+              className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-b-0"
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(u.id)}
+                onChange={() => toggle(u.id)}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{u.email}</div>
+                <div className="text-xs text-slate-500 truncate">
+                  {[u.firstName, u.lastName].filter(Boolean).join(' ') || '—'} · {u.role}
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+        <div className="text-xs text-slate-500">
+          {selected.size} user{selected.size === 1 ? '' : 's'} selected
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button onClick={save} disabled={saving || loading} className="bg-blue-600 hover:bg-blue-700">
+          {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          Save
         </Button>
       </DialogFooter>
     </DialogContent>

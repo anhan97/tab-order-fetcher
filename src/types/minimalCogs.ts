@@ -27,7 +27,8 @@ export type ComboOverride = {
 
 export type ComboCogsRule =
   | { mode: "sum"; discount_type?: "percent" | "fixed" | null; discount_value?: number }
-  | { mode: "override" };      // use overrides only
+  | { mode: "override" }       // use country/shipper overrides only
+  | { mode: "flat"; total_cost: number };  // hard combo price (e.g. 2 BAG-BLACK = $30)
 
 export type ComboCog = {
   combo_id: string;
@@ -54,7 +55,7 @@ export type CogsResult = {
   quantity: number;
   unit_cost: number;
   total_cost: number;
-  calculation_method: 'base_cost' | 'override' | 'combo_sum' | 'combo_override';
+  calculation_method: 'base_cost' | 'override' | 'combo_sum' | 'combo_override' | 'combo_flat';
   applied_discount?: {
     type: 'percent' | 'fixed';
     value: number;

@@ -11,11 +11,12 @@ import { RegisterPage } from "@/pages/RegisterPage";
 import { ConnectPage } from "@/pages/ConnectPage";
 import { OrdersPage } from "@/pages/OrdersPage";
 import { TrackingPage } from "@/pages/TrackingPage";
-import { AnalyticsPage } from "@/pages/AnalyticsPage";
+// AnalyticsPage retired — /analytics now redirects to /orders (Overview tab).
+// Component file kept on disk pending full deletion.
 import { CogsPage } from "@/pages/CogsPage";
 import { FacebookPage } from "@/pages/FacebookPage";
 import { ContentAnalyticsPage } from "@/pages/ContentAnalyticsPage";
-import { ProfitPage } from "@/pages/ProfitPage";
+// ProfitPage retired — /profit now redirects to /orders (Daily P&L tab).
 import { AdminPage } from "@/pages/AdminPage";
 import { PrivacyPolicyPage } from "@/pages/PrivacyPolicyPage";
 import { TermsOfServicePage } from "@/pages/TermsOfServicePage";
@@ -82,11 +83,9 @@ const AppRoutes = () => {
           </ProtectedRoute>
         } />
 
-        <Route path="/analytics" element={
-          <ProtectedRoute>
-            <AnalyticsPage />
-          </ProtectedRoute>
-        } />
+        {/* /analytics + /profit retired — content lives under /orders tabs.
+            Old bookmarks / inbound links keep working via redirect. */}
+        <Route path="/analytics" element={<Navigate to="/orders" replace />} />
 
         <Route path="/cogs" element={
           <ProtectedRoute>
@@ -106,11 +105,7 @@ const AppRoutes = () => {
           </ProtectedRoute>
         } />
 
-        <Route path="/profit" element={
-          <ProtectedRoute>
-            <ProfitPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/profit" element={<Navigate to="/orders" replace />} />
 
         <Route path="/admin" element={
           <ProtectedRoute>

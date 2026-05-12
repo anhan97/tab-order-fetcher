@@ -4,7 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { BarChart3, Loader2, Settings, Link2, LogOut, Rocket, Stethoscope, Library } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { FacebookAdsConnection } from '@/components/FacebookAdsConnection';
+import { AvailableAppsPicker } from '@/components/AvailableAppsPicker';
 import { FacebookAdsManager } from '@/components/FacebookAdsManager';
 import { CampaignMappingPanel } from '@/components/CampaignMappingPanel';
 import { MyFacebookAppCard } from '@/components/MyFacebookAppCard';
@@ -39,6 +41,8 @@ export const FacebookPage = () => {
     facebookAccounts
   } = useAppContext();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [disconnecting, setDisconnecting] = useState(false);
 
   if (!isShopifyConnected) {
@@ -61,21 +65,22 @@ export const FacebookPage = () => {
   if (!isFacebookConnected || !selectedAccount) {
     return (
       <div className="max-w-2xl mx-auto mt-8 space-y-4">
-        {/* Per-user FB App credentials must be configured before the SDK
-            can do anything useful. Lives at the top so first-time users
-            see it before clicking Connect and getting a confusing error. */}
-        <MyFacebookAppCard />
-        <Card className="p-10 text-center bg-gradient-to-br from-white to-blue-50/30 border-blue-100">
-          <div className="p-5 bg-gradient-to-br from-blue-500 to-violet-600 rounded-2xl w-20 h-20 mx-auto flex items-center justify-center shadow-lg shadow-blue-500/30 mb-6">
-            <BarChart3 className="h-10 w-10 text-white" />
+        {/* Admin's setup flow keeps the original MyFacebookAppCard so they
+            can register a fresh app inline. Non-admin users get the
+            AvailableAppsPicker which lists every app they can connect
+            through — own apps + apps the admin has assigned via the
+            FacebookAppUserAccess pivot. */}
+        {isAdmin && <MyFacebookAppCard />}
+        <AvailableAppsPicker onConnectionSuccess={handleFacebookConnectionSuccess} />
+        {/* Legacy single-button connect kept as fallback in case the
+            picker can't render (e.g. /available-apps fails). Hidden by
+            default — the picker handles the happy path. */}
+        <details className="text-xs text-slate-400">
+          <summary className="cursor-pointer hover:text-slate-600">Show legacy single-app connect</summary>
+          <div className="mt-3">
+            <FacebookAdsConnection onConnectionSuccess={handleFacebookConnectionSuccess} />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Connect Facebook</h2>
-          <p className="text-slate-600 mb-8">
-            Sign in with your Facebook account to manage all your BMs, ad accounts, and pages.
-            Your token gets exchanged for a 60-day long-lived token and auto-refreshes daily.
-          </p>
-          <FacebookAdsConnection onConnectionSuccess={handleFacebookConnectionSuccess} />
-        </Card>
+        </details>
       </div>
     );
   }
@@ -148,10 +153,12 @@ export const FacebookPage = () => {
             <Link2 className="h-4 w-4" />
             Mapping
           </TabsTrigger>
-          <TabsTrigger value="app" className="gap-2">
-            <Settings className="h-4 w-4" />
-            FB App
-          </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="app" className="gap-2">
+              <Settings className="h-4 w-4" />
+              FB App
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="assets" className="m-0">
@@ -183,9 +190,11 @@ export const FacebookPage = () => {
           <CampaignMappingPanel />
         </TabsContent>
 
-        <TabsContent value="app" className="m-0">
-          <FacebookAppsManager />
-        </TabsContent>
+        {isAdmin && (
+          <TabsContent value="app" className="m-0">
+            <FacebookAppsManager />
+          </TabsContent>
+        )}
       </Tabs>
 
       {!isFacebookConnected && (
