@@ -28,6 +28,9 @@ backend/backend/
 # Local supplier CSVs / runtime data — may contain customer-identifying rows
 backend/data/
 
+# Playwright MCP debug artifacts (console dumps, page snapshots)
+.playwright-mcp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

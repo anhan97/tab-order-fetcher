@@ -1,13 +1,24 @@
 /**
- * Bulk-launch ads endpoints. Backed by fb-ad-launch.service which encapsulates
- * the campaign / ad set / ad / media-upload pipeline. This route layer only
- * deals with HTTP — multipart parsing, SSE streaming, store resolution.
+ * Auto-launch ads — HTTP layer.
  *
  * Routes:
- *   GET  /api/ads/pages?adAccountId=…    — pages this ad account can promote
- *   GET  /api/ads/pixels?adAccountId=…   — pixels on the ad account
- *   POST /api/ads/bulk-launch (multipart) — launch the campaign and stream
- *                                           progress events as SSE.
+ *   GET    /api/ads/pages?adAccountId=…           — pages this ad account can promote
+ *   GET    /api/ads/pixels?adAccountId=…          — pixels on the ad account
+ *   GET    /api/ads/audiences?adAccountId=…       — custom + lookalike audiences
+ *   GET    /api/ads/interests?q=cats&adAccountId= — interest search (FB targeting search)
+ *   POST   /api/ads/bulk-launch   (multipart)     — launch + SSE progress
+ *
+ *   GET    /api/ads/templates                     — list saved wizard templates
+ *   POST   /api/ads/templates                     — create
+ *   PUT    /api/ads/templates/:id                 — update
+ *   DELETE /api/ads/templates/:id                 — delete
+ *
+ *   GET    /api/ads/history                       — list past launches
+ *   GET    /api/ads/history/:id                   — detail incl. per-file items
+ *   POST   /api/ads/history/:id/rollback          — delete the FB campaign
+ *
+ * The route layer handles multipart parsing, SSE streaming, store /
+ * token resolution. All FB-side logic lives in fb-ad-launch.service.ts.
  */
 
 import express, { Request, Response } from 'express';
@@ -17,18 +28,17 @@ import {
   runBulkLaunch,
   listPromotablePages,
   listPixels,
+  listCustomAudiences,
+  searchInterests,
   ProgressEvent,
   AdCopy,
-  UploadedCreative
+  UploadedCreative,
+  AdSetSpec
 } from '../services/fb-ad-launch.service';
 import * as userToken from '../services/fb-user-token.service';
+import * as templates from '../services/fb-ad-launch-template.service';
+import * as history from '../services/fb-ad-launch-history.service';
 
-/**
- * Pull the caller's stored long-lived FB token from UserFacebookConnection.
- * Used as the fallback for service-layer calls so user-token mode reaches
- * FB instead of silently falling through to the Adlux pool. Returns
- * undefined when the user has no FB connection (system-bm mode path).
- */
 async function resolveUserFbToken(userId: string | undefined): Promise<string | undefined> {
   if (!userId) return undefined;
   try {
@@ -41,13 +51,12 @@ async function resolveUserFbToken(userId: string | undefined): Promise<string | 
 
 const router = express.Router();
 
-// Per-file 500 MB hard cap (matches the FB video limit) — multer rejects
-// anything larger before the handler runs. Files are kept in memory because
-// the FB upload happens immediately and we never persist them.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 500 * 1024 * 1024, files: 50 }
 });
+
+// ─── Read endpoints powering the wizard ────────────────────────────────────
 
 router.get('/pages', resolveStore, async (req: Request, res: Response) => {
   try {
@@ -73,6 +82,125 @@ router.get('/pixels', resolveStore, async (req: Request, res: Response) => {
   }
 });
 
+router.get('/audiences', resolveStore, async (req: Request, res: Response) => {
+  try {
+    const adAccountId = String(req.query.adAccountId || '');
+    if (!adAccountId) return res.status(400).json({ error: 'adAccountId is required' });
+    const fallback = await resolveUserFbToken(req.resolved?.userId);
+    const audiences = await listCustomAudiences(adAccountId, fallback);
+    res.json({ audiences });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+router.get('/interests', resolveStore, async (req: Request, res: Response) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json({ interests: [] });
+    const adAccountId = req.query.adAccountId ? String(req.query.adAccountId) : undefined;
+    const fallback = await resolveUserFbToken(req.resolved?.userId);
+    const interests = await searchInterests(q, fallback, adAccountId);
+    res.json({ interests });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+// ─── Templates ─────────────────────────────────────────────────────────────
+
+router.get('/templates', resolveStore, async (req: Request, res: Response) => {
+  try {
+    const userId = req.resolved?.userId;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+    res.json({ templates: await templates.listTemplates(userId) });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+router.post('/templates', resolveStore, express.json({ limit: '2mb' }), async (req: Request, res: Response) => {
+  try {
+    const userId = req.resolved?.userId;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+    const { name, config, isDefault } = req.body || {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
+    if (!config || typeof config !== 'object') return res.status(400).json({ error: 'config (object) is required' });
+    const row = await templates.createTemplate(userId, { name, config, isDefault: !!isDefault });
+    res.status(201).json({ template: row });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+router.put('/templates/:id', resolveStore, express.json({ limit: '2mb' }), async (req: Request, res: Response) => {
+  try {
+    const userId = req.resolved?.userId;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+    const { name, config, isDefault } = req.body || {};
+    const row = await templates.updateTemplate(userId, req.params.id, {
+      name, config, isDefault: typeof isDefault === 'boolean' ? isDefault : undefined
+    });
+    if (!row) return res.status(404).json({ error: 'Template not found' });
+    res.json({ template: row });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+router.delete('/templates/:id', resolveStore, async (req: Request, res: Response) => {
+  try {
+    const userId = req.resolved?.userId;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+    const ok = await templates.deleteTemplate(userId, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Template not found' });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+// ─── History ───────────────────────────────────────────────────────────────
+
+router.get('/history', resolveStore, async (req: Request, res: Response) => {
+  try {
+    const userId = req.resolved?.userId;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+    const accountId = req.query.accountId ? String(req.query.accountId).replace(/^act_/, '') : undefined;
+    res.json({ history: await history.listHistory(userId, { limit, accountId }) });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+router.get('/history/:id', resolveStore, async (req: Request, res: Response) => {
+  try {
+    const userId = req.resolved?.userId;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+    const row = await history.getHistoryDetail(userId, req.params.id);
+    if (!row) return res.status(404).json({ error: 'Launch not found' });
+    res.json({ history: row });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+router.post('/history/:id/rollback', resolveStore, async (req: Request, res: Response) => {
+  try {
+    const userId = req.resolved?.userId;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+    const fallback = await resolveUserFbToken(userId);
+    const r = await history.rollbackHistory(userId, req.params.id, fallback);
+    if (!r.ok) return res.status(400).json(r);
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+// ─── Bulk launch (multipart + SSE) ────────────────────────────────────────
+
 router.post(
   '/bulk-launch',
   resolveStore,
@@ -85,47 +213,65 @@ router.post(
       return res.status(400).json({ error: 'At least one creative file is required' });
     }
 
-    const required = ['adAccountId', 'campaignName', 'pageId', 'pixelId', 'linkUrl', 'dailyBudget'];
+    const required = ['adAccountId', 'campaignName', 'pageId', 'pixelId', 'linkUrl'];
     for (const k of required) {
       if (!body[k]) return res.status(400).json({ error: `${k} is required` });
     }
 
-    // Per-file ad copy override map: filename → { primary_texts, headlines, descriptions }
     let perFileCopy: Record<string, AdCopy> = {};
     if (body.perFileCopy) {
-      try {
-        perFileCopy = JSON.parse(body.perFileCopy);
-      } catch {
-        return res.status(400).json({ error: 'perFileCopy must be valid JSON' });
-      }
+      try { perFileCopy = JSON.parse(body.perFileCopy); }
+      catch { return res.status(400).json({ error: 'perFileCopy must be valid JSON' }); }
     }
 
     let globalCopy: AdCopy | undefined;
     if (body.globalCopy) {
-      try {
-        globalCopy = JSON.parse(body.globalCopy);
-      } catch {
-        return res.status(400).json({ error: 'globalCopy must be valid JSON' });
-      }
+      try { globalCopy = JSON.parse(body.globalCopy); }
+      catch { return res.status(400).json({ error: 'globalCopy must be valid JSON' }); }
     }
 
-    // SSE setup — flush headers immediately so the browser opens the stream.
+    let adSets: AdSetSpec[] = [];
+    if (body.adSets) {
+      try { adSets = JSON.parse(body.adSets); }
+      catch { return res.status(400).json({ error: 'adSets must be valid JSON' }); }
+    }
+    // Backwards-compat: if the legacy "countries" field came in, synthesise
+    // a single ad set so old callers (and quick-launch UIs) still work.
+    if (!adSets.length) {
+      const legacyCountries = body.countries
+        ? String(body.countries).split(',').map((s: string) => s.trim()).filter(Boolean)
+        : ['US', 'GB', 'CA', 'AU'];
+      adSets = [{
+        name: 'Ad Set',
+        audience: { name: 'Default', countries: legacyCountries }
+      }];
+    }
+    if (adSets.length > 20) {
+      return res.status(400).json({ error: 'Too many ad sets — cap is 20 per launch' });
+    }
+
+    let perFileAdSetIndexes: Record<string, number[]> = {};
+    if (body.perFileAdSetIndexes) {
+      try { perFileAdSetIndexes = JSON.parse(body.perFileAdSetIndexes); }
+      catch { return res.status(400).json({ error: 'perFileAdSetIndexes must be valid JSON' }); }
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering if proxied
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
     const send = (e: ProgressEvent) => {
       res.write(`data: ${JSON.stringify(e)}\n\n`);
     };
 
-    // Map multer files → service input shape, attaching per-file copy when supplied.
     const creatives: UploadedCreative[] = files.map(f => ({
       filename: f.originalname,
       buffer: f.buffer,
       mimetype: f.mimetype,
-      copy: perFileCopy[f.originalname]
+      copy: perFileCopy[f.originalname],
+      adSetIndexes: perFileAdSetIndexes[f.originalname]
     }));
 
     try {
@@ -138,13 +284,19 @@ router.post(
           instagramActorId: body.instagramActorId ? String(body.instagramActorId) : undefined,
           linkUrl: String(body.linkUrl),
           urlParams: body.urlParams ? String(body.urlParams) : undefined,
-          dailyBudget: parseInt(String(body.dailyBudget), 10) || 5000,
-          bidStrategy: (body.bidStrategy as any) || 'bid_cap',
-          bidAmount: body.bidAmount ? parseInt(String(body.bidAmount), 10) : 1000,
+          campaignDailyBudget: body.campaignDailyBudget
+            ? parseInt(String(body.campaignDailyBudget), 10)
+            : (body.dailyBudget ? parseInt(String(body.dailyBudget), 10) : undefined),
+          bidStrategy: body.bidStrategy as any,
+          bidAmount: body.bidAmount ? parseInt(String(body.bidAmount), 10) : undefined,
+          objective: body.objective ? String(body.objective) : undefined,
           callToAction: body.callToAction ? String(body.callToAction) : undefined,
-          countries: body.countries ? String(body.countries).split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
+          startTime: body.startTime ? parseInt(String(body.startTime), 10) : undefined,
+          status: (body.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED'),
+          adSets,
           globalCopy,
-          fallbackAccessToken: await resolveUserFbToken(req.resolved?.userId)
+          fallbackAccessToken: await resolveUserFbToken(req.resolved?.userId),
+          userId: req.resolved?.userId
         },
         creatives,
         send
