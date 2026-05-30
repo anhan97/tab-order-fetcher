@@ -58,6 +58,116 @@ const upload = multer({
 
 // ─── Read endpoints powering the wizard ────────────────────────────────────
 
+/**
+ * GET /api/ads/diag?adAccountId=…
+ *
+ * One-shot diagnostic. Walks the same chain the wizard does and returns
+ * every intermediate result so the operator can see exactly which step
+ * fails: token scope, /me/permissions, /promote_pages, /me/accounts,
+ * /adspixels. No data is filtered — raw FB responses (truncated to
+ * keep payload small) are surfaced verbatim.
+ *
+ * Use when the Page/Pixel dropdown is mysteriously empty.
+ */
+router.get('/diag', resolveStore, async (req: Request, res: Response) => {
+  const out: any = { steps: {} };
+  try {
+    const userId = req.resolved?.userId;
+    const adAccountId = String(req.query.adAccountId || '');
+    out.userId = userId;
+    out.adAccountId = adAccountId;
+    if (!userId) return res.status(401).json({ error: 'unauthenticated', ...out });
+    if (!adAccountId) return res.status(400).json({ error: 'adAccountId required', ...out });
+
+    // 1. Token in DB.
+    const fetch = (await import('node-fetch')).default;
+    const PrismaClient = (await import('@prisma/client')).PrismaClient;
+    const prisma = new PrismaClient();
+    const tokRows = await prisma.$queryRaw<Array<{
+      fbAppId: string; fbUserName: string | null; scopes: string | null;
+      expiresAt: Date | null; lastRefreshedAt: Date | null;
+      lastError: string | null; tokLen: number;
+    }>>`
+      SELECT "fbAppId", "fbUserName", "scopes", "expiresAt",
+             "lastRefreshedAt", "lastError", LENGTH("accessToken") AS "tokLen"
+      FROM "UserFacebookConnection"
+      WHERE "userId" = ${userId}
+    `;
+    out.steps.db_connections = tokRows;
+
+    const token = await resolveUserFbToken(userId);
+    out.steps.token_resolved = token ? `len=${token.length}` : null;
+
+    if (!token) {
+      out.diagnosis = 'No FB token in DB for this user. /facebook → Connect Facebook.';
+      return res.json(out);
+    }
+
+    // 2. Live /me/permissions — what scopes FB ACTUALLY thinks the token has.
+    const FB_BASE = 'https://graph.facebook.com/v21.0';
+    try {
+      const r = await fetch(`${FB_BASE}/me/permissions?access_token=${encodeURIComponent(token)}`);
+      const text = await r.text();
+      out.steps.me_permissions = { status: r.status, body: text.slice(0, 1500) };
+    } catch (e: any) {
+      out.steps.me_permissions = { error: e?.message };
+    }
+
+    // 3. /promote_pages
+    const aid = adAccountId.replace(/^act_/, '');
+    try {
+      const r = await fetch(`${FB_BASE}/act_${aid}/promote_pages?fields=id,name,instagram_business_account&limit=10&access_token=${encodeURIComponent(token)}`);
+      const text = await r.text();
+      out.steps.promote_pages = { status: r.status, body: text.slice(0, 1500) };
+    } catch (e: any) {
+      out.steps.promote_pages = { error: e?.message };
+    }
+
+    // 4. /me/accounts fallback
+    try {
+      const r = await fetch(`${FB_BASE}/me/accounts?fields=id,name,instagram_business_account&limit=10&access_token=${encodeURIComponent(token)}`);
+      const text = await r.text();
+      out.steps.me_accounts = { status: r.status, body: text.slice(0, 1500) };
+    } catch (e: any) {
+      out.steps.me_accounts = { error: e?.message };
+    }
+
+    // 5. /adspixels
+    try {
+      const r = await fetch(`${FB_BASE}/act_${aid}/adspixels?fields=id,name&access_token=${encodeURIComponent(token)}`);
+      const text = await r.text();
+      out.steps.adspixels = { status: r.status, body: text.slice(0, 1500) };
+    } catch (e: any) {
+      out.steps.adspixels = { error: e?.message };
+    }
+
+    // Auto-diagnosis from accumulated steps.
+    const perms = out.steps.me_permissions?.body || '';
+    const hasShowList = /pages_show_list[\s\S]*?"granted"/i.test(perms);
+    const hasReadEng = /pages_read_engagement[\s\S]*?"granted"/i.test(perms);
+    const promotePagesBody = out.steps.promote_pages?.body || '';
+    const meAccountsBody = out.steps.me_accounts?.body || '';
+    const pixelsBody = out.steps.adspixels?.body || '';
+
+    if (!hasShowList || !hasReadEng) {
+      out.diagnosis = `Token thiếu scopes (granted? show_list=${hasShowList} read_engagement=${hasReadEng}). ` +
+        `Vào fb.com/settings/?tab=business_tools → revoke app → /facebook → Disconnect → Connect lại.`;
+    } else if (/"data":\s*\[\s*\]/.test(promotePagesBody) && /"data":\s*\[\s*\]/.test(meAccountsBody)) {
+      out.diagnosis = `Token có scope đầy đủ NHƯNG cả /promote_pages và /me/accounts đều rỗng. ` +
+        `Nghĩa là user FB này không quản lý page nào. Vào fb.com/pages — kiểm tra "Your Pages".`;
+    } else if (/"data":\s*\[\s*\]/.test(pixelsBody)) {
+      out.diagnosis = `Pages OK nhưng ad account này chưa link pixel nào. ` +
+        `Ads Manager → Events Manager → Pixels → connect pixel với ad account.`;
+    } else {
+      out.diagnosis = 'OK — pages/pixels có data, kiểm tra frontend log nếu UI vẫn rỗng.';
+    }
+    res.json(out);
+  } catch (e: any) {
+    out.fatal = e?.message || String(e);
+    res.status(500).json(out);
+  }
+});
+
 router.get('/pages', resolveStore, async (req: Request, res: Response) => {
   try {
     const adAccountId = String(req.query.adAccountId || '');
