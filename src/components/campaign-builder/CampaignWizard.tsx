@@ -494,22 +494,54 @@ export const CampaignWizard = ({ adAccounts }: Props) => {
               <div>
                 <Label className="text-xs">Page * {loadingMeta && <span className="text-slate-400">(loading…)</span>}</Label>
                 <Select value={config.pageId} onValueChange={v => set('pageId', v)} disabled={launching || pages.length === 0}>
-                  <SelectTrigger><SelectValue placeholder={pages.length === 0 ? '— pick account first —' : 'Pick a page...'} /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue placeholder={
+                      !config.adAccountId
+                        ? '— chọn ad account trước —'
+                        : loadingMeta
+                          ? 'Đang tải pages…'
+                          : pages.length === 0
+                            ? 'Không tìm thấy page — disconnect & re-Connect Facebook để cấp lại quyền'
+                            : 'Pick a page...'
+                    } />
+                  </SelectTrigger>
                   <SelectContent>
                     {pages.map(p => (
                       <SelectItem key={p.id} value={p.id}>{p.name}{p.instagram_business_account ? ' · IG' : ''}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {config.adAccountId && !loadingMeta && pages.length === 0 && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    Page list rỗng — token FB Login thiếu <code className="font-mono">pages_show_list</code>.
+                    Vào /facebook → Disconnect → Connect lại để cấp quyền mới.
+                  </p>
+                )}
               </div>
               <div>
                 <Label className="text-xs">Pixel * {loadingMeta && <span className="text-slate-400">(loading…)</span>}</Label>
                 <Select value={config.pixelId} onValueChange={v => set('pixelId', v)} disabled={launching || pixels.length === 0}>
-                  <SelectTrigger><SelectValue placeholder={pixels.length === 0 ? '— pick account first —' : 'Pick a pixel...'} /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue placeholder={
+                      !config.adAccountId
+                        ? '— chọn ad account trước —'
+                        : loadingMeta
+                          ? 'Đang tải pixels…'
+                          : pixels.length === 0
+                            ? 'Không có pixel trên account này — vào Ads Manager → Events Manager để tạo'
+                            : 'Pick a pixel...'
+                    } />
+                  </SelectTrigger>
                   <SelectContent>
                     {pixels.map(x => <SelectItem key={x.id} value={x.id}>{x.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {config.adAccountId && !loadingMeta && pixels.length === 0 && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    Không có pixel — kiểm tra: (1) ad account đã liên kết pixel chưa
+                    (Ads Manager → Pixels), (2) user là Advertiser trên BM owning the pixel.
+                  </p>
+                )}
               </div>
             </div>
 

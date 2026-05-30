@@ -470,7 +470,15 @@ export class FacebookAdsApiClient {
    * these in the FB consent dialog, we surface a clear error so the caller
    * can re-prompt with auth_type=rerequest.
    */
-  private static REQUIRED_SCOPES = ['ads_read', 'ads_management'];
+  // Verified post-login against /me/permissions. Pages scopes are required
+  // for the campaign builder to populate the Page + Instagram fields; the
+  // login flow surfaces a clear "missing scopes" error if any of these
+  // were unticked in the consent dialog so the caller can re-prompt with
+  // auth_type=rerequest.
+  private static REQUIRED_SCOPES = [
+    'ads_read', 'ads_management', 'business_management',
+    'pages_show_list', 'pages_read_engagement'
+  ];
 
   async login(opts: { rerequest?: boolean } = {}): Promise<{ accessToken: string; userId: string }> {
     await this.ensureSDKLoaded();

@@ -498,29 +498,98 @@ async function waitForVideoReady(videoId: string, token: string): Promise<void> 
   throw new Error('Video processing timed out after 5 minutes');
 }
 
-/** Paginated /promote_pages — walks `paging.next` until exhausted or 500-cap. */
-export async function listPromotablePages(accountId: string, fallbackToken?: string): Promise<Array<{ id: string; name: string; instagram_business_account?: { id: string } }>> {
+/**
+ * List pages the user can run ads from on this ad account.
+ *
+ * Strategy:
+ *   1. `/{aid}/promote_pages` — pages explicitly linked to the ad
+ *      account. Returns nothing if no page has been added in Ads Manager
+ *      → Account Settings → Pages. This is the FB-recommended path.
+ *   2. Fallback `/me/accounts` — all pages the user manages. We surface
+ *      these when promote_pages is empty so the wizard never shows an
+ *      empty dropdown just because the BM admin forgot to link a page
+ *      to the ad account. Token must have `pages_show_list` for this.
+ *
+ * Deduped by page id; instagram_business_account preserved when present.
+ */
+export async function listPromotablePages(
+  accountId: string,
+  fallbackToken?: string
+): Promise<Array<{ id: string; name: string; instagram_business_account?: { id: string } }>> {
   const aid = formatAccountId(accountId);
   const token = resolveToken(aid, fallbackToken);
-  let url: string | null = `${FB_BASE}/${aid}/promote_pages?fields=id,name,instagram_business_account&limit=100&access_token=${encodeURIComponent(token)}`;
   const out: Array<{ id: string; name: string; instagram_business_account?: { id: string } }> = [];
+
+  // 1. promote_pages — primary source.
+  let url: string | null = `${FB_BASE}/${aid}/promote_pages?fields=id,name,instagram_business_account&limit=100&access_token=${encodeURIComponent(token)}`;
   while (url && out.length < 500) {
     const res: Response = await fetch(url);
-    if (!res.ok) throw new Error(`promote_pages failed: ${await res.text()}`);
+    if (!res.ok) {
+      // Don't throw — fall through to /me/accounts so an unrelated permission
+      // gap on promote_pages doesn't kill the picker entirely. We log so
+      // the operator still sees why this path failed.
+      console.warn(`[fb-ad-launch] /${aid}/promote_pages failed:`, (await res.text()).slice(0, 300));
+      break;
+    }
     const json: any = await res.json();
     if (Array.isArray(json.data)) out.push(...json.data);
     url = json?.paging?.next || null;
   }
+  if (out.length > 0) return out;
+
+  // 2. /me/accounts fallback — pages the user manages directly.
+  //    Requires pages_show_list. Returns id/name/instagram_business_account
+  //    (FB exposes the IG-business link the same way here).
+  let meUrl: string | null = `${FB_BASE}/me/accounts?fields=id,name,instagram_business_account&limit=100&access_token=${encodeURIComponent(token)}`;
+  const seen = new Set<string>();
+  while (meUrl && out.length < 500) {
+    const res: Response = await fetch(meUrl);
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 300);
+      console.warn(`[fb-ad-launch] /me/accounts failed:`, body);
+      // Surface a token-scope hint so the user knows what to do.
+      throw new Error(
+        `Couldn't load Pages — FB returned ${res.status}. Most common cause: ` +
+        `the FB Login token is missing pages_show_list. Disconnect Facebook ` +
+        `and re-Connect; new tokens now request that permission.`
+      );
+    }
+    const json: any = await res.json();
+    for (const p of json?.data || []) {
+      if (!seen.has(p.id)) {
+        seen.add(p.id);
+        out.push(p);
+      }
+    }
+    meUrl = json?.paging?.next || null;
+  }
   return out;
 }
 
-/** List pixels on the ad account. */
-export async function listPixels(accountId: string, fallbackToken?: string): Promise<Array<{ id: string; name: string }>> {
+/**
+ * List pixels on the ad account.
+ *
+ * `/{aid}/adspixels` returns the pixels the ad account can use. If the
+ * caller isn't an admin/advertiser on the BM that owns the pixel, FB
+ * returns an empty list silently. We surface a clearer error so the
+ * user knows whether it's a permission gap vs genuinely-no-pixel.
+ */
+export async function listPixels(
+  accountId: string,
+  fallbackToken?: string
+): Promise<Array<{ id: string; name: string }>> {
   const aid = formatAccountId(accountId);
   const token = resolveToken(aid, fallbackToken);
   const url = `${FB_BASE}/${aid}/adspixels?fields=id,name&access_token=${encodeURIComponent(token)}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`adspixels failed: ${await res.text()}`);
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 300);
+    throw new Error(
+      `Couldn't load Pixels — FB returned ${res.status}. Likely the user ` +
+      `isn't an advertiser on the Business that owns this ad account, or ` +
+      `the token is missing ads_management. Raw: ${body}`
+    );
+  }
   const json: any = await res.json();
   return json.data || [];
 }

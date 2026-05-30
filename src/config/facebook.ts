@@ -14,8 +14,13 @@ export const FACEBOOK_CONFIG = {
   // Use Business Login - these scopes are configured in Facebook Business Settings
   // ads_management: Create, edit, and manage ads
   // ads_read: View ads and insights
-  // business_management: Manage business assets
-  scope: 'ads_management,ads_read,business_management',
+  // business_management: Manage business assets (BM-owned pages, pixels)
+  // pages_show_list: required by /promote_pages + /me/accounts. Without
+  //                  this the Page dropdown in the campaign builder is
+  //                  empty even when the user is admin on those pages.
+  // pages_read_engagement: needed to read page metadata + the linked
+  //                  instagram_business_account that ads need.
+  scope: 'ads_management,ads_read,business_management,pages_show_list,pages_read_engagement',
   // Use Business Login instead of regular Facebook Login
   useBusinessLogin: true,
   fields: {
