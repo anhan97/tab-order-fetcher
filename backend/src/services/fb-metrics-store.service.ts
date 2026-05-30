@@ -18,6 +18,7 @@
  */
 
 import { PrismaClient, Prisma } from '@prisma/client';
+import * as crypto from 'crypto';
 import { getAccountData } from './fb-account-data.service';
 import * as pool from './fb-system-token.service';
 import * as userToken from './fb-user-token.service';
@@ -128,6 +129,10 @@ export async function syncAccountDay(
       const cpm = c.cpm ?? null;
       const roas = c.roas ?? null;
 
+      // Generate UUID in Node, not PG: gen_random_uuid() needs pgcrypto
+      // extension (or PG 13+ built-in). On older / freshly-provisioned
+      // databases it errors 42883. Node's crypto.randomUUID is universal.
+      const rowId = crypto.randomUUID();
       await tx.$executeRaw`
         INSERT INTO "FbCampaignDailyMetric" (
           "id", "userId", "accountId", "campaignId", "campaignName", "date",
@@ -135,7 +140,7 @@ export async function syncAccountDay(
           "purchases", "purchaseValue", "ctr", "cpc", "cpm", "roas",
           "currency", "lastSyncedAt", "createdAt", "updatedAt"
         ) VALUES (
-          gen_random_uuid()::text, ${userId}, ${accountId}, ${c.id}, ${c.name || null}, ${day},
+          ${rowId}, ${userId}, ${accountId}, ${c.id}, ${c.name || null}, ${day},
           ${new Prisma.Decimal(spend)}, ${impressions}, ${clicks}, ${linkClicks}, ${uniqueClicks}, ${reach},
           ${purchases}, ${new Prisma.Decimal(purchaseValue)}, ${ctr}, ${cpc}, ${cpm}, ${roas},
           'USD', NOW(), NOW(), NOW()
