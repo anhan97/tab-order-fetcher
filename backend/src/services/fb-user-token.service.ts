@@ -196,13 +196,31 @@ export async function getRawTokenForApp(userId: string, fbAppId: string | null):
       LIMIT 1
     `)[0];
   } else {
-    // Default app's connection (joined to UserFacebookApp.isDefault).
+    // No specific fbAppId — pick the user's "best" connection.
+    //
+    // Preference order:
+    //   1. Connection whose fbAppId matches the user's OWN UserFacebookApp
+    //      row marked isDefault=TRUE (legacy: admins / users who registered
+    //      their own app).
+    //   2. Any UserFacebookConnection the user has — covers pivot-assigned
+    //      users (non-admins whose admin gave them access via
+    //      FacebookAppUserAccess; they have a connection but no own row in
+    //      UserFacebookApp). Ordered by most-recently-refreshed so a stale
+    //      connection doesn't beat a freshly-reconnected one.
+    //
+    // Without branch 2 the campaign builder + metrics sync 500'd with "No
+    // FB token available" for any non-admin user, because the inner JOIN
+    // to UserFacebookApp dropped their row.
     row = (await prisma.$queryRaw<Array<{ accessToken: string; fbAppId: string }>>`
       SELECT c."accessToken", c."fbAppId"
       FROM "UserFacebookConnection" c
-      JOIN "UserFacebookApp" a ON a."userId" = c."userId" AND a."fbAppId" = c."fbAppId"
+      LEFT JOIN "UserFacebookApp" a
+        ON a."userId" = c."userId" AND a."fbAppId" = c."fbAppId"
       WHERE c."userId" = ${userId}
-      ORDER BY a."isDefault" DESC, c."lastRefreshedAt" DESC NULLS LAST, c."createdAt" DESC
+      ORDER BY
+        COALESCE(a."isDefault", FALSE) DESC,
+        c."lastRefreshedAt" DESC NULLS LAST,
+        c."createdAt" DESC
       LIMIT 1
     `)[0];
   }
@@ -333,14 +351,20 @@ export async function getStatus(userId: string, fbAppId?: string | null): Promis
       LIMIT 1
     `)[0];
   } else {
+    // LEFT JOIN so pivot-assigned users (no own UserFacebookApp row) still
+    // return a status. See getRawTokenForApp for the full rationale.
     row = (await prisma.$queryRaw<RawConnectionRow[]>`
       SELECT c."id", c."userId", c."fbAppId", c."fbUserId", c."fbUserName",
              c."expiresAt", c."dataAccessExpiresAt", c."scopes",
              c."lastRefreshedAt", c."lastError"
       FROM "UserFacebookConnection" c
-      JOIN "UserFacebookApp" a ON a."userId" = c."userId" AND a."fbAppId" = c."fbAppId"
+      LEFT JOIN "UserFacebookApp" a
+        ON a."userId" = c."userId" AND a."fbAppId" = c."fbAppId"
       WHERE c."userId" = ${userId}
-      ORDER BY a."isDefault" DESC, c."lastRefreshedAt" DESC NULLS LAST, c."createdAt" DESC
+      ORDER BY
+        COALESCE(a."isDefault", FALSE) DESC,
+        c."lastRefreshedAt" DESC NULLS LAST,
+        c."createdAt" DESC
       LIMIT 1
     `)[0];
   }
