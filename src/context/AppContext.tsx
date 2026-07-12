@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { ShopifyApiClient } from '@/utils/shopifyApi';
+import { apiFetch, auth } from '@/utils/apiClient';
 import { FacebookAdsApiClient, fetchAdAccountData } from '@/utils/facebookAdsApi';
 import { COGSApiClient } from '@/utils/cogsApi';
 import { Order, COGSConfig } from '@/types/order';
@@ -155,40 +156,9 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
                 const storeId = storeUrl.replace('.myshopify.com', '');
                 COGSApiClient.saveToLocalStorage(userId, storeId);
             }
-
-            // Check FB state from the backend. There are two valid "connected"
-            // shapes:
-            //   (a) per-user FB SDK login → row in UserFacebookConnection
-            //   (b) Adlux pool mode → claimed access via FacebookAdAccountAccess
-            // The user is "connected" if EITHER produces accounts. Without this,
-            // adlux-pool users (who never went through FB SDK login) had no
-            // logout pill in the sidebar — making it impossible to disconnect.
-            (async () => {
-                const fbHeaders = {
-                    'X-Shopify-Store-Domain': storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-                    'X-Shopify-Access-Token': accessToken
-                };
-                try {
-                    // /connection-accounts returns adlux-managed first, then
-                    // falls back to /me/adaccounts via FB SDK token. So a single
-                    // call covers both shapes.
-                    const accRes = await fetch('/api/facebook/connection-accounts', { headers: fbHeaders });
-                    if (accRes.ok) {
-                        const { accounts: dbAccounts } = await accRes.json();
-                        const fbAccts = (dbAccounts || []).map((a: any) => ({
-                            id: a.accountId,
-                            name: a.name,
-                            accessToken: '',  // token lives in DB only
-                            isEnabled: true
-                        }));
-                        if (fbAccts.length > 0) {
-                            setFacebookAccounts(fbAccts);
-                            setSelectedAccount(fbAccts[0]);
-                            setIsFacebookConnected(true);
-                        }
-                    }
-                } catch { /* offline / backend down — leave disconnected */ }
-            })();
+            // FB connection probe moved to the effect keyed on shopifyConfig
+            // below — it must also run for JWT sessions (activeStore), which
+            // never enter this legacy-localStorage branch.
         }
 
         // Stale localStorage cleanup — old code paths used to persist FB
@@ -205,7 +175,7 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
             try {
                 const accounts = JSON.parse(savedFacebookAccounts);
                 // Strip any stale accessToken from cached entries.
-                const sanitized = accounts.map((a: any) => ({ ...a, accessToken: '' }));
+                const sanitized = accounts.map((a: any) => ({ ...a, accessToken: '', isEnabled: a.isEnabled ?? true }));
                 setFacebookAccounts(sanitized);
             } catch { /* ignore corrupt cache */ }
         }
@@ -223,6 +193,60 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
             }
         }
     }, []);
+
+    // Legacy sessions authenticate with these headers; JWT sessions get the
+    // Bearer attached automatically by apiFetch. Sending both is harmless —
+    // the backend prefers the JWT when present.
+    const buildFbHeaders = (): Record<string, string> => {
+        const h: Record<string, string> = {};
+        if (shopifyConfig?.storeUrl) {
+            h['X-Shopify-Store-Domain'] = shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+            if (shopifyConfig.accessToken) h['X-Shopify-Access-Token'] = shopifyConfig.accessToken;
+        }
+        return h;
+    };
+
+    // Single source of truth for "is Facebook connected": the backend's
+    // /connection-accounts, which reports `connected` from the stored
+    // long-lived token. The account list is secondary — an empty list (no
+    // ACTIVE account yet, FB hiccup) must not flip the user back to the
+    // connect screen.
+    const refreshFacebookConnection = async (preferredAccountId?: string): Promise<void> => {
+        try {
+            const data = await apiFetch<{ connected?: boolean; accounts?: any[] }>(
+                '/api/facebook/connection-accounts',
+                { headers: buildFbHeaders() }
+            );
+            const fbAccts: FacebookAdAccount[] = (data.accounts || []).map((a: any) => ({
+                id: a.accountId,
+                name: a.name,
+                accessToken: '', // token lives in DB only
+                isEnabled: true
+            }));
+            setFacebookAccounts(fbAccts);
+            setSelectedAccount(prev => {
+                const wanted = preferredAccountId || prev?.id;
+                return fbAccts.find(a => a.id === wanted) || fbAccts[0] || null;
+            });
+            setIsFacebookConnected(data.connected ?? fbAccts.length > 0);
+            try {
+                if (fbAccts.length > 0) localStorage.setItem('facebook_accounts', JSON.stringify(fbAccts));
+            } catch { /* ignore quota */ }
+        } catch {
+            /* offline / backend down — keep whatever state we had */
+        }
+    };
+
+    // Probe FB connection whenever the resolved identity changes: legacy
+    // localStorage boot sets shopifyConfig synchronously, the JWT flow sets
+    // it when activeStore resolves. Previously this probe only ran once at
+    // mount and only for legacy-localStorage sessions, so JWT users lost
+    // "connected" on every reload — the "connect again" loop.
+    useEffect(() => {
+        if (!shopifyConfig && !auth.getToken()) return;
+        void refreshFacebookConnection();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [shopifyConfig]);
 
     // Load Facebook Data for Selected Account
     useEffect(() => {
@@ -301,41 +325,13 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     };
 
     const handleFacebookConnectionSuccess = async (config: { accessToken: string; adAccountId: string }) => {
-        // After the new connect flow we never have a valid frontend token —
-        // the long-lived one is in the backend DB. Pull the account list from
-        // /connection-accounts (which uses the DB-side token) instead of
-        // hitting Facebook directly with an empty token.
-        if (!shopifyConfig?.storeUrl || !shopifyConfig?.accessToken) {
-            console.warn('handleFacebookConnectionSuccess called without a Shopify config — cannot resolve user.');
-            setIsFacebookConnected(true);
-            return;
-        }
-        try {
-            const headers = {
-                'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-                'X-Shopify-Access-Token': shopifyConfig.accessToken
-            };
-            const res = await fetch('/api/facebook/connection-accounts', { headers });
-            if (!res.ok) throw new Error(`connection-accounts ${res.status}`);
-            const { accounts: dbAccounts } = await res.json();
-            const fbAccts = (dbAccounts || []).map((a: any) => ({
-                id: a.accountId,
-                name: a.name,
-                accessToken: '', // backend resolves the real token from DB on every call
-                isEnabled: true
-            }));
-            setFacebookAccounts(fbAccts);
-            // Prefer the account the user picked during the connect flow if
-            // it's in the list, otherwise default to the first.
-            const picked = fbAccts.find((a: FacebookAdAccount) => a.id === config.adAccountId) || fbAccts[0];
-            if (picked) setSelectedAccount(picked);
-            setIsFacebookConnected(true);
-        } catch (error) {
-            console.error('Error loading Facebook accounts after connect:', error);
-            // Mark connected anyway so the UI doesn't bounce back to the picker —
-            // user can retry account fetch from the FB page.
-            setIsFacebookConnected(true);
-        }
+        // The backend just stored the long-lived token, so the session IS
+        // connected — set the flag up front, then pull the account list.
+        // refreshFacebookConnection re-confirms `connected` from the backend;
+        // if the account fetch hiccups it keeps this optimistic state instead
+        // of bouncing the user back to the connect screen.
+        setIsFacebookConnected(true);
+        await refreshFacebookConnection(config.adAccountId || undefined);
     };
 
     const handleDisconnectFacebook = async () => {
@@ -344,13 +340,10 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
         //   (b) Adlux access rows — DELETE /unclaim-account per accountId
         // Without (b), an adlux-pool user logs out, F5, and /connection-accounts
         // happily returns their claimed accounts again → instant re-login.
-        if (shopifyConfig?.storeUrl && shopifyConfig?.accessToken) {
-            const fbHeaders = {
-                'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-                'X-Shopify-Access-Token': shopifyConfig.accessToken
-            };
+        if (shopifyConfig || auth.getToken()) {
+            const fbHeaders = buildFbHeaders();
             try {
-                await fetch('/api/facebook/connection', { method: 'DELETE', headers: fbHeaders });
+                await apiFetch('/api/facebook/connection', { method: 'DELETE', headers: fbHeaders });
             } catch (err) {
                 console.warn('Backend FB disconnect failed:', err);
             }
@@ -358,7 +351,7 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
             // keep going so the user isn't half-logged-out.
             await Promise.all(
                 facebookAccounts.map(acc =>
-                    fetch(`/api/facebook/unclaim-account?accountId=${encodeURIComponent(acc.id)}`, {
+                    apiFetch(`/api/facebook/unclaim-account?accountId=${encodeURIComponent(acc.id)}`, {
                         method: 'DELETE',
                         headers: fbHeaders
                     }).catch(err => console.warn(`Unclaim ${acc.id} failed:`, err))

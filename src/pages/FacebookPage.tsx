@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { BarChart3, Loader2, Settings, Link2, LogOut, Rocket, Stethoscope, Library } from 'lucide-react';
+import { BarChart3, Settings, Link2, LogOut, Rocket, Stethoscope, Library } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { FacebookAdsConnection } from '@/components/FacebookAdsConnection';
@@ -61,8 +61,12 @@ export const FacebookPage = () => {
     );
   }
 
-  // Not connected to FB → setup flow.
-  if (!isFacebookConnected || !selectedAccount) {
+  // Not connected to FB → setup flow. Gate on the connection flag ONLY:
+  // requiring selectedAccount too meant a connected user with zero visible
+  // ad accounts (or a transient account-list failure) got bounced back to
+  // the connect screen — the "already connected but asked to connect
+  // again" loop.
+  if (!isFacebookConnected) {
     return (
       <div className="max-w-2xl mx-auto mt-8 space-y-4">
         {/* Admin's setup flow keeps the original MyFacebookAppCard so they
@@ -166,14 +170,25 @@ export const FacebookPage = () => {
         </TabsContent>
 
         <TabsContent value="dashboard" className="m-0">
-          <FacebookAdsManager
-            account={selectedAccount}
-            onSpendUpdate={(spend) => handleSpendUpdate(selectedAccount.id, spend)}
-            dateRange={dateRange}
-            onDateRangeChange={setDateRange}
-            selectedPreset={selectedDatePreset}
-            onPresetChange={setSelectedDatePreset}
-          />
+          {selectedAccount ? (
+            <FacebookAdsManager
+              account={selectedAccount}
+              onSpendUpdate={(spend) => handleSpendUpdate(selectedAccount.id, spend)}
+              dateRange={dateRange}
+              onDateRangeChange={setDateRange}
+              selectedPreset={selectedDatePreset}
+              onPresetChange={setSelectedDatePreset}
+            />
+          ) : (
+            <Card className="p-8 text-center text-slate-600">
+              <h3 className="font-semibold text-slate-900 mb-1">Chưa thấy ad account nào</h3>
+              <p className="text-sm">
+                Facebook đã kết nối nhưng token chưa thấy ad account nào (account đang
+                pending, bị disable, hoặc thiếu quyền <code>ads_read</code>). Mở tab{' '}
+                <strong>Diagnostics</strong> để xem chi tiết — không cần kết nối lại.
+              </p>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="launch" className="m-0">
@@ -197,12 +212,6 @@ export const FacebookPage = () => {
         )}
       </Tabs>
 
-      {!isFacebookConnected && (
-        <div className="flex items-center justify-center py-16 text-slate-500">
-          <Loader2 className="h-6 w-6 animate-spin mr-3" />
-          Loading...
-        </div>
-      )}
     </div>
   );
 };

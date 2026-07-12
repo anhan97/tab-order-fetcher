@@ -8,6 +8,8 @@ export interface AuthUser {
   lastName: string | null;
   isVerified: boolean;
   role?: string;
+  /** PENDING (chờ admin duyệt) | ACTIVE | SUSPENDED */
+  status?: string;
 }
 
 export interface UserStore {
@@ -83,7 +85,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         const me = await apiFetch<{ user: AuthUser }>('/api/auth/me');
         if (cancelled) return;
         setUser(me.user);
-        await refreshStores();
+        if (me.user.status !== 'PENDING' && me.user.status !== 'SUSPENDED') {
+          await refreshStores();
+        }
       } catch (e) {
         // Token expired / invalid — clear it.
         if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
@@ -97,28 +101,43 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [refreshStores]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const r = await apiFetch<{ token: string; user: AuthUser }>('/api/auth/login', {
+    const r = await apiFetch<{ token: string; refreshToken?: string; user: AuthUser }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password })
     });
     authStore.setToken(r.token);
+    authStore.setRefreshToken(r.refreshToken || null);
     setUser(r.user);
-    await refreshStores();
+    // PENDING users have no store access yet — skip the fetch, it would 403.
+    if (r.user.status !== 'PENDING' && r.user.status !== 'SUSPENDED') {
+      await refreshStores();
+    }
     return r.user;
   }, [refreshStores]);
 
   const register = useCallback(async (input: { email: string; password: string; firstName?: string; lastName?: string }) => {
-    const r = await apiFetch<{ token: string; user: AuthUser }>('/api/auth/register', {
+    const r = await apiFetch<{ token: string; refreshToken?: string; user: AuthUser }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(input)
     });
     authStore.setToken(r.token);
+    authStore.setRefreshToken(r.refreshToken || null);
     setUser(r.user);
-    await refreshStores();
+    if (r.user.status !== 'PENDING' && r.user.status !== 'SUSPENDED') {
+      await refreshStores();
+    }
     return r.user;
   }, [refreshStores]);
 
   const logout = useCallback(() => {
+    // Best-effort server-side revoke of this session's refresh token.
+    const refreshToken = authStore.getRefreshToken();
+    if (refreshToken) {
+      apiFetch('/api/auth/logout', {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken })
+      }).catch(() => { /* offline — the token still dies at expiry */ });
+    }
     authStore.clear();
     setUser(null);
     setStores([]);

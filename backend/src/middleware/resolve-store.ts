@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { decryptToken, encryptToken } from '../lib/token-crypto';
 
 const prisma = new PrismaClient();
 
@@ -79,7 +80,7 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       return next();
     }
 
-    // 3. Legacy synthetic-user fallback
+    // 3. Legacy header auth (no JWT): X-Shopify-Store-Domain + X-Shopify-Access-Token.
     const accessToken = req.headers['x-shopify-access-token'] as string | undefined;
     if (!rawDomain || !accessToken) {
       return res.status(401).json({ error: 'Authentication required. Provide a Bearer JWT, or fall back to X-Shopify-Store-Domain + X-Shopify-Access-Token headers.' });
@@ -87,6 +88,28 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
     const storeDomain = normalizeDomain(rawDomain);
     const syntheticEmail = `${storeDomain}@autocreated.local`;
 
+    // 3a. Prefer the REAL user who already registered this store (via
+    // /api/auth/stores). Historically this path always lazy-created a
+    // synthetic `<domain>@autocreated.local` user, so the same person hit
+    // the API as TWO different userIds depending on whether the frontend
+    // call attached the JWT. FB tokens / campaign mappings / metrics are
+    // all keyed by userId, so that split made "connected" checks and P&L
+    // look at the wrong user. Matching the access token proves store
+    // ownership just as strongly as the old behavior did.
+    const ownedStores = await prisma.shopifyStore.findMany({
+      where: { storeDomain },
+      include: { user: { select: { email: true } } },
+      orderBy: { createdAt: 'asc' }
+    });
+    const realStore = ownedStores.find(s =>
+      decryptToken(s.accessToken) === accessToken && !s.user.email.endsWith('@autocreated.local')
+    );
+    if (realStore) {
+      req.resolved = { userId: realStore.userId, storeId: realStore.id, storeDomain };
+      return next();
+    }
+
+    // 3b. No real owner → legacy synthetic-user fallback.
     let user = await prisma.user.findUnique({ where: { email: syntheticEmail } });
     if (!user) {
       const hashed = await bcrypt.hash(Math.random().toString(36).slice(2), 8);
@@ -100,12 +123,12 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
     });
     if (!store) {
       store = await prisma.shopifyStore.create({
-        data: { userId: user.id, storeDomain, accessToken, isActive: true }
+        data: { userId: user.id, storeDomain, accessToken: encryptToken(accessToken), isActive: true }
       });
-    } else if (store.accessToken !== accessToken) {
+    } else if (decryptToken(store.accessToken) !== accessToken) {
       store = await prisma.shopifyStore.update({
         where: { id: store.id },
-        data: { accessToken }
+        data: { accessToken: encryptToken(accessToken) }
       });
     }
 

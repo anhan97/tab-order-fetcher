@@ -8,7 +8,11 @@ import plRoutes from './src/routes/pl.routes';
 import adsLaunchRoutes from './src/routes/ads-launch.routes';
 import authRoutes from './src/routes/auth.routes';
 import adminRoutes from './src/routes/admin.routes';
+import ordersRoutes from './src/routes/orders.routes';
+import shopifyOAuthRoutes from './src/routes/shopify-oauth.routes';
+import webhooksRoutes from './src/routes/webhooks.routes';
 import { startPLScheduler } from './src/jobs/pl-scheduler';
+import { startOrderSyncScheduler } from './src/jobs/order-sync-scheduler';
 // Adlux scheduler retired — System User mode was rolled back to a simple
 // FB Login flow. Import kept commented for the rollback path.
 // import { startAdluxScheduler } from './src/jobs/fb-adlux-scheduler';
@@ -36,11 +40,17 @@ app.use(cors({
   credentials: true
 }));
 
-// Body parser middleware
-app.use(express.json());
+// Body parser middleware. `verify` captures the raw body — required to
+// check Shopify webhook HMAC signatures (they sign the exact bytes).
+app.use(express.json({
+  verify: (req: any, _res, buf) => { req.rawBody = buf.toString(); }
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Routes
+app.use('/api/shopify/oauth', shopifyOAuthRoutes);
+app.use('/api/webhooks', webhooksRoutes);
+app.use('/api/orders', ordersRoutes);
 app.use('/api/shopify', shopifyRoutes);
 app.use('/api/cogs', cogsRoutes);
 app.use('/api/comprehensive-cogs', comprehensiveCogsRoutes);
@@ -72,4 +82,5 @@ app.listen(port, () => {
   if (process.env.FB_METRICS_SCHEDULER_DISABLED !== '1') {
     startFbMetricsScheduler();
   }
+  startOrderSyncScheduler();
 });

@@ -28,12 +28,14 @@ import {
     Plus,
     User as UserIcon,
     LogOut as SignOutIcon,
-    ShieldCheck
+    ShieldCheck,
+    PackageOpen
 } from 'lucide-react';
 import { useState } from 'react';
 
 const PAGE_SUBTITLES: Record<string, string> = {
     Dashboard: 'KPIs, daily breakdown, and order list',
+    Fulfillment: 'Vòng đời đơn hàng, tracking, export đi fulfill',
     Tracking: 'Bulk-upload tracking numbers to Shopify',
     Analytics: 'Cross-channel ROAS & ad performance',
     'P&L': 'Daily / period profit, costs, and operating expenses',
@@ -81,8 +83,10 @@ export const Layout = () => {
     const ALL_ROLES = ['admin', 'user', 'cs', 'finance'] as const;
     type NavRole = typeof ALL_ROLES[number];
     const navCatalog: Array<{ path: string; label: string; icon: typeof LayoutDashboard; roles: NavRole[] }> = [
-        { path: '/orders',   label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'user', 'cs', 'finance'] },
-        { path: '/tracking', label: 'Tracking',  icon: Upload,          roles: ['admin', 'user', 'cs'] },
+        { path: '/orders',      label: 'Dashboard',   icon: LayoutDashboard, roles: ['admin', 'user', 'cs', 'finance'] },
+        { path: '/fulfillment', label: 'Fulfillment', icon: PackageOpen,     roles: ['admin', 'user', 'cs'] },
+        { path: '/tracking',    label: 'Tracking',    icon: Upload,          roles: ['admin', 'user', 'cs'] },
+        { path: '/connect',     label: 'Stores',      icon: StoreIcon,       roles: ['admin', 'user', 'cs', 'finance'] },
         { path: '/cogs',     label: 'COGS',      icon: DollarSign,      roles: ['admin', 'user', 'finance'] },
         { path: '/facebook', label: 'Facebook',  icon: BarChart3,       roles: ['admin', 'user'] },
         { path: '/content',  label: 'Content',   icon: PieChartIcon,    roles: ['admin', 'user'] },
@@ -140,41 +144,56 @@ export const Layout = () => {
                     })}
                 </nav>
 
-                {/* Active store switcher — visible whenever the user has at
-                    least one store. Picking a different store rebinds every
-                    downstream API call to that store's domain. */}
-                {user && stores.length > 0 && (
+                {/* Active store switcher. When the user has stores, they can
+                    switch between them; with zero stores we still show a
+                    "connect" prompt so they always have a way in. Picking a
+                    different store rebinds every downstream API call. */}
+                {user && (
                     <div className="border-t border-slate-200/80 p-3 space-y-1.5 shrink-0">
                         <p className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 px-2 pb-1 flex items-center gap-1">
                             <StoreIcon className="h-3 w-3" />
                             Active store
                         </p>
-                        <Select
-                            value={activeStore?.storeDomain || ''}
-                            onValueChange={(v) => setActiveStoreByDomain(v)}
-                        >
-                            <SelectTrigger className="w-full h-9 text-xs">
-                                <SelectValue placeholder="Pick store..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {stores.map(s => (
-                                    <SelectItem key={s.id} value={s.storeDomain}>
-                                        <div className="truncate max-w-[180px]">
-                                            {s.name || s.storeDomain}
-                                        </div>
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start text-xs text-slate-600 hover:text-slate-900"
-                            onClick={() => navigate('/connect')}
-                        >
-                            <Plus className="h-3.5 w-3.5 mr-1.5" />
-                            Add another store
-                        </Button>
+                        {stores.length > 0 ? (
+                            <>
+                                <Select
+                                    value={activeStore?.storeDomain || ''}
+                                    onValueChange={(v) => setActiveStoreByDomain(v)}
+                                >
+                                    <SelectTrigger className="w-full h-9 text-xs">
+                                        <SelectValue placeholder="Pick store..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {stores.map(s => (
+                                            <SelectItem key={s.id} value={s.storeDomain}>
+                                                <div className="truncate max-w-[180px]">
+                                                    {s.name || s.storeDomain}
+                                                </div>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="w-full justify-start text-xs text-slate-600 hover:text-slate-900"
+                                    onClick={() => navigate('/connect')}
+                                >
+                                    <Plus className="h-3.5 w-3.5 mr-1.5" />
+                                    Add another store
+                                </Button>
+                            </>
+                        ) : (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full justify-start text-xs"
+                                onClick={() => navigate('/connect')}
+                            >
+                                <Plus className="h-3.5 w-3.5 mr-1.5" />
+                                Kết nối store
+                            </Button>
+                        )}
                     </div>
                 )}
 

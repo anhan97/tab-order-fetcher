@@ -1,6 +1,7 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { fetchShopifyOrders, fetchOrderTransactions, summarizeTransactionFees, fetchBalanceTransactions } from './shopify.service';
 import { resolveShippingCompanyForOrder } from './shipping-company.service';
+import { decryptToken } from '../lib/token-crypto';
 
 const prisma = new PrismaClient();
 const THROTTLE_MS = parseInt(process.env.SHOPIFY_THROTTLE_MS || '500', 10);
@@ -38,7 +39,7 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
   do {
     const { orders, pageInfo: nextPage } = await fetchShopifyOrders(
       store.storeDomain,
-      store.accessToken,
+      decryptToken(store.accessToken),
       {
         createdAtMin: since?.toISOString(),
         createdAtMax: options.until?.toISOString(),
@@ -70,7 +71,7 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
           // /transactions.json calls so the bucket doesn't fill — the fetcher
           // also retries on 429 with backoff as a safety net.
           await sleep(THROTTLE_MS);
-          const txs = await fetchOrderTransactions(store.storeDomain, store.accessToken, order.id);
+          const txs = await fetchOrderTransactions(store.storeDomain, decryptToken(store.accessToken), order.id);
           const txCount = await persistTransactions(store.userId, storeId, upserted.orderId, txs);
           result.transactionsSynced += txCount;
 
@@ -105,6 +106,27 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
   return result;
 }
 
+/**
+ * Webhook path: ingest ONE order payload (orders/create|updated|cancelled|
+ * fulfilled) for a store. Same upsert pipeline as the batch sync minus the
+ * per-order transactions fetch — payment fees arrive later via the balance
+ * sync / scheduler, and webhook handlers must stay fast (Shopify retries on
+ * slow responses).
+ */
+export async function ingestOrderPayload(storeId: string, order: any): Promise<{ orderId: string; created: boolean }> {
+  const store = await prisma.shopifyStore.findUnique({ where: { id: storeId } });
+  if (!store) throw new Error('Store not found');
+  const upserted = await upsertOrder(store.userId, storeId, order, {
+    defaultShippingCompany: store.defaultShippingCompany || null,
+    defaultSupplier: store.defaultSupplier || null
+  });
+  if (Array.isArray(order.line_items)) {
+    await persistLineItems(store.userId, storeId, upserted.orderId, order.line_items);
+  }
+  await recomputeOrderCostSnapshots(store.userId, storeId, upserted.orderId);
+  return upserted;
+}
+
 async function upsertOrder(
   userId: string,
   storeId: string,
@@ -125,10 +147,42 @@ async function upsertOrder(
     ?? order.billing_address?.country_code
     ?? null;
 
+  // Full shipping address (JSON) + phone — needed to export orders for
+  // fulfillment. shipping_address.phone is the delivery contact; fall back
+  // to order.phone / customer default address.
+  const addr = order.shipping_address ?? order.billing_address ?? null;
+  const shippingAddress = addr ? {
+    name: addr.name || [addr.first_name, addr.last_name].filter(Boolean).join(' ') || null,
+    address1: addr.address1 ?? null,
+    address2: addr.address2 ?? null,
+    city: addr.city ?? null,
+    province: addr.province ?? null,
+    provinceCode: addr.province_code ?? null,
+    zip: addr.zip ?? null,
+    country: addr.country ?? null,
+    countryCode: addr.country_code ?? null,
+    phone: addr.phone ?? null,
+    company: addr.company ?? null
+  } : null;
+  const customerPhone: string | null =
+    addr?.phone ?? order.phone ?? order.customer?.phone ?? order.customer?.default_address?.phone ?? null;
+
+  // Tracking + carrier delivery status from fulfillments. Shopify is the
+  // source of truth for the whole shipping lifecycle — the UI has no manual
+  // status actions; everything derives from what the store reports.
+  const fulfillments: any[] = Array.isArray(order.fulfillments) ? order.fulfillments : [];
+  const trackingNumber: string | null =
+    fulfillments.flatMap(f => f.tracking_numbers?.length ? f.tracking_numbers : [f.tracking_number]).find(Boolean) ?? null;
+  // fulfillment.shipment_status: label_printed|label_purchased|attempted_delivery|
+  // ready_for_pickup|confirmed|in_transit|out_for_delivery|delivered|failure
+  const shipmentStatus: string | null =
+    fulfillments.map(f => f.shipment_status).find(Boolean) ?? null;
+
   const data = {
     orderNumber: String(order.order_number ?? order.name ?? order.id),
     customerEmail: order.customer?.email ?? null,
-    customerName: [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join(' ') || null,
+    customerName: [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join(' ')
+      || (addr?.name ?? null),
     totalAmount: parseFloat(order.total_price ?? '0'),
     currency: order.currency,
     presentmentCurrency: order.presentment_currency ?? null,
@@ -149,16 +203,29 @@ async function upsertOrder(
     shippingCompany,
     shippingCountryCode,
     supplier,
+    shippingAddress: shippingAddress as any,
+    customerPhone,
     ...utm
   };
 
   const existing = await prisma.order.findUnique({
     where: { userId_storeId_shopifyOrderId: { userId, storeId, shopifyOrderId: String(order.id) } },
-    select: { id: true }
+    select: { id: true, fulfillStatus: true, trackingNumber: true, deliveryStatus: true }
   });
 
+  const effectiveTracking = trackingNumber ?? existing?.trackingNumber ?? null;
+  const lifecycle = {
+    // Shopify is authoritative: latest tracking from the store wins.
+    trackingNumber: effectiveTracking,
+    deliveryStatus: shipmentStatus ?? existing?.deliveryStatus ?? null,
+    fulfillStatus: fulfillStatusFromShopify(existing?.fulfillStatus ?? 'PENDING', order, effectiveTracking, shipmentStatus)
+  };
+
   if (existing) {
-    await prisma.order.update({ where: { id: existing.id }, data });
+    await prisma.order.update({
+      where: { id: existing.id },
+      data: { ...data, ...lifecycle }
+    });
     return { orderId: existing.id, created: false };
   }
 
@@ -167,10 +234,29 @@ async function upsertOrder(
       userId,
       storeId,
       shopifyOrderId: String(order.id),
-      ...data
+      ...data,
+      ...lifecycle
     }
   });
   return { orderId: created.id, created: true };
+}
+
+/**
+ * Derive the internal lifecycle state purely from Shopify signals (there are
+ * no manual status actions in the UI):
+ *   - cancelled_at set                      → CANCELLED (always wins)
+ *   - carrier says delivered               → DELIVERED
+ *   - has tracking / marked fulfilled       → SHIPPED (unless already DELIVERED)
+ *   - otherwise                             → PENDING (or whatever we had)
+ * 17Track (if configured) can still upgrade SHIPPED → DELIVERED for carriers
+ * Shopify has no shipment_status for.
+ */
+function fulfillStatusFromShopify(current: string, order: any, trackingNumber: string | null, shipmentStatus: string | null): string {
+  if (order.cancelled_at) return 'CANCELLED';
+  if (shipmentStatus === 'delivered') return 'DELIVERED';
+  if (current === 'DELIVERED') return 'DELIVERED';
+  if (trackingNumber || order.fulfillment_status === 'fulfilled') return 'SHIPPED';
+  return current === 'SHIPPED' ? 'SHIPPED' : current;
 }
 
 async function persistTransactions(userId: string, storeId: string, orderId: string, txs: any[]): Promise<number> {
@@ -257,6 +343,7 @@ async function persistLineItems(userId: string, storeId: string, orderId: string
         productId: typeof it.product_id === 'number' ? BigInt(it.product_id) : null,
         sku: it.sku ?? null,
         title: it.title ?? null,
+        variantTitle: it.variant_title ?? null,
         quantity: it.quantity ?? 0,
         price: new Prisma.Decimal(it.price ?? '0'),
         totalDiscount: new Prisma.Decimal(it.total_discount ?? '0'),
@@ -265,6 +352,7 @@ async function persistLineItems(userId: string, storeId: string, orderId: string
       update: {
         sku: it.sku ?? null,
         title: it.title ?? null,
+        variantTitle: it.variant_title ?? null,
         quantity: it.quantity ?? 0,
         price: new Prisma.Decimal(it.price ?? '0'),
         totalDiscount: new Prisma.Decimal(it.total_discount ?? '0')
@@ -341,7 +429,7 @@ export async function syncBalanceTransactions(
 
   let balances;
   try {
-    balances = await fetchBalanceTransactions(store.storeDomain, store.accessToken, since, until);
+    balances = await fetchBalanceTransactions(store.storeDomain, decryptToken(store.accessToken), since, until);
   } catch (e: any) {
     // Endpoint returns 404/403 if the store does not use Shopify Payments — that's fine, just no-op.
     return { updated: 0, balanceRows: 0, errors: [e?.message || String(e)] };

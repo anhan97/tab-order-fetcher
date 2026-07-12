@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.middleware';
 import { validateShopifyStore } from '../middleware/validation.middleware';
+import { requireStoreAccess } from '../middleware/store-access';
 import { ShopifyController } from '../controllers/shopify.controller';
 import { syncOrders } from '../services/order-sync.service';
 import { AuthenticatedRequest } from '../types/express';
@@ -38,28 +39,12 @@ router.post('/stores/verify', async (req, res) => {
   }
 });
 
-// Direct order fetching (no auth required)
-router.get('/stores/orders', async (req, res) => {
+// Live order fetching — requires JWT (store looked up in DB) or a legacy
+// header token that matches a stored one. Shopify is called with the
+// DB-resolved token, never a caller-supplied one for JWT sessions.
+router.get('/stores/orders', requireStoreAccess, async (req, res) => {
   try {
-    const storeDomain = req.headers['x-shopify-store-domain'] as string;
-    const accessToken = req.headers['x-shopify-access-token'] as string;
-
-    console.log('Received request headers:', {
-      storeDomain,
-      hasAccessToken: !!accessToken,
-      headers: req.headers
-    });
-
-    if (!storeDomain || !accessToken) {
-      return res.status(400).json({ 
-        error: 'Missing required headers',
-        missing: {
-          storeDomain: !storeDomain,
-          accessToken: !accessToken
-        },
-        receivedHeaders: req.headers
-      });
-    }
+    const { storeDomain, accessToken } = req.storeAccess!;
 
     const {
       created_at_min,
@@ -160,11 +145,10 @@ router.post('/stores/:id/sync', authenticate, async (req, res) => {
 });
 
 // Update order tracking
-router.put('/orders/tracking', async (req, res) => {
+router.put('/orders/tracking', requireStoreAccess, async (req, res) => {
   try {
-    const storeDomain = req.headers['x-shopify-store-domain'] as string;
-    const accessToken = req.headers['x-shopify-access-token'] as string;
-    
+    const { storeDomain, accessToken } = req.storeAccess!;
+
     const {
       orderNumber,
       trackingNumber,
@@ -174,16 +158,6 @@ router.put('/orders/tracking', async (req, res) => {
       fulfillItems = true,
       fulfillShippingNotRequired = true
     } = req.body;
-
-    if (!storeDomain || !accessToken) {
-      return res.status(400).json({ 
-        error: 'Missing required headers',
-        missing: {
-          storeDomain: !storeDomain,
-          accessToken: !accessToken
-        }
-      });
-    }
 
     if (!orderNumber || !trackingNumber || !trackingCompany) {
       return res.status(400).json({ 
@@ -218,27 +192,16 @@ router.put('/orders/tracking', async (req, res) => {
 });
 
 // Batch tracking update endpoint for faster processing
-router.put('/orders/tracking/batch', async (req, res) => {
+router.put('/orders/tracking/batch', requireStoreAccess, async (req, res) => {
   try {
-    const storeDomain = req.headers['x-shopify-store-domain'] as string;
-    const accessToken = req.headers['x-shopify-access-token'] as string;
-    
+    const { storeDomain, accessToken } = req.storeAccess!;
+
     const {
       trackingUpdates,
       notifyCustomer = true,
       fulfillItems = true,
       fulfillShippingNotRequired = true
     } = req.body;
-
-    if (!storeDomain || !accessToken) {
-      return res.status(400).json({ 
-        error: 'Missing required headers',
-        missing: {
-          storeDomain: !storeDomain,
-          accessToken: !accessToken
-        }
-      });
-    }
 
     if (!trackingUpdates || !Array.isArray(trackingUpdates) || trackingUpdates.length === 0) {
       return res.status(400).json({ 
@@ -314,20 +277,9 @@ router.put('/orders/tracking/batch', async (req, res) => {
 });
 
 // Get products
-router.get('/products', async (req, res) => {
+router.get('/products', requireStoreAccess, async (req, res) => {
   try {
-    const storeDomain = req.headers['x-shopify-store-domain'] as string;
-    const accessToken = req.headers['x-shopify-access-token'] as string;
-
-    if (!storeDomain || !accessToken) {
-      return res.status(400).json({ 
-        error: 'Missing required headers',
-        missing: {
-          storeDomain: !storeDomain,
-          accessToken: !accessToken
-        }
-      });
-    }
+    const { storeDomain, accessToken } = req.storeAccess!;
 
     const {
       limit = '50',

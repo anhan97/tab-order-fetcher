@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { verifyShopifyCredentials } from '../services/shopify.service';
 import { AuthenticatedRequest, RequestHandler } from '../types/express';
+import { encryptToken, decryptToken } from '../lib/token-crypto';
 
 const prisma = new PrismaClient();
 
@@ -50,12 +51,12 @@ export class ShopifyController {
         return res.status(400).json({ error: 'Invalid store credentials' });
       }
 
-      // Create store
+      // Create store — token encrypted at rest
       const store = await prisma.shopifyStore.create({
         data: {
           userId: req.user.id,
           storeDomain,
-          accessToken,
+          accessToken: encryptToken(accessToken),
           name,
           isActive: true
         }
@@ -93,7 +94,7 @@ export class ShopifyController {
       }
 
       // If credentials changed, verify them
-      if (storeDomain !== existingStore.storeDomain || accessToken !== existingStore.accessToken) {
+      if (storeDomain !== existingStore.storeDomain || accessToken !== decryptToken(existingStore.accessToken)) {
         try {
           await verifyShopifyCredentials(storeDomain, accessToken);
         } catch (error) {
@@ -101,12 +102,12 @@ export class ShopifyController {
         }
       }
 
-      // Update store
+      // Update store — token encrypted at rest
       const store = await prisma.shopifyStore.update({
         where: { id },
         data: {
           storeDomain,
-          accessToken,
+          accessToken: encryptToken(accessToken),
           name,
           isActive
         }

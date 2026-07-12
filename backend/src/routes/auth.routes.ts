@@ -25,7 +25,8 @@ import {
   validateRegistration,
   validateLogin
 } from '../middleware/validation.middleware';
-import { requireAuth } from '../middleware/require-auth';
+import { requireAuth, requireActive } from '../middleware/require-auth';
+import { encryptToken, decryptToken } from '../lib/token-crypto';
 
 const router = Router();
 const authController = new AuthController();
@@ -37,6 +38,8 @@ function normalizeDomain(d: string): string {
 
 router.post('/register', validateRegistration, (req, res) => authController.register(req, res));
 router.post('/login', validateLogin, (req, res) => authController.login(req, res));
+router.post('/refresh', (req, res) => authController.refresh(req, res));
+router.post('/logout', (req, res) => authController.logout(req, res));
 router.get('/verify/:token', (req, res) => authController.verifyEmail(req, res));
 
 // ─── Authed ───────────────────────────────────────────────────────────────
@@ -47,9 +50,9 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
     // server holds the DLL lock until next restart).
     const rows = await prisma.$queryRaw<Array<{
       id: string; email: string; firstName: string | null; lastName: string | null;
-      isVerified: boolean; role: string; createdAt: Date;
+      isVerified: boolean; role: string; status: string; createdAt: Date;
     }>>`
-      SELECT "id", "email", "firstName", "lastName", "isVerified", "role", "createdAt"
+      SELECT "id", "email", "firstName", "lastName", "isVerified", "role", "status", "createdAt"
       FROM "User" WHERE "id" = ${req.userId!} LIMIT 1
     `;
     const user = rows[0];
@@ -60,11 +63,12 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.get('/stores', requireAuth, async (req: Request, res: Response) => {
+router.get('/stores', requireAuth, requireActive, async (req: Request, res: Response) => {
   try {
     // Return accessToken too — caller is the owner, and the existing
     // client-side Shopify calls (OrdersTable, CSV export, etc) need it
     // until the rest of the app moves fully to backend-proxied requests.
+    // Tokens are AES-encrypted at rest; decrypt for the owner.
     const stores = await prisma.shopifyStore.findMany({
       where: { userId: req.userId!, isActive: true },
       orderBy: { createdAt: 'asc' },
@@ -79,19 +83,20 @@ router.get('/stores', requireAuth, async (req: Request, res: Response) => {
         updatedAt: true
       }
     });
-    res.json({ stores });
+    res.json({ stores: stores.map(s => ({ ...s, accessToken: decryptToken(s.accessToken) })) });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to list stores' });
   }
 });
 
-router.post('/stores', requireAuth, async (req: Request, res: Response) => {
+router.post('/stores', requireAuth, requireActive, async (req: Request, res: Response) => {
   try {
     const { storeDomain, accessToken, name } = req.body || {};
     if (!storeDomain || !accessToken) {
       return res.status(400).json({ error: 'storeDomain and accessToken are required' });
     }
     const domain = normalizeDomain(storeDomain);
+    const encrypted = encryptToken(accessToken);
 
     // Update if a row already exists for this user+domain (token re-paste);
     // otherwise create. Saves users from "store already exists" errors when
@@ -103,18 +108,18 @@ router.post('/stores', requireAuth, async (req: Request, res: Response) => {
     if (existing) {
       store = await prisma.shopifyStore.update({
         where: { id: existing.id },
-        data: { accessToken, name: name || existing.name, isActive: true }
+        data: { accessToken: encrypted, name: name || existing.name, isActive: true }
       });
     } else {
       store = await prisma.shopifyStore.create({
-        data: { userId: req.userId!, storeDomain: domain, accessToken, name: name || domain, isActive: true }
+        data: { userId: req.userId!, storeDomain: domain, accessToken: encrypted, name: name || domain, isActive: true }
       });
     }
     res.json({
       store: {
         id: store.id,
         storeDomain: store.storeDomain,
-        accessToken: store.accessToken,
+        accessToken,
         name: store.name,
         defaultShippingCompany: store.defaultShippingCompany,
         defaultSupplier: store.defaultSupplier
@@ -125,7 +130,7 @@ router.post('/stores', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.delete('/stores/:id', requireAuth, async (req: Request, res: Response) => {
+router.delete('/stores/:id', requireAuth, requireActive, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const store = await prisma.shopifyStore.findUnique({ where: { id } });
