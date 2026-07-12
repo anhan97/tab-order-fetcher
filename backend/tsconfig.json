@@ -17,5 +17,8 @@
     }
   },
   "include": ["src/**/*", "server.ts"],
-  "exclude": ["node_modules", "dist"]
+  // src/server.ts là stub 3 route cũ (entrypoint thật = ./server.ts);
+  // src/routes/cogs.ts chỉ được stub đó import và kéo theo dep `zod` không có
+  // trong package.json → vỡ build `npm ci` sạch (Docker). Loại cả hai.
+  "exclude": ["node_modules", "dist", "src/server.ts", "src/routes/cogs.ts"]
 } 

@@ -1,5 +1,6 @@
 import { FacebookCampaign, FacebookAdSet, FacebookAd, FacebookAdAccount } from '@/types/facebook';
 import { FACEBOOK_CONFIG } from '@/config/facebook';
+import { buildHeaders } from '@/utils/apiClient';
 import { format } from 'date-fns';
 
 const FACEBOOK_API_VERSION = FACEBOOK_CONFIG.version;
@@ -291,8 +292,12 @@ export async function fetchAdAccountData(
     until: formattedTo
   });
 
+  // Merge the JWT + active-store headers on top of whatever the caller
+  // registered via setFacebookApiAuthHeaders — callers like AppContext
+  // never call it, and without the Bearer the backend resolved a different
+  // (legacy synthetic) user than the one the FB token was stored under.
   const res = await fetch(`/api/facebook/account-data?${params}`, {
-    headers: currentAuthHeaders
+    headers: buildHeaders(currentAuthHeaders)
   });
   if (!res.ok) {
     let body: { error?: string; reason?: string; fbCode?: number } = {};

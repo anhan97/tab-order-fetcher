@@ -18,6 +18,8 @@ import { FacebookPage } from "@/pages/FacebookPage";
 import { ContentAnalyticsPage } from "@/pages/ContentAnalyticsPage";
 // ProfitPage retired — /profit now redirects to /orders (Daily P&L tab).
 import { AdminPage } from "@/pages/AdminPage";
+import { FulfillmentPage } from "@/pages/FulfillmentPage";
+import { PendingApprovalPage } from "@/pages/PendingApprovalPage";
 import { PrivacyPolicyPage } from "@/pages/PrivacyPolicyPage";
 import { TermsOfServicePage } from "@/pages/TermsOfServicePage";
 import NotFound from "./pages/NotFound";
@@ -28,11 +30,15 @@ const queryClient = new QueryClient();
 /**
  * Gate routes on real auth. Sends unauthenticated users to /login and
  * preserves the originally-requested URL so we can return them after sign-in.
- * Once logged in, also nudges the user to /connect if they haven't added a
- * Shopify store yet — the rest of the app is meaningless without one.
+ *
+ * NOTE: we deliberately do NOT force users with zero stores anywhere — they
+ * can browse the app freely and go to /connect (Stores) to add/switch stores
+ * whenever they want. Pages that need an active store render their own empty
+ * state instead. This lets one user manage many stores and switch between
+ * them from the sidebar.
  */
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, stores, loading } = useAuth();
+  const { user, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -47,8 +53,11 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (stores.length === 0 && location.pathname !== '/connect') {
-    return <Navigate to="/connect" replace />;
+  // Approval gate: PENDING/SUSPENDED accounts only see the waiting screen.
+  // The backend blocks their feature calls anyway (requireActive) — this
+  // keeps the UI from rendering a wall of 403 toasts.
+  if ((user.status === 'PENDING' || user.status === 'SUSPENDED') && location.pathname !== '/pending') {
+    return <Navigate to="/pending" replace />;
   }
 
   return <>{children}</>;
@@ -62,18 +71,28 @@ const AppRoutes = () => {
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
       <Route path="/terms" element={<TermsOfServicePage />} />
 
-      <Route path="/connect" element={
-        <ProtectedRoute>
-          <ConnectPage />
-        </ProtectedRoute>
-      } />
+      <Route path="/pending" element={<PendingApprovalPage />} />
 
       <Route element={<Layout />}>
         <Route path="/" element={<Navigate to="/orders" replace />} />
 
+        {/* Store management now lives inside the Layout so the sidebar +
+            store switcher are always visible while connecting/switching. */}
+        <Route path="/connect" element={
+          <ProtectedRoute>
+            <ConnectPage />
+          </ProtectedRoute>
+        } />
+
         <Route path="/orders" element={
           <ProtectedRoute>
             <OrdersPage />
+          </ProtectedRoute>
+        } />
+
+        <Route path="/fulfillment" element={
+          <ProtectedRoute>
+            <FulfillmentPage />
           </ProtectedRoute>
         } />
 

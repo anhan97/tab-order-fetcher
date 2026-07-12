@@ -20,10 +20,12 @@ import { useAuth } from '@/context/AuthContext';
 import { apiFetch, ApiError } from '@/utils/apiClient';
 import { useToast } from '@/hooks/use-toast';
 import { FacebookAppsManager } from '@/components/FacebookAppsManager';
+import { ShopifyAppConfigCard } from '@/components/ShopifyAppConfigCard';
 
 interface AdminStats {
   users: number;
   admins: number;
+  pendingUsers?: number;
   stores: number;
   fbApps: number;
   fbConnections: number;
@@ -35,6 +37,7 @@ interface AdminUserSummary {
   firstName: string | null;
   lastName: string | null;
   role: string;
+  status: string; // PENDING | ACTIVE | SUSPENDED
   isVerified: boolean;
   createdAt: string;
   storeCount: number;
@@ -103,6 +106,13 @@ interface AdminStoreRow {
 type RoleValue = 'admin' | 'user' | 'cs' | 'finance';
 const ROLE_OPTIONS: RoleValue[] = ['admin', 'user', 'cs', 'finance'];
 
+function statusBadgeClasses(status: string): string {
+  if (status === 'ACTIVE')    return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+  if (status === 'PENDING')   return 'bg-amber-100 text-amber-700 border-amber-200';
+  if (status === 'SUSPENDED') return 'bg-rose-100 text-rose-700 border-rose-200';
+  return 'bg-slate-100 text-slate-600 border-slate-200';
+}
+
 function roleBadgeClasses(role: string): string {
   if (role === 'admin')   return 'bg-amber-100 text-amber-700 border-amber-200';
   if (role === 'finance') return 'bg-violet-100 text-violet-700 border-violet-200';
@@ -161,6 +171,26 @@ export const AdminPage = () => {
       }
     } finally {
       setStoresLoading(false);
+    }
+  };
+
+  // Approval gate action: duyệt (PENDING→ACTIVE), khoá (→SUSPENDED, thu hồi
+  // toàn bộ phiên), mở khoá (→ACTIVE).
+  const changeStatus = async (target: AdminUserSummary, status: 'ACTIVE' | 'SUSPENDED') => {
+    if (status === 'SUSPENDED' && !confirm(`Khoá tài khoản ${target.email}? Mọi phiên đăng nhập của họ sẽ bị thu hồi.`)) return;
+    try {
+      await apiFetch(`/api/admin/users/${target.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status })
+      });
+      toast({
+        title: status === 'ACTIVE'
+          ? (target.status === 'PENDING' ? `Đã duyệt ${target.email}` : `Đã mở khoá ${target.email}`)
+          : `Đã khoá ${target.email}`
+      });
+      await loadUsers(userSearch);
+    } catch (e: any) {
+      toast({ title: 'Đổi trạng thái thất bại', description: e.message, variant: 'destructive' });
     }
   };
 
@@ -229,11 +259,15 @@ export const AdminPage = () => {
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           <StatCard icon={<Users className="h-4 w-4 text-slate-400" />} label="Users" value={stats.users} />
           <StatCard icon={<ShieldCheck className="h-4 w-4 text-amber-500" />} label="Admins" value={stats.admins} />
+          <StatCard icon={<Users className="h-4 w-4 text-rose-500" />} label="Chờ duyệt" value={stats.pendingUsers ?? 0} />
           <StatCard icon={<StoreIcon className="h-4 w-4 text-emerald-500" />} label="Stores" value={stats.stores} />
           <StatCard icon={<AppWindow className="h-4 w-4 text-blue-500" />} label="FB Apps" value={stats.fbApps} />
           <StatCard icon={<Link2 className="h-4 w-4 text-violet-500" />} label="FB Connections" value={stats.fbConnections} />
         </div>
       )}
+
+      {/* Shopify App (OAuth) hệ thống — admin cấu hình 1 app dùng chung */}
+      <ShopifyAppConfigCard />
 
       <Tabs value={activeTab} onValueChange={v => setActiveTab(v as 'users' | 'stores' | 'apps')}>
         <TabsList>
@@ -278,6 +312,7 @@ export const AdminPage = () => {
                       <th className="text-left px-4 py-2">Email</th>
                       <th className="text-left px-4 py-2">Name</th>
                       <th className="text-left px-4 py-2">Role</th>
+                      <th className="text-left px-4 py-2">Status</th>
                       <th className="text-right px-4 py-2">Stores</th>
                       <th className="text-right px-4 py-2">FB Apps</th>
                       <th className="text-right px-4 py-2">Connections</th>
@@ -288,7 +323,7 @@ export const AdminPage = () => {
                   <tbody>
                     {users.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="text-center py-10 text-slate-400">No users matched.</td>
+                        <td colSpan={9} className="text-center py-10 text-slate-400">No users matched.</td>
                       </tr>
                     )}
                     {users.map(u => (
@@ -298,11 +333,43 @@ export const AdminPage = () => {
                         <td className="px-4 py-2">
                           <Badge className={roleBadgeClasses(u.role)}>{u.role}</Badge>
                         </td>
+                        <td className="px-4 py-2">
+                          <Badge className={statusBadgeClasses(u.status)}>{u.status || 'ACTIVE'}</Badge>
+                        </td>
                         <td className="px-4 py-2 text-right tabular-nums">{u.storeCount}</td>
                         <td className="px-4 py-2 text-right tabular-nums">{u.fbAppCount}</td>
                         <td className="px-4 py-2 text-right tabular-nums">{u.fbConnectionCount}</td>
                         <td className="px-4 py-2 text-xs text-slate-500">{new Date(u.createdAt).toISOString().slice(0, 10)}</td>
-                        <td className="px-4 py-2 text-right">
+                        <td className="px-4 py-2 text-right whitespace-nowrap">
+                          {u.status === 'PENDING' && (
+                            <Button
+                              size="sm"
+                              className="bg-emerald-600 hover:bg-emerald-700 mr-1"
+                              onClick={() => changeStatus(u, 'ACTIVE')}
+                            >
+                              Duyệt
+                            </Button>
+                          )}
+                          {u.status === 'ACTIVE' && u.id !== user?.id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-rose-600 border-rose-200 hover:bg-rose-50 mr-1"
+                              onClick={() => changeStatus(u, 'SUSPENDED')}
+                            >
+                              Khoá
+                            </Button>
+                          )}
+                          {u.status === 'SUSPENDED' && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 mr-1"
+                              onClick={() => changeStatus(u, 'ACTIVE')}
+                            >
+                              Mở khoá
+                            </Button>
+                          )}
                           <Button
                             size="sm"
                             variant="ghost"

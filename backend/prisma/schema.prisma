@@ -22,8 +22,16 @@ model User {
   // through /api/admin/* endpoints. Bootstrapped from env ADMIN_EMAIL on
   // first login of that email.
   role        String    @default("user")
+  // Approval gate: PENDING (awaiting admin approval) | ACTIVE | SUSPENDED.
+  // New registrations start PENDING; feature routes require ACTIVE via the
+  // requireActive middleware. Suspending revokes all refresh tokens so it
+  // takes effect immediately. Existing users were backfilled to ACTIVE.
+  status      String    @default("PENDING")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  refreshTokens RefreshToken[]
+  shopifyApps   UserShopifyApp[]
 
   // Tenant relationships
   shopifyStores ShopifyStore[]
@@ -53,7 +61,90 @@ model User {
   adLaunchTemplates AdLaunchTemplate[]
   adLaunchHistory   AdLaunchHistory[]
 
+  // Saved fulfillment export column layouts (creator side of the relation).
+  orderExportPresets OrderExportPreset[]
+
   @@index([role])
+}
+
+// Rotating refresh tokens: opaque random strings, only the SHA-256 hash is
+// stored. Access JWTs are short-lived (~15m); /api/auth/refresh rotates the
+// pair. Revoking every row for a user (admin suspend) kills their sessions
+// as soon as the current access token expires.
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Global Shopify App (OAuth) config — the ONE app the whole system connects
+// stores through (shipbro-style). Admins set Client ID + Secret in the admin
+// UI; every user's "Kết nối qua Shopify" uses this. Singleton row id="singleton".
+// Secret encrypted at rest (enc2:). Falls back to env SHOPIFY_CLIENT_ID/SECRET
+// when no row exists.
+model ShopifyAppConfig {
+  id           String   @id @default("singleton")
+  clientId     String
+  clientSecret String
+  updatedAt    DateTime @updatedAt
+}
+
+// DEPRECATED (kept to avoid a destructive drop) — was per-user/per-store app
+// credentials. Superseded by the admin-managed global ShopifyAppConfig above;
+// no route reads this anymore.
+model UserShopifyApp {
+  id           String   @id @default(uuid())
+  userId       String
+  shopDomain   String?  // NULL = default app; Postgres allows multiple NULLs, code guards
+  clientId     String
+  clientSecret String
+  label        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, shopDomain])
+  @@index([userId])
+}
+
+// Shopify webhook idempotency ledger — one row per X-Shopify-Webhook-Id.
+// Replayed deliveries (Shopify retries on non-200) are skipped by unique id.
+model WebhookEvent {
+  id         String   @id @default(uuid())
+  shopifyId  String   @unique
+  topic      String
+  shopDomain String
+  payload    Json
+  processed  Boolean  @default(false)
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([topic])
+  @@index([createdAt])
+}
+
+// Audit trail for sensitive mutations (auth, user approval, order status,
+// tracking changes). Append-only; userId = affected tenant, actorUserId =
+// who did it (null for system/cron actions).
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  actorUserId String?
+  action      String
+  target      String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action])
 }
 
 model ShopifyStore {
@@ -88,6 +179,7 @@ model ShopifyStore {
   orderTransactions OrderTransaction[]
 
   campaignMappings CampaignStoreMapping[]
+  orderExportPresets OrderExportPreset[]
 
   @@unique([userId, storeDomain])
 }
@@ -125,6 +217,19 @@ model Order {
   shippingCountryCode String?  // from order.shipping_address.country_code
   shippingCompany     String?  // from fulfillment.tracking_company OR derived from tracking number prefix OR store default
   supplier            String?  // vendor/source — separate from shippingCompany (carrier). Defaults to store-level default.
+
+  // Internal fulfillment lifecycle (ShipBob-style), separate from Shopify's
+  // own status/fulfillmentStatus mirrors above. Transitions enforced by
+  // ORDER_FULFILL_TRANSITIONS server-side:
+  //   PENDING → PROCESSING|SHIPPED|CANCELLED, PROCESSING → SHIPPED|CANCELLED,
+  //   SHIPPED → DELIVERED. Setting a tracking number auto-advances to SHIPPED.
+  fulfillStatus   String   @default("PENDING")
+  trackingNumber  String?
+  deliveryStatus  String?  // carrier-reported (e.g. 17Track): InTransit | Delivered | ...
+  // Full shipping address JSON from Shopify (name, address1/2, city, province,
+  // zip, country, phone) — needed to export orders for fulfillment.
+  shippingAddress Json?
+  customerPhone   String?
   // shippingCostSnapshot dropped — basecost on each line item now bakes in
   // supplier shipping; no per-order shipping cost line in P&L.
 
@@ -164,6 +269,7 @@ model OrderLineItem {
   productId     BigInt?
   sku           String?
   title         String?
+  variantTitle  String?  // Shopify line_item.variant_title, e.g. "Red / L" — style/color for fulfillment export
   quantity      Int
   price         Decimal  @db.Decimal(12, 2)
   totalDiscount Decimal  @db.Decimal(12, 2) @default(0)
@@ -177,6 +283,30 @@ model OrderLineItem {
   @@unique([orderId, shopifyLineItemId])
   @@index([orderId])
   @@index([variantId])
+}
+
+// Saved column layout for the fulfillment CSV/text export. Store-scoped (not
+// per-user) so a whole team shares the same per-supplier presets — e.g. one
+// preset "YunTu" that lists exactly the fields/order that supplier's sheet
+// wants. `columns` is the ordered list of field KEYS (see
+// order-export-fields.ts); storing keys (not labels) means adding a new
+// exportable field never touches this table. userId records the creator.
+model OrderExportPreset {
+  id            String   @id @default(uuid())
+  userId        String
+  storeId       String
+  name          String
+  columns       Json                        // ordered string[] of field keys
+  delimiter     String   @default("comma")  // comma (CSV) | tab (paste-into-sheet)
+  includeHeader Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store ShopifyStore @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, name])
+  @@index([storeId])
 }
 
 model OrderTransaction {

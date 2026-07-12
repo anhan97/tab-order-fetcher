@@ -19,12 +19,14 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { OrdersTable } from '@/components/OrdersTable';
 import { ProfitView } from '@/components/ProfitView';
 import { OverviewCharts } from '@/components/OverviewCharts';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { LayoutDashboard, BarChart3, ListOrdered } from 'lucide-react';
+import { LayoutDashboard, BarChart3, ListOrdered, Store } from 'lucide-react';
 
 export const OrdersPage = () => {
   const {
@@ -57,7 +59,28 @@ export const OrdersPage = () => {
     role === 'cs' ? 'orders' : role === 'finance' ? 'pl' : 'orders';
   const [tab, setTab] = useState<'overview' | 'pl' | 'orders'>(defaultTab);
 
-  if (!shopifyConfig) return null;
+  // No active store yet → guide the user to connect one instead of a blank
+  // page. They reached here freely (no forced redirect); the CTA + sidebar
+  // "Stores" link are the way in.
+  if (!shopifyConfig) {
+    return (
+      <div className="max-w-xl mx-auto mt-10">
+        <Card className="p-10 text-center">
+          <div className="p-4 bg-teal-50 rounded-full w-20 h-20 mx-auto flex items-center justify-center mb-5">
+            <Store className="h-10 w-10 text-teal-500" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">Chưa kết nối store nào</h2>
+          <p className="text-slate-600 mb-6">
+            Kết nối cửa hàng Shopify của bạn để bắt đầu xem đơn hàng, lãi/lỗ và fulfillment.
+          </p>
+          <Button onClick={() => navigate('/connect')} className="bg-teal-600 hover:bg-teal-700">
+            <Store className="h-4 w-4 mr-1.5" />
+            Đi tới Stores để kết nối
+          </Button>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <Tabs value={tab} onValueChange={v => setTab(v as typeof tab)} className="space-y-4">

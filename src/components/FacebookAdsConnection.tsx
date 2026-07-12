@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { FacebookAdsApiClient } from '@/utils/facebookAdsApi';
+import { apiFetch } from '@/utils/apiClient';
 import { useAppContext } from '@/context/AppContext';
 
 interface FacebookAdsConnectionProps {
@@ -25,6 +26,18 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
   const [appNotAuthorized, setAppNotAuthorized] = useState<{ fbAppId: string } | null>(null);
   const { shopifyConfig } = useAppContext();
 
+  // Legacy Shopify headers for sessions without a JWT; apiFetch adds the
+  // Bearer automatically when one exists, and the backend prefers it. This
+  // keeps the userId consistent with the picker flow so the token isn't
+  // stored under one identity and checked under another.
+  const legacyHeaders = (): Record<string, string> => {
+    if (!shopifyConfig) return {};
+    return {
+      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+      'X-Shopify-Access-Token': shopifyConfig.accessToken
+    };
+  };
+
   // On mount: fetch the user's registered FB App and either configure the
   // SDK to use it (if SDK isn't loaded yet) or surface a "reload required"
   // notice. Without this step, clicking Connect mints a token under the
@@ -35,15 +48,8 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/facebook/my-app', {
-          headers: {
-            'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-            'X-Shopify-Access-Token': shopifyConfig.accessToken
-          }
-        });
+        const j = await apiFetch('/api/facebook/my-app', { headers: legacyHeaders() });
         if (cancelled) return;
-        if (!res.ok) return;
-        const j = await res.json();
         if (!j.fbAppId) {
           setMissingApp(true);
           return;
@@ -76,22 +82,14 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
       // edit takes effect without forcing a manual reload.
       if (shopifyConfig) {
         try {
-          const r = await fetch('/api/facebook/my-app', {
-            headers: {
-              'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-              'X-Shopify-Access-Token': shopifyConfig.accessToken
-            }
-          });
-          if (r.ok) {
-            const j = await r.json();
-            const active = FacebookAdsApiClient.getActiveAppId();
-            if (j.fbAppId && active && active !== j.fbAppId && (window as any).FB) {
-              setAppIdMismatch({ active, user: j.fbAppId });
-              setIsLoading(false);
-              return;
-            }
-            if (j.fbAppId) FacebookAdsApiClient.configureAppId(j.fbAppId);
+          const j = await apiFetch('/api/facebook/my-app', { headers: legacyHeaders() });
+          const active = FacebookAdsApiClient.getActiveAppId();
+          if (j.fbAppId && active && active !== j.fbAppId && (window as any).FB) {
+            setAppIdMismatch({ active, user: j.fbAppId });
+            setIsLoading(false);
+            return;
           }
+          if (j.fbAppId) FacebookAdsApiClient.configureAppId(j.fbAppId);
         } catch { /* fall through */ }
       }
 
@@ -113,22 +111,17 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
       if (!shopifyConfig) {
         throw new Error('Connect Shopify first so we can identify your account.');
       }
-      const connectRes = await fetch('/api/facebook/connect', {
+      await apiFetch('/api/facebook/connect', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-          'X-Shopify-Access-Token': shopifyConfig.accessToken
-        },
+        headers: legacyHeaders(),
         body: JSON.stringify({
           token: shortLivedToken,
+          // Tell the backend which app minted this token — exchanging it
+          // against the user's default app fails when they differ.
+          fbAppId: FacebookAdsApiClient.getActiveAppId() || undefined,
           adAccounts: accounts.map(a => ({ id: a.id, name: a.name }))
         })
       });
-      if (!connectRes.ok) {
-        const err = await connectRes.json().catch(() => ({}));
-        throw new Error(err.error || `Connect failed: ${connectRes.status}`);
-      }
 
       // Wipe legacy localStorage entries so old code paths don't pick up
       // a stale token. Token now lives ONLY in DB.

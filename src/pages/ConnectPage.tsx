@@ -1,32 +1,51 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ShopifyConnection } from '@/components/ShopifyConnection';
+import { ShopifyOAuthConnect } from '@/components/ShopifyOAuthConnect';
 import { Button } from '@/components/ui/button';
-import { Store, ArrowLeft, Trash2, CheckCircle2 } from 'lucide-react';
+import { Store, Trash2, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { Link, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 
 export const ConnectPage = () => {
-    const { stores, activeStore, addStore, removeStore, setActiveStoreByDomain } = useAuth();
+    const { stores, activeStore, addStore, removeStore, setActiveStoreByDomain, refreshStores } = useAuth();
     const { toast } = useToast();
-    const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [busy, setBusy] = useState<string | null>(null);
 
-    const isFirstTimeFlow = stores.length === 0;
+    // Landing back from the Shopify OAuth callback:
+    //   ?status=connected&shop=…  → refresh list, activate the new store
+    //   ?status=error&reason=…    → surface the failure
+    useEffect(() => {
+        const status = searchParams.get('status');
+        if (!status) return;
+        const shop = searchParams.get('shop');
+        const reason = searchParams.get('reason');
+        setSearchParams({}, { replace: true });
+        if (status === 'connected' && shop) {
+            (async () => {
+                await refreshStores();
+                setActiveStoreByDomain(shop);
+                toast({ title: 'Đã kết nối store qua Shopify', description: `${shop} — đơn hàng đang được đồng bộ nền.` });
+            })();
+        } else if (status === 'error') {
+            toast({
+                title: 'Kết nối Shopify thất bại',
+                description: `Lý do: ${reason || 'không rõ'}. Thử lại hoặc dùng cách dán token bên dưới.`,
+                variant: 'destructive'
+            });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const handleConnectionSuccess = async (config: { storeUrl: string; accessToken: string }) => {
         try {
             await addStore(config.storeUrl, config.accessToken);
             const cleanDomain = config.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
             setActiveStoreByDomain(cleanDomain);
-            toast({ title: 'Store added', description: cleanDomain });
-            // First-time flow: bounce to dashboard once they have a store.
-            // Subsequent adds: stay so they can add more or remove.
-            if (isFirstTimeFlow) {
-                navigate('/orders', { replace: true });
-            }
+            toast({ title: 'Đã thêm store', description: cleanDomain });
         } catch (e: any) {
             toast({ title: 'Failed to save store', description: e?.message || String(e), variant: 'destructive' });
         }
@@ -45,62 +64,33 @@ export const ConnectPage = () => {
         }
     };
 
-    // First-time flow: full-screen centered card, no nav.
-    if (isFirstTimeFlow) {
-        return (
-            <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-                <div className="max-w-2xl w-full">
-                    <Card className="p-8 text-center">
-                        <div className="mb-6">
-                            <div className="p-4 bg-teal-50 rounded-full w-20 h-20 mx-auto flex items-center justify-center">
-                                <Store className="h-10 w-10 text-teal-500" />
-                            </div>
-                        </div>
-                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Add your first Shopify store</h2>
-                        <p className="text-slate-600 mb-8">
-                            Enter your Shopify store details. You can add more stores later from the sidebar.
-                        </p>
-                        <ShopifyConnection onConnectionSuccess={handleConnectionSuccess} />
-                    </Card>
-
-                    <div className="mt-6 text-center text-sm text-slate-500">
-                        <Link to="/privacy" className="text-blue-600 hover:text-blue-800 hover:underline">
-                            Privacy Policy
-                        </Link>
-                        <span className="mx-2">•</span>
-                        <Link to="/terms" className="text-blue-600 hover:text-blue-800 hover:underline">
-                            Terms of Service
-                        </Link>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    // "Manage stores" flow when the user already has at least one store.
-    // This is rendered inside the Layout's <Outlet>, but ConnectPage in
-    // App.tsx is mounted OUTSIDE the Layout — keep that invariant by
-    // including a back-link manually.
+    // Rendered inside the Layout's <Outlet> — sidebar + store switcher stay
+    // visible. Works for both "first store" (empty list) and "manage/switch".
     return (
-        <div className="min-h-screen bg-slate-50 p-4 sm:p-8">
-            <div className="max-w-3xl mx-auto space-y-6">
-                <div className="flex items-center justify-between">
-                    <Button variant="ghost" size="sm" onClick={() => navigate('/orders')}>
-                        <ArrowLeft className="h-4 w-4 mr-1.5" />
-                        Back to dashboard
-                    </Button>
-                </div>
+        <div className="max-w-3xl mx-auto space-y-6">
+            <div>
+                <h1 className="text-xl font-bold text-slate-900">Stores</h1>
+                <p className="text-sm text-slate-500">
+                    Kết nối cửa hàng Shopify của bạn. Một tài khoản quản lý được nhiều store — chọn store
+                    ở thanh bên để chuyển qua lại.
+                </p>
+            </div>
 
-                {/* Existing stores list */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <Store className="h-5 w-5 text-teal-500" />
-                            Your stores
-                            <span className="text-sm font-normal text-slate-500">({stores.length})</span>
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
+            {/* Existing stores list */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                        <Store className="h-5 w-5 text-teal-500" />
+                        Cửa hàng của bạn
+                        <span className="text-sm font-normal text-slate-500">({stores.length})</span>
+                    </CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {stores.length === 0 ? (
+                        <div className="text-center py-8 text-slate-500 text-sm">
+                            Chưa có store nào. Kết nối store đầu tiên bên dưới để bắt đầu.
+                        </div>
+                    ) : (
                         <div className="space-y-2">
                             {stores.map(s => {
                                 const isActive = activeStore?.id === s.id;
@@ -144,19 +134,27 @@ export const ConnectPage = () => {
                                 );
                             })}
                         </div>
-                    </CardContent>
-                </Card>
+                    )}
+                </CardContent>
+            </Card>
 
-                {/* Add another */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="text-lg">Add another store</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <ShopifyConnection onConnectionSuccess={handleConnectionSuccess} />
-                    </CardContent>
-                </Card>
-            </div>
+            {/* Add / connect another store */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="text-lg">{stores.length === 0 ? 'Kết nối store' : 'Thêm store khác'}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <ShopifyOAuthConnect />
+                    <details className="text-xs text-slate-400">
+                        <summary className="cursor-pointer hover:text-slate-600">
+                            Cách cũ: dán Admin API token thủ công
+                        </summary>
+                        <div className="mt-3">
+                            <ShopifyConnection onConnectionSuccess={handleConnectionSuccess} />
+                        </div>
+                    </details>
+                </CardContent>
+            </Card>
         </div>
     );
 };

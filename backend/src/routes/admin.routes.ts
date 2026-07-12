@@ -12,11 +12,66 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { requireAuth } from '../middleware/require-auth';
 import { requireAdmin } from '../middleware/require-admin';
+import { encryptToken, decryptToken } from '../lib/token-crypto';
+import { backendBaseUrl } from './shopify-oauth.routes';
 
 const router = Router();
 const prisma = new PrismaClient();
 
 router.use(requireAuth, requireAdmin);
+
+// ── Global Shopify App (OAuth) config — admin-managed, whole-system app ──────
+
+/** GET /api/admin/shopify-app — current global app config (secret masked). */
+router.get('/shopify-app', async (req: Request, res: Response) => {
+  try {
+    const cfg = await prisma.shopifyAppConfig.findUnique({ where: { id: 'singleton' } });
+    const envFallback = !!(process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET);
+    res.json({
+      app: cfg
+        ? { clientId: cfg.clientId, secretLength: decryptToken(cfg.clientSecret).length, updatedAt: cfg.updatedAt }
+        : null,
+      envFallback,
+      // Khai vào Shopify app: Allowed redirection URL + webhook đều trỏ về đây.
+      redirectUri: `${backendBaseUrl(req)}/api/shopify/oauth/callback`,
+      scopes: process.env.SHOPIFY_SCOPES || 'read_orders,write_orders,read_products,read_customers'
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to load Shopify app config' });
+  }
+});
+
+/** PUT /api/admin/shopify-app — set/replace the global app credentials. */
+router.put('/shopify-app', async (req: Request, res: Response) => {
+  try {
+    const clientId = String(req.body?.clientId || '').trim();
+    const clientSecret = String(req.body?.clientSecret || '').trim();
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({ error: 'clientId và clientSecret là bắt buộc' });
+    }
+    const encrypted = encryptToken(clientSecret);
+    await prisma.shopifyAppConfig.upsert({
+      where: { id: 'singleton' },
+      update: { clientId, clientSecret: encrypted },
+      create: { id: 'singleton', clientId, clientSecret: encrypted }
+    });
+    const { audit } = await import('../lib/audit');
+    await audit({ actorUserId: req.userId, action: 'admin.shopify_app_saved', target: clientId });
+    res.json({ ok: true, clientId });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to save Shopify app config' });
+  }
+});
+
+/** DELETE /api/admin/shopify-app — remove global config (falls back to env). */
+router.delete('/shopify-app', async (req: Request, res: Response) => {
+  try {
+    await prisma.shopifyAppConfig.deleteMany({ where: { id: 'singleton' } });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to delete Shopify app config' });
+  }
+});
 
 interface AdminUserRow {
   id: string;
@@ -24,6 +79,7 @@ interface AdminUserRow {
   firstName: string | null;
   lastName: string | null;
   role: string;
+  status: string;
   isVerified: boolean;
   createdAt: Date;
   storeCount: bigint;
@@ -41,7 +97,7 @@ router.get('/users', async (req: Request, res: Response) => {
   try {
     const rows = await prisma.$queryRaw<AdminUserRow[]>`
       SELECT u."id", u."email", u."firstName", u."lastName", u."role",
-             u."isVerified", u."createdAt",
+             u."status", u."isVerified", u."createdAt",
              (SELECT COUNT(*) FROM "ShopifyStore" s WHERE s."userId" = u."id" AND s."isActive" = TRUE) AS "storeCount",
              (SELECT COUNT(*) FROM "UserFacebookApp" a WHERE a."userId" = u."id") AS "fbAppCount",
              (SELECT COUNT(*) FROM "UserFacebookConnection" c WHERE c."userId" = u."id") AS "fbConnectionCount"
@@ -252,16 +308,61 @@ router.put('/users/:id/role', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * PATCH /api/admin/users/:id/status — the approval gate action.
+ *
+ * PENDING → ACTIVE   (approve a new registration)
+ * ACTIVE  → SUSPENDED (lock an account; revokes all refresh tokens so the
+ *                      lockout takes effect as soon as the ~15m access token
+ *                      expires)
+ * SUSPENDED → ACTIVE (reinstate)
+ */
+router.patch('/users/:id/status', async (req: Request, res: Response) => {
+  const targetUserId = req.params.id;
+  const status = String(req.body?.status || '').trim().toUpperCase();
+  const ALLOWED = ['PENDING', 'ACTIVE', 'SUSPENDED'];
+  if (!ALLOWED.includes(status)) {
+    return res.status(400).json({ error: `status must be one of ${ALLOWED.join(', ')}` });
+  }
+  if (targetUserId === req.userId && status !== 'ACTIVE') {
+    return res.status(400).json({ error: 'Refusing to suspend yourself' });
+  }
+  try {
+    const target = await prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!target) return res.status(404).json({ error: 'User not found' });
+
+    await prisma.$executeRaw`
+      UPDATE "User" SET "status" = ${status}, "updatedAt" = NOW() WHERE "id" = ${targetUserId}
+    `;
+    if (status !== 'ACTIVE') {
+      const { revokeAllRefreshTokens } = await import('../controllers/auth.controller');
+      await revokeAllRefreshTokens(targetUserId);
+    }
+    const { audit } = await import('../lib/audit');
+    await audit({
+      userId: targetUserId,
+      actorUserId: req.userId,
+      action: 'admin.user_status_changed',
+      target: target.email,
+      metadata: { from: (target as any).status, to: status }
+    });
+    res.json({ ok: true, status });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /** GET /api/admin/stats — system-wide counts for the admin dashboard. */
 router.get('/stats', async (_req: Request, res: Response) => {
   try {
     const rows = await prisma.$queryRaw<Array<{
-      userCount: bigint; adminCount: bigint;
+      userCount: bigint; adminCount: bigint; pendingCount: bigint;
       storeCount: bigint; fbAppCount: bigint; fbConnectionCount: bigint;
     }>>`
       SELECT
         (SELECT COUNT(*) FROM "User") AS "userCount",
         (SELECT COUNT(*) FROM "User" WHERE "role" = 'admin') AS "adminCount",
+        (SELECT COUNT(*) FROM "User" WHERE "status" = 'PENDING') AS "pendingCount",
         (SELECT COUNT(*) FROM "ShopifyStore" WHERE "isActive" = TRUE) AS "storeCount",
         (SELECT COUNT(*) FROM "UserFacebookApp") AS "fbAppCount",
         (SELECT COUNT(*) FROM "UserFacebookConnection") AS "fbConnectionCount"
@@ -270,6 +371,7 @@ router.get('/stats', async (_req: Request, res: Response) => {
     res.json({
       users: Number(r.userCount),
       admins: Number(r.adminCount),
+      pendingUsers: Number(r.pendingCount),
       stores: Number(r.storeCount),
       fbApps: Number(r.fbAppCount),
       fbConnections: Number(r.fbConnectionCount)

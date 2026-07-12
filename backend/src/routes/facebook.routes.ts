@@ -404,12 +404,15 @@ router.post('/snapshot-day', async (req, res) => {
  */
 router.post('/connect', resolveStore, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
-  const { token, adAccounts } = req.body || {};
+  const { token, adAccounts, fbAppId } = req.body || {};
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ error: 'token required in body (POST, not URL)' });
   }
   try {
-    const status = await userToken.connect(req.resolved.userId, token);
+    // fbAppId optional: the SDK token was minted under a specific app, so
+    // exchanging it against the user's *default* app fails whenever the
+    // frontend logged in through a different one. Pass it when known.
+    const status = await userToken.connect(req.resolved.userId, token, fbAppId || null);
     // adAccounts in body is now ignored — the per-user account list is
     // sourced from FacebookAdAccountAccess (joined with the Adlux-managed
     // FacebookAdAccountAssignment), populated by the BM sync job. The
@@ -875,6 +878,13 @@ router.get('/connection-accounts', resolveStore, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const userId = req.resolved.userId;
   try {
+    // "Connected" = a stored, non-expired long-lived token. The account
+    // list is secondary — an empty list (no ACTIVE accounts yet, FB
+    // hiccup, missing scope) must NOT bounce the user back to the connect
+    // screen, which is exactly what happened when the frontend inferred
+    // connection state from accounts.length alone.
+    const status = await userToken.getStatus(userId);
+
     // 1. Adlux path
     const adluxRows = await prismaForRoutes.$queryRaw<Array<{ accountId: string; name: string }>>`
       SELECT a."accountId", a."accountName" AS "name"
@@ -885,12 +895,12 @@ router.get('/connection-accounts', resolveStore, async (req, res) => {
       ORDER BY a."accountName" ASC
     `;
     if (adluxRows.length > 0) {
-      return res.json({ accounts: adluxRows, source: 'adlux' });
+      return res.json({ connected: true, status, accounts: adluxRows, source: 'adlux' });
     }
 
     // 2. Legacy fallback: user's own FB token → /me/adaccounts
     const token = await userToken.getRawToken(userId);
-    if (!token) return res.json({ accounts: [], source: 'none' });
+    if (!token) return res.json({ connected: false, status, accounts: [], source: 'none' });
 
     const url = `https://graph.facebook.com/${FACEBOOK_CONFIG.version}/me/adaccounts` +
       `?fields=id,name,account_status,currency,timezone_name` +
@@ -899,19 +909,20 @@ router.get('/connection-accounts', resolveStore, async (req, res) => {
     if (!r.ok) {
       const text = await r.text();
       console.warn(`[connection-accounts] /me/adaccounts failed: ${r.status} ${text.slice(0, 200)}`);
-      return res.json({ accounts: [], source: 'fb-error' });
+      return res.json({ connected: status.connected, status, accounts: [], source: 'fb-error' });
     }
     const json = await r.json() as { data?: Array<{ id: string; name: string; account_status?: number; currency?: string; timezone_name?: string }> };
-    const accounts = (json.data || [])
-      // Only ACTIVE (account_status=1) accounts — others are disabled or pending.
-      .filter(a => a.account_status === undefined || a.account_status === 1)
-      .map(a => ({
-        accountId: a.id.replace(/^act_/, ''),
-        name: a.name,
-        currency: a.currency,
-        timezone: a.timezone_name
-      }));
-    res.json({ accounts, source: 'fb-graph' });
+    // Include non-ACTIVE accounts too (annotated) — a user whose only ad
+    // account is pending review is still connected; hiding the account
+    // made the UI treat them as never-connected.
+    const accounts = (json.data || []).map(a => ({
+      accountId: a.id.replace(/^act_/, ''),
+      name: a.name,
+      currency: a.currency,
+      timezone: a.timezone_name,
+      accountStatus: a.account_status ?? null
+    }));
+    res.json({ connected: status.connected, status, accounts, source: 'fb-graph' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

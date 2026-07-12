@@ -34,19 +34,22 @@ export async function runOnce(): Promise<void> {
     checked = candidates.length;
     for (const row of candidates) {
       try {
-        const r = await fbToken.extend(row.userId);
+        // Scope by fbAppId: without it, extend() resolves the user's
+        // DEFAULT app, so a user with several connections had the same
+        // default row extended repeatedly while the others lapsed.
+        const r = await fbToken.extend(row.userId, row.fbAppId);
         if (r) {
           refreshed++;
-          console.log(`[fb-token-refresh] user=${row.userId} extended → ${r.expiresAt?.toISOString() || 'no-expiry'}`);
+          console.log(`[fb-token-refresh] user=${row.userId} app=${row.fbAppId} extended → ${r.expiresAt?.toISOString() || 'no-expiry'}`);
         }
       } catch (e: any) {
         failed++;
         const msg = e?.message || String(e);
-        errors.push(`${row.userId}: ${msg.slice(0, 200)}`);
+        errors.push(`${row.userId}/${row.fbAppId}: ${msg.slice(0, 200)}`);
         // Persist the error against the row so the user can see it in the
         // FB connect UI ("token expired — please reconnect").
-        try { await fbToken.markError(row.userId, msg); } catch { /* ignore */ }
-        console.warn(`[fb-token-refresh] user=${row.userId} failed: ${msg.slice(0, 200)}`);
+        try { await fbToken.markError(row.userId, row.fbAppId, msg); } catch { /* ignore */ }
+        console.warn(`[fb-token-refresh] user=${row.userId} app=${row.fbAppId} failed: ${msg.slice(0, 200)}`);
       }
     }
   } catch (e: any) {

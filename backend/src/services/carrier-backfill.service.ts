@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import fetch from 'node-fetch';
 import { resolveShippingCompanyForOrder, extractTrackingPrefix } from './shipping-company.service';
 import { recomputeOrderCostSnapshots } from './order-sync.service';
+import { decryptToken } from '../lib/token-crypto';
 
 const prisma = new PrismaClient();
 const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-10';
@@ -52,7 +53,7 @@ export async function backfillShippingCompaniesFromTracking(
       await sleep(THROTTLE_MS);
       const url = `https://${store.storeDomain}/admin/api/${SHOPIFY_API_VERSION}/orders/${o.shopifyOrderId}.json?fields=id,fulfillments`;
       const res = await fetch(url, {
-        headers: { 'X-Shopify-Access-Token': store.accessToken, 'Accept': 'application/json' }
+        headers: { 'X-Shopify-Access-Token': decryptToken(store.accessToken), 'Accept': 'application/json' }
       });
       if (!res.ok) {
         errors.push(`#${o.orderNumber}: ${res.status} ${await res.text()}`);

@@ -45,7 +45,8 @@ export async function authenticate(
         email: true,
         firstName: true,
         lastName: true,
-        isVerified: true
+        isVerified: true,
+        status: true
       }
     });
 
@@ -57,8 +58,17 @@ export async function authenticate(
       return res.status(401).json({ error: 'Please verify your email' });
     }
 
+    // Approval gate — mirrors requireActive for routes on this legacy path.
+    if (user.status === 'PENDING') {
+      return res.status(403).json({ error: 'Account is awaiting admin approval', code: 'account_pending' });
+    }
+    if (user.status === 'SUSPENDED') {
+      return res.status(403).json({ error: 'Account is suspended', code: 'account_suspended' });
+    }
+
     // Attach user to request object
-    req.user = user;
+    const { status: _status, ...publicFields } = user;
+    req.user = publicFields;
     next();
   } catch (error: any) {
     console.error('Authentication error:', error);
