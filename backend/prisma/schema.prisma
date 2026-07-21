@@ -96,9 +96,11 @@ model ShopifyAppConfig {
   updatedAt    DateTime @updatedAt
 }
 
-// DEPRECATED (kept to avoid a destructive drop) — was per-user/per-store app
-// credentials. Superseded by the admin-managed global ShopifyAppConfig above;
-// no route reads this anymore.
+// Per-store Shopify App credentials owned by a user. Each store is connected
+// through its own app (unpublished apps only install on stores in the same
+// org), so a user registers Client ID + Secret per shopDomain. shopDomain NULL
+// = the user's default app. The global ShopifyAppConfig + env act as fallbacks.
+// Secret encrypted at rest (enc2:). Resolved by resolveAppForShop().
 model UserShopifyApp {
   id           String   @id @default(uuid())
   userId       String
@@ -411,6 +413,50 @@ model ProductCost {
   store     ShopifyStore @relation(fields: [storeId], references: [id])
 
   @@unique([userId, storeId, variantId])
+}
+
+// ── COGS price matrix (Excel-style) ─────────────────────────────────────────
+// The matrix the /cogs page edits: rows = product variants, columns = one
+// CogsLine per (supplier × carrier × country) "ship line", and for each line
+// one sub-column per SET size (set 1 = single unit, set 2 = bundle of 2, …).
+// A cell (CogsPrice) is the TOTAL landed cost — product + shipping baked in —
+// for that many units of that variant sent via that line. Keyed per store so
+// the whole team shares one matrix.
+
+model CogsLine {
+  id          String   @id @default(uuid())
+  userId      String   // creator
+  storeId     String
+  supplier    String   @default("Default")
+  carrier     String   // ship line, e.g. YT, LP, SF, YunExpress
+  countryCode String   // ISO-2 destination, e.g. US, AU, CA, GB
+  currency    String   @default("USD")
+  // Which set sizes this line's sub-columns show, e.g. [1,2,3]. UI-driven;
+  // prices for sets not in this list are kept (never destructive).
+  setSizes    Json     @default("[1]")
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  prices CogsPrice[]
+
+  @@unique([storeId, supplier, carrier, countryCode])
+  @@index([storeId, sortOrder])
+}
+
+model CogsPrice {
+  id        String   @id @default(uuid())
+  lineId    String
+  variantId BigInt   // Shopify variant id (matches ProductVariant.variantId)
+  setQty    Int      // 1 = single, 2 = set of 2, …
+  // Total landed cost for setQty units via this line (product + shipping).
+  cost      Decimal  @db.Decimal(12, 2)
+  updatedAt DateTime @updatedAt
+
+  line CogsLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@unique([lineId, variantId, setQty])
+  @@index([variantId])
 }
 
 // New comprehensive COGS system based on the specification
