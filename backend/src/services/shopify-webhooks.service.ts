@@ -113,16 +113,23 @@ export async function processShopifyWebhook(
  * is signed with that app's secret: the admin-managed ShopifyAppConfig, or
  * the env fallback. Accept if either matches.
  */
-export async function verifyWebhookHmac(_shopDomain: string, rawBody: string, hmacHeader: string): Promise<boolean> {
+export async function verifyWebhookHmac(shopDomain: string, rawBody: string, hmacHeader: string): Promise<boolean> {
   if (!hmacHeader) return false;
   const crypto = require('crypto') as typeof import('crypto');
   const { decryptToken } = await import('../lib/token-crypto');
 
+  // A store may be connected through its own per-store app OR the global/env
+  // fallback app — the delivery is signed with whichever one connected it, so
+  // we try every candidate secret for this shop.
   const secrets = new Set<string>();
   if (process.env.SHOPIFY_CLIENT_SECRET) secrets.add(process.env.SHOPIFY_CLIENT_SECRET);
   try {
     const cfg = await prisma.shopifyAppConfig.findUnique({ where: { id: 'singleton' } });
     if (cfg) secrets.add(decryptToken(cfg.clientSecret));
+    const userApps = await prisma.userShopifyApp.findMany({ where: { shopDomain } });
+    for (const a of userApps) {
+      try { secrets.add(decryptToken(a.clientSecret)); } catch { /* skip bad row */ }
+    }
   } catch (e: any) {
     console.warn('[webhooks] secret lookup failed:', e?.message);
   }

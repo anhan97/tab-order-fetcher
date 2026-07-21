@@ -39,13 +39,27 @@ const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
 // email come back redacted even with the scope granted.
 const SCOPES = process.env.SHOPIFY_SCOPES || 'read_orders,write_orders,read_products,read_customers';
 
+type ResolvedApp = { clientId: string; clientSecret: string; source: 'user' | 'db' | 'env' };
+
 /**
- * Resolve the ONE global app the whole system connects stores through
- * (shipbro-style): admin-managed DB config first, then env fallback.
+ * Resolve which Shopify App credentials connect/verify a given shop for a
+ * given user. PER-STORE first — the user's own app registered for this exact
+ * shop, then their default app (shopDomain = NULL) — then the admin-managed
+ * global app, then env. The last two are fallbacks so existing single-app
+ * installs keep working while users migrate to per-store apps.
  */
-export async function resolveShopifyApp(): Promise<{ clientId: string; clientSecret: string; source: 'db' | 'env' } | null> {
+export async function resolveAppForShop(userId: string, shop: string): Promise<ResolvedApp | null> {
+  const own = await prisma.userShopifyApp
+    .findUnique({ where: { userId_shopDomain: { userId, shopDomain: shop } } })
+    .catch(() => null);
+  if (own) return { clientId: own.clientId, clientSecret: decryptToken(own.clientSecret), source: 'user' };
+
+  const userDefault = await prisma.userShopifyApp.findFirst({ where: { userId, shopDomain: null } });
+  if (userDefault) return { clientId: userDefault.clientId, clientSecret: decryptToken(userDefault.clientSecret), source: 'user' };
+
   const cfg = await prisma.shopifyAppConfig.findUnique({ where: { id: 'singleton' } });
   if (cfg) return { clientId: cfg.clientId, clientSecret: decryptToken(cfg.clientSecret), source: 'db' };
+
   if (process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET) {
     return { clientId: process.env.SHOPIFY_CLIENT_ID, clientSecret: process.env.SHOPIFY_CLIENT_SECRET, source: 'env' };
   }
@@ -86,13 +100,82 @@ function verifyCallbackHmac(query: Record<string, any>, secret: string): boolean
 
 // ── Trạng thái app hệ thống (mọi user đọc được) ────────────────────────────
 
-/** Đã có app global chưa? Frontend dùng để bật/tắt nút kết nối. */
+/** Có app nào dùng được không (app riêng của user, hoặc fallback global/env). */
 router.get('/status', requireAuth, requireActive, async (req: Request, res: Response) => {
   try {
-    const app = await resolveShopifyApp();
-    res.json({ configured: !!app, source: app?.source ?? null });
+    const hasUserApp = (await prisma.userShopifyApp.count({ where: { userId: req.userId! } })) > 0;
+    const hasGlobal = !!(await prisma.shopifyAppConfig.findUnique({ where: { id: 'singleton' } }));
+    const hasEnv = !!(process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET);
+    res.json({ configured: hasUserApp || hasGlobal || hasEnv, hasUserApp, hasFallback: hasGlobal || hasEnv });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to load Shopify app status' });
+  }
+});
+
+// ── App Shopify riêng của user (mỗi store 1 app) ───────────────────────────
+
+/** GET /apps — danh sách app của user + redirectUri/scopes để khai vào Partner Dashboard. */
+router.get('/apps', requireAuth, requireActive, async (req: Request, res: Response) => {
+  try {
+    const apps = await prisma.userShopifyApp.findMany({
+      where: { userId: req.userId! },
+      orderBy: { createdAt: 'asc' }
+    });
+    const hasGlobal = !!(await prisma.shopifyAppConfig.findUnique({ where: { id: 'singleton' } }));
+    res.json({
+      apps: apps.map(a => ({
+        id: a.id,
+        shopDomain: a.shopDomain,
+        clientId: a.clientId,
+        label: a.label,
+        secretLength: (() => { try { return decryptToken(a.clientSecret).length; } catch { return 0; } })(),
+        updatedAt: a.updatedAt
+      })),
+      redirectUri: `${backendBaseUrl(req)}/api/shopify/oauth/callback`,
+      scopes: SCOPES,
+      hasFallback: hasGlobal || !!(process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET)
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to load Shopify apps' });
+  }
+});
+
+/** PUT /app — thêm/cập nhật app cho một shop (shopDomain rỗng = app mặc định). */
+router.put('/app', requireAuth, requireActive, async (req: Request, res: Response) => {
+  try {
+    const clientId = String(req.body?.clientId || '').trim();
+    const clientSecret = String(req.body?.clientSecret || '').trim();
+    const label = req.body?.label ? String(req.body.label).trim() : null;
+    const rawShop = req.body?.shopDomain ? String(req.body.shopDomain).trim() : '';
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({ error: 'clientId và clientSecret là bắt buộc' });
+    }
+    let shopDomain: string | null = null;
+    if (rawShop) {
+      shopDomain = normalizeShop(rawShop);
+      if (!shopDomain) return res.status(400).json({ error: 'shopDomain không hợp lệ — ví dụ: my-store.myshopify.com' });
+    }
+    const encrypted = encryptToken(clientSecret);
+    // Upsert theo (userId, shopDomain). Dùng findFirst+create/update vì shopDomain
+    // nullable không dùng được compound-unique upsert.
+    const existing = await prisma.userShopifyApp.findFirst({ where: { userId: req.userId!, shopDomain } });
+    const saved = existing
+      ? await prisma.userShopifyApp.update({ where: { id: existing.id }, data: { clientId, clientSecret: encrypted, label } })
+      : await prisma.userShopifyApp.create({ data: { userId: req.userId!, shopDomain, clientId, clientSecret: encrypted, label } });
+    await audit({ userId: req.userId, actorUserId: req.userId, action: 'shopify_app.saved', target: shopDomain || '(default)' });
+    res.json({ ok: true, id: saved.id, shopDomain: saved.shopDomain, clientId: saved.clientId });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to save Shopify app' });
+  }
+});
+
+/** DELETE /app/:id — xoá app của user. */
+router.delete('/app/:id', requireAuth, requireActive, async (req: Request, res: Response) => {
+  try {
+    await prisma.userShopifyApp.deleteMany({ where: { id: req.params.id, userId: req.userId! } });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to delete Shopify app' });
   }
 });
 
@@ -103,11 +186,11 @@ router.post('/begin', requireAuth, requireActive, async (req: Request, res: Resp
   if (!shop) {
     return res.status(400).json({ error: 'shop không hợp lệ — ví dụ: my-store hoặc my-store.myshopify.com' });
   }
-  const app = await resolveShopifyApp();
+  const app = await resolveAppForShop(req.userId!, shop);
   if (!app) {
     return res.status(400).json({
-      error: 'Hệ thống chưa cấu hình Shopify App. Liên hệ admin để cài đặt Shopify App (mục Admin → Shopify App).',
-      code: 'oauth_not_configured'
+      error: 'Chưa có Shopify App cho store này. Nhập Client ID + Secret của app (mục "App Shopify cho store này") rồi lưu trước khi kết nối.',
+      code: 'no_app_for_shop'
     });
   }
   const state = jwt.sign(
@@ -147,8 +230,8 @@ router.get('/callback', async (req: Request, res: Response) => {
     const shop = normalizeShop(shopParam);
     if (!shop || shop !== statePayload.shop) return fail('shop_mismatch');
 
-    const app = await resolveShopifyApp();
-    if (!app) return fail('oauth_not_configured');
+    const app = await resolveAppForShop(statePayload.uid, shop);
+    if (!app) return fail('no_app_for_shop');
 
     // 2. Shopify's HMAC over the callback query.
     if (!verifyCallbackHmac(req.query as Record<string, any>, app.clientSecret)) {
