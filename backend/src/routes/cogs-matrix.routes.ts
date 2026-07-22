@@ -19,12 +19,62 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 import { resolveStore } from '../middleware/resolve-store';
+import { decryptToken } from '../lib/token-crypto';
 import { audit } from '../lib/audit';
 
 const router = Router();
 const prisma = new PrismaClient();
 
 router.use(requireAuth, requireActive, resolveStore);
+
+/**
+ * Lazily backfill ProductVariant.imageUrl from the Shopify Products API.
+ * Runs at most once per store per 10 minutes (in-memory throttle) and only
+ * when some variants are missing an image. Failures are swallowed — images
+ * are cosmetic, the matrix must load regardless.
+ */
+const imageRefreshAt = new Map<string, number>();
+const IMAGE_REFRESH_TTL_MS = 10 * 60 * 1000;
+
+async function refreshVariantImages(storeId: string): Promise<void> {
+  const last = imageRefreshAt.get(storeId) ?? 0;
+  if (Date.now() - last < IMAGE_REFRESH_TTL_MS) return;
+  imageRefreshAt.set(storeId, Date.now()); // set first — a failing store shouldn't retry every load
+
+  const store = await prisma.shopifyStore.findUnique({ where: { id: storeId } });
+  if (!store) return;
+  const token = decryptToken(store.accessToken);
+  const headers = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
+
+  // Page through products; variant image = its image_id in images[], else product image.
+  let url: string | null =
+    `https://${store.storeDomain}/admin/api/2025-10/products.json?limit=250&fields=id,image,images,variants`;
+  const updates: Array<{ variantId: bigint; imageUrl: string }> = [];
+  for (let page = 0; url && page < 8; page++) {
+    const res: any = await fetch(url, { headers });
+    if (!res.ok) return;
+    const body: any = await res.json();
+    for (const prod of body.products || []) {
+      const productImg = prod.image?.src || prod.images?.[0]?.src || null;
+      for (const v of prod.variants || []) {
+        const own = v.image_id ? (prod.images || []).find((i: any) => i.id === v.image_id)?.src : null;
+        const src = own || productImg;
+        if (src && v.id) updates.push({ variantId: BigInt(v.id), imageUrl: src });
+      }
+    }
+    const link = res.headers.get('link') || '';
+    const next = link.split(',').find((s: string) => s.includes('rel="next"'));
+    url = next ? (next.match(/<([^>]+)>/)?.[1] ?? null) : null;
+  }
+
+  // updateMany by PK — never creates rows, never touches basecost.
+  for (const u of updates) {
+    await prisma.productVariant.updateMany({
+      where: { variantId: u.variantId },
+      data: { imageUrl: u.imageUrl }
+    });
+  }
+}
 
 /** setSizes Json → sorted unique positive ints, always containing at least [1]. */
 function normalizeSetSizes(v: unknown): number[] {
@@ -37,6 +87,8 @@ function normalizeSetSizes(v: unknown): number[] {
 router.get('/', async (req: Request, res: Response) => {
   try {
     const storeId = req.resolved!.storeId;
+    // Cosmetic — throttled internally; never blocks the matrix on failure.
+    try { await refreshVariantImages(storeId); } catch { /* ignore */ }
     // Row list = union of (a) this store's ProductVariant rows and (b) every
     // variant that appears on this store's order line items. (b) matters
     // because ProductVariant.variantId is a GLOBAL PK — when several
@@ -46,7 +98,7 @@ router.get('/', async (req: Request, res: Response) => {
     const [ownVariants, liVariants, lines] = await Promise.all([
       prisma.productVariant.findMany({
         where: { storeId },
-        select: { variantId: true, productId: true, sku: true, title: true, basecost: true }
+        select: { variantId: true, productId: true, sku: true, title: true, basecost: true, imageUrl: true }
       }),
       prisma.orderLineItem.findMany({
         where: { order: { storeId }, variantId: { not: null } },
@@ -67,16 +119,16 @@ router.get('/', async (req: Request, res: Response) => {
     const canonical = liIds.length
       ? await prisma.productVariant.findMany({
           where: { variantId: { in: liIds } },
-          select: { variantId: true, productId: true, sku: true, title: true, basecost: true }
+          select: { variantId: true, productId: true, sku: true, title: true, basecost: true, imageUrl: true }
         })
       : [];
     const canonMap = new Map(canonical.map(v => [v.variantId.toString(), v]));
 
-    const merged = new Map<string, { variantId: string; productId: string; sku: string | null; title: string; basecost: string }>();
+    const merged = new Map<string, { variantId: string; productId: string; sku: string | null; title: string; basecost: string; imageUrl: string | null }>();
     for (const v of ownVariants) {
       merged.set(v.variantId.toString(), {
         variantId: String(v.variantId), productId: String(v.productId),
-        sku: v.sku, title: v.title, basecost: String(v.basecost)
+        sku: v.sku, title: v.title, basecost: String(v.basecost), imageUrl: v.imageUrl
       });
     }
     for (const li of liVariants) {
@@ -88,7 +140,8 @@ router.get('/', async (req: Request, res: Response) => {
         productId: String(canon?.productId ?? li.productId ?? 0),
         sku: canon?.sku ?? li.sku,
         title: canon?.title ?? li.title ?? '(unnamed)',
-        basecost: String(canon?.basecost ?? 0)
+        basecost: String(canon?.basecost ?? 0),
+        imageUrl: canon?.imageUrl ?? null
       });
     }
     const variants = [...merged.values()].sort((a, b) =>

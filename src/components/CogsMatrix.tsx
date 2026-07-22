@@ -38,7 +38,11 @@ interface MatrixVariant {
   sku: string | null;
   title: string;
   basecost: string;
+  imageUrl: string | null;
 }
+
+/** Inclusive drag-fill range; anchor (r0,c0) is the cell whose value spreads. */
+interface FillRange { r0: number; c0: number; r1: number; c1: number; }
 interface MatrixLine {
   id: string;
   supplier: string;
@@ -71,6 +75,12 @@ export const CogsMatrix = () => {
   const [lineDialog, setLineDialog] = useState<null | { mode: 'create' } | { mode: 'edit'; line: MatrixLine }>(null);
   const [importing, setImporting] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [fill, setFill] = useState<FillRange | null>(null);
+  const fillRef = useRef<FillRange | null>(null);
+  fillRef.current = fill;
+  // Cell the mouse went down on — becomes the fill anchor the moment the
+  // pointer crosses into another cell while the button is still held.
+  const pendingDrag = useRef<{ r: number; c: number } | null>(null);
 
   // Line dialog fields
   const [fSupplier, setFSupplier] = useState('Default');
@@ -162,6 +172,7 @@ export const CogsMatrix = () => {
       return {
         productId,
         label,
+        image: vs.find(v => v.imageUrl)?.imageUrl ?? null,
         variants: vs.map(v => {
           const short = vs.length > 1 && v.title.startsWith(label) && v.title.length > label.length
             ? v.title.slice(label.length).replace(/^\s*-\s*/, '')
@@ -233,6 +244,78 @@ export const CogsMatrix = () => {
       return next;
     });
     toast({ title: `Đã dán ${filled} ô` });
+  };
+
+  // ── Excel-style drag-fill (no handle) ─────────────────────────────────────
+  // Hold the mouse down on a cell and sweep across the row or column: the
+  // moment the pointer crosses into another cell, fill mode kicks in — the
+  // press-down cell is the anchor and its value spreads over the swept range
+  // on release. A plain click (press + release in one cell) still just edits.
+  const flatColsRef = useRef(flatCols);
+  flatColsRef.current = flatCols;
+  const flatRowsRef = useRef(flatRows);
+  flatRowsRef.current = flatRows;
+
+  const applyFill = useCallback(() => {
+    const range = fillRef.current;
+    setFill(null);
+    if (!range) return;
+    const { r0, c0, r1, c1 } = range;
+    if (r0 === r1 && c0 === c1) return;
+    const cols = flatColsRef.current, rows = flatRowsRef.current;
+    const src = cols[c0] && rows[r0]
+      ? valuesRef.current[cellKey(cols[c0].line.id, rows[r0].variantId, cols[c0].setQty)] ?? ''
+      : '';
+    const keys: string[] = [];
+    for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++) {
+      for (let c = Math.min(c0, c1); c <= Math.max(c0, c1); c++) {
+        if (r === r0 && c === c0) continue;
+        keys.push(cellKey(cols[c].line.id, rows[r].variantId, cols[c].setQty));
+      }
+    }
+    setValues(prev => {
+      const next = { ...prev };
+      keys.forEach(k => { next[k] = src; });
+      return next;
+    });
+    setDirty(prev => { const s = new Set(prev); keys.forEach(k => s.add(k)); return s; });
+    toast({ title: `Đã fill ${keys.length} ô${src === '' ? ' (xoá giá)' : ` = ${src}`}` });
+  }, [toast]);
+
+  const onCellMouseDown = (r: number, c: number) => {
+    pendingDrag.current = { r, c };
+    const onUp = () => {
+      document.removeEventListener('mouseup', onUp);
+      pendingDrag.current = null;
+      applyFill();
+    };
+    document.addEventListener('mouseup', onUp);
+  };
+
+  /** Constrain to the dominant axis, re-evaluated every move so you can change direction mid-drag. */
+  const constrained = (anchor: { r: number; c: number }, r: number, c: number): FillRange => {
+    const dr = Math.abs(r - anchor.r), dc = Math.abs(c - anchor.c);
+    return dr >= dc
+      ? { r0: anchor.r, c0: anchor.c, r1: r, c1: anchor.c }
+      : { r0: anchor.r, c0: anchor.c, r1: anchor.r, c1: c };
+  };
+
+  const onCellMouseEnter = (r: number, c: number) => {
+    const start = pendingDrag.current;
+    if (!start) return;
+    if (!fillRef.current) {
+      if (start.r === r && start.c === c) return; // still inside the press-down cell
+      window.getSelection()?.removeAllRanges();   // cancel any text selection started in the input
+      setFill(constrained(start, r, c));
+    } else {
+      setFill(constrained(start, r, c));
+    }
+  };
+
+  const inFill = (r: number, c: number): boolean => {
+    if (!fill) return false;
+    return r >= Math.min(fill.r0, fill.r1) && r <= Math.max(fill.r0, fill.r1)
+        && c >= Math.min(fill.c0, fill.c1) && c <= Math.max(fill.c0, fill.c1);
   };
 
   // ── Line CRUD ─────────────────────────────────────────────────────────────
@@ -394,7 +477,7 @@ export const CogsMatrix = () => {
         </div>
       ) : (
         <div className="border rounded-xl overflow-auto max-h-[70vh] bg-white">
-          <table className="border-collapse text-sm min-w-full">
+          <table className={`border-collapse text-sm min-w-full ${fill ? 'select-none cursor-crosshair' : ''}`}>
             <thead>
               {/* Line header row */}
               <tr className="sticky top-0 z-30">
@@ -456,23 +539,45 @@ export const CogsMatrix = () => {
             </thead>
             <tbody>
               {groups.map(g => (
-                <FragmentGroup key={g.productId} label={g.label} colCount={flatCols.length}>
+                <FragmentGroup key={g.productId} label={g.label} image={g.image} colCount={flatCols.length}>
                   {g.variants.map(v => {
                     rowCounter += 1;
                     const r = rowCounter;
                     return (
                       <tr key={v.variantId} className="hover:bg-teal-50/30">
                         <td className="sticky left-0 z-20 bg-white border-b border-r px-3 py-1 whitespace-nowrap max-w-[320px]">
-                          <div className="truncate text-slate-800">{v.shortTitle}</div>
-                          {v.sku && <div className="text-[10px] text-slate-400 truncate">{v.sku}</div>}
+                          <div className="flex items-center gap-2">
+                            {v.imageUrl ? (
+                              <img src={v.imageUrl} alt="" loading="lazy"
+                                   className="w-7 h-7 rounded object-cover border border-slate-200 shrink-0" />
+                            ) : (
+                              <div className="w-7 h-7 rounded bg-slate-100 border border-slate-200 shrink-0 flex items-center justify-center text-[9px] text-slate-400">
+                                {v.shortTitle.slice(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <div className="truncate text-slate-800">{v.shortTitle}</div>
+                              {v.sku && <div className="text-[10px] text-slate-400 truncate">{v.sku}</div>}
+                            </div>
+                          </div>
                         </td>
                         {flatCols.map((col, c) => {
                           const key = cellKey(col.line.id, v.variantId, col.setQty);
                           const val = values[key] ?? '';
                           const isDirty = dirty.has(key);
                           const lineEdge = c < flatCols.length - 1 && flatCols[c + 1].line.id !== col.line.id;
+                          const highlighted = inFill(r, c);
+                          const isAnchor = fill && fill.r0 === r && fill.c0 === c;
                           return (
-                            <td key={key} className={`border-b p-0 ${lineEdge ? 'border-r' : 'border-r border-r-slate-100'}`}>
+                            <td
+                              key={key}
+                              onMouseDown={() => onCellMouseDown(r, c)}
+                              onMouseEnter={() => onCellMouseEnter(r, c)}
+                              onDragStart={e => e.preventDefault()}
+                              className={`relative border-b p-0 transition-colors duration-75
+                                ${lineEdge ? 'border-r' : 'border-r border-r-slate-100'}
+                                ${highlighted ? (isAnchor ? 'bg-teal-200/80 ring-1 ring-inset ring-teal-500' : 'bg-teal-100/70') : ''}`}
+                            >
                               <input
                                 id={`cogs-cell-${r}-${c}`}
                                 value={val}
@@ -484,7 +589,8 @@ export const CogsMatrix = () => {
                                 placeholder="—"
                                 className={`w-full h-8 px-2 text-right text-sm outline-none bg-transparent
                                   focus:bg-teal-50 focus:ring-2 focus:ring-inset focus:ring-teal-400
-                                  placeholder:text-slate-200 ${isDirty ? 'bg-amber-50' : ''}`}
+                                  placeholder:text-slate-200 ${isDirty ? 'bg-amber-50' : ''}
+                                  ${fill ? 'pointer-events-none' : ''}`}
                               />
                             </td>
                           );
@@ -508,7 +614,8 @@ export const CogsMatrix = () => {
 
       <p className="text-xs text-slate-400">
         💡 Mẹo: bấm vào ô rồi gõ giá — tự lưu sau ~1 giây. Di chuyển bằng phím mũi tên / Enter.
-        Có thể copy nguyên vùng giá từ Excel/Google Sheets rồi dán (Ctrl+V) vào ô bắt đầu.
+        Copy nguyên vùng từ Excel/Google Sheets rồi dán (Ctrl+V) vào ô bắt đầu.
+        <b> Giữ chuột trên 1 ô rồi kéo</b> ngang/dọc để fill giá ô đó sang cả vùng (như Excel).
         <b> Set N</b> = tổng giá vốn khi khách mua N cái (đã gồm ship của set đó).
       </p>
 
@@ -565,13 +672,19 @@ export const CogsMatrix = () => {
 };
 
 /** Product group header row + its variant rows. */
-const FragmentGroup = ({ label, colCount, children }: {
-  label: string; colCount: number; children: React.ReactNode;
+const FragmentGroup = ({ label, image, colCount, children }: {
+  label: string; image: string | null; colCount: number; children: React.ReactNode;
 }) => (
   <>
     <tr>
-      <td className="sticky left-0 z-20 bg-slate-50/95 border-b border-r px-3 py-1.5 font-semibold text-slate-600 text-xs uppercase tracking-wide whitespace-nowrap">
-        {label}
+      <td className="sticky left-0 z-20 bg-slate-50/95 border-b border-r px-3 py-1.5 whitespace-nowrap">
+        <div className="flex items-center gap-2">
+          {image && (
+            <img src={image} alt="" loading="lazy"
+                 className="w-5 h-5 rounded object-cover border border-slate-200 shrink-0" />
+          )}
+          <span className="font-semibold text-slate-600 text-xs uppercase tracking-wide">{label}</span>
+        </div>
       </td>
       <td colSpan={colCount} className="bg-slate-50/95 border-b" />
     </tr>
