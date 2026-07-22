@@ -182,8 +182,16 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
       const a = document.createElement('a');
       a.href = url;
       a.download = `orders-${tab.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.${format === 'tsv' ? 'txt' : 'csv'}`;
+      // Firefox/Safari ignore the `download` attribute unless the anchor is
+      // actually in the DOM — the file then saves under the blob UUID with NO
+      // .csv/.txt extension. Revoking the URL synchronously can also cancel the
+      // download before it starts. Append + click + delayed revoke is the
+      // reliable cross-browser pattern.
+      a.style.display = 'none';
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
       toast({ title: 'Đã tải file export' });
     } catch (e: any) {
       toast({ title: 'Tải file thất bại', description: e?.message, variant: 'destructive' });

@@ -362,18 +362,70 @@ async function persistLineItems(userId: string, storeId: string, orderId: string
   }
 }
 
+/** Normalize a country code for matrix matching (Shopify says GB, sheets often say UK). */
+function normCountry(c: string | null | undefined): string {
+  const cc = String(c || '').trim().toUpperCase();
+  return cc === 'UK' ? 'GB' : cc;
+}
+
 /**
- * Snapshot per-unit landed cost (basecost = product + supplier shipping)
- * onto each OrderLineItem. Reads ProductVariant.basecost — the single source
- * of truth — and freezes it on the line item so historical Basecost doesn't
- * drift if the variant's basecost is later edited.
+ * Pick the COGS-matrix line for an order. Cascade (most → least specific):
+ *   1. supplier + carrier + country all match
+ *   2. carrier + country match (any supplier)
+ *   3. country matches and the line's carrier is a generic bucket (Default/Other)
+ *   4. country matches (first by sortOrder)
+ * Carrier comparison is case-insensitive exact.
+ */
+function pickCogsLine(
+  lines: Array<{ id: string; supplier: string; carrier: string; countryCode: string; sortOrder: number }>,
+  order: { supplier: string | null; shippingCompany: string | null; shippingCountryCode: string | null }
+) {
+  const country = normCountry(order.shippingCountryCode);
+  if (!country) return null;
+  const inCountry = lines
+    .filter(l => normCountry(l.countryCode) === country)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  if (inCountry.length === 0) return null;
+
+  const carrier = String(order.shippingCompany || '').trim().toUpperCase();
+  const supplier = String(order.supplier || '').trim().toUpperCase();
+  const carrierEq = (l: { carrier: string }) => l.carrier.trim().toUpperCase() === carrier;
+
+  if (carrier && supplier) {
+    const hit = inCountry.find(l => carrierEq(l) && l.supplier.trim().toUpperCase() === supplier);
+    if (hit) return hit;
+  }
+  if (carrier) {
+    const hit = inCountry.find(carrierEq);
+    if (hit) return hit;
+  }
+  const generic = inCountry.find(l => ['DEFAULT', 'OTHER'].includes(l.carrier.trim().toUpperCase()));
+  return generic ?? inCountry[0];
+}
+
+/**
+ * Snapshot per-unit landed cost onto each OrderLineItem (frozen so historical
+ * basecost doesn't drift when prices are edited later).
+ *
+ * Cost source, in order:
+ *   1. COGS matrix (CogsLine × CogsPrice): pick the order's ship line via
+ *      pickCogsLine, then per line item with quantity q:
+ *        exact set price (setQty=q)            → unit = cost/q
+ *        else single price (setQty=1) × q      → unit = cost(set 1)
+ *   2. Fallback: ProductVariant.basecost (legacy flat per-unit cost) — keeps
+ *      P&L working exactly as before for stores that haven't filled the matrix.
  *
  * Idempotent: safe to call multiple times for the same order.
  */
-export async function recomputeOrderCostSnapshots(_userId: string, _storeId: string, orderId: string): Promise<void> {
+export async function recomputeOrderCostSnapshots(_userId: string, storeId: string, orderId: string): Promise<void> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    select: { lineItems: { select: { id: true, variantId: true } } }
+    select: {
+      supplier: true,
+      shippingCompany: true,
+      shippingCountryCode: true,
+      lineItems: { select: { id: true, variantId: true, quantity: true } }
+    }
   });
   if (!order || !order.lineItems.length) return;
 
@@ -382,19 +434,48 @@ export async function recomputeOrderCostSnapshots(_userId: string, _storeId: str
   const variantIds = order.lineItems.map(li => li.variantId).filter((v): v is bigint => v !== null);
   if (variantIds.length === 0) return;
 
-  const variants = await prisma.productVariant.findMany({
-    where: { variantId: { in: variantIds } },
-    select: { variantId: true, basecost: true }
-  });
+  const [variants, lines] = await Promise.all([
+    prisma.productVariant.findMany({
+      where: { variantId: { in: variantIds } },
+      select: { variantId: true, basecost: true }
+    }),
+    prisma.cogsLine.findMany({
+      where: { storeId },
+      select: { id: true, supplier: true, carrier: true, countryCode: true, sortOrder: true }
+    })
+  ]);
   const basecostMap = new Map(variants.map(v => [v.variantId.toString(), v.basecost]));
+
+  const line = pickCogsLine(lines, order);
+  const priceMap = new Map<string, Prisma.Decimal>();
+  if (line) {
+    const prices = await prisma.cogsPrice.findMany({
+      where: { lineId: line.id, variantId: { in: variantIds } },
+      select: { variantId: true, setQty: true, cost: true }
+    });
+    for (const p of prices) priceMap.set(`${p.variantId}:${p.setQty}`, p.cost);
+  }
 
   for (const li of order.lineItems) {
     if (li.variantId === null) continue;
-    const basecost = basecostMap.get(li.variantId.toString());
-    if (basecost !== undefined) {
+    const qty = li.quantity > 0 ? li.quantity : 1;
+    const vid = li.variantId.toString();
+
+    let unit: Prisma.Decimal | undefined;
+    const exactSet = priceMap.get(`${vid}:${qty}`);
+    const single = priceMap.get(`${vid}:1`);
+    if (exactSet !== undefined) {
+      unit = new Prisma.Decimal(Number(exactSet) / qty).toDecimalPlaces(2);
+    } else if (single !== undefined) {
+      unit = single;
+    } else {
+      unit = basecostMap.get(vid);
+    }
+
+    if (unit !== undefined) {
       await prisma.orderLineItem.update({
         where: { id: li.id },
-        data: { unitBasecost: basecost }
+        data: { unitBasecost: unit }
       });
     }
   }
