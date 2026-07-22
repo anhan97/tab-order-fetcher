@@ -75,10 +75,12 @@ export const CogsMatrix = () => {
   const [lineDialog, setLineDialog] = useState<null | { mode: 'create' } | { mode: 'edit'; line: MatrixLine }>(null);
   const [importing, setImporting] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [focused, setFocused] = useState<{ r: number; c: number } | null>(null);
   const [fill, setFill] = useState<FillRange | null>(null);
   const fillRef = useRef<FillRange | null>(null);
   fillRef.current = fill;
+  // Cell the mouse went down on — becomes the fill anchor the moment the
+  // pointer crosses into another cell while the button is still held.
+  const pendingDrag = useRef<{ r: number; c: number } | null>(null);
 
   // Line dialog fields
   const [fSupplier, setFSupplier] = useState('Default');
@@ -244,57 +246,70 @@ export const CogsMatrix = () => {
     toast({ title: `Đã dán ${filled} ô` });
   };
 
-  // ── Excel-style drag-fill ─────────────────────────────────────────────────
-  // Grab the small handle at the bottom-right of the focused cell and drag
-  // across a row or column: on release, the anchor cell's value fills the
-  // whole range. Constrained to one axis (whichever you drag furthest along).
+  // ── Excel-style drag-fill (no handle) ─────────────────────────────────────
+  // Hold the mouse down on a cell and sweep across the row or column: the
+  // moment the pointer crosses into another cell, fill mode kicks in — the
+  // press-down cell is the anchor and its value spreads over the swept range
+  // on release. A plain click (press + release in one cell) still just edits.
   const flatColsRef = useRef(flatCols);
   flatColsRef.current = flatCols;
   const flatRowsRef = useRef(flatRows);
   flatRowsRef.current = flatRows;
 
-  const startFill = (e: React.MouseEvent, r: number, c: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setFill({ r0: r, c0: c, r1: r, c1: c });
+  const applyFill = useCallback(() => {
+    const range = fillRef.current;
+    setFill(null);
+    if (!range) return;
+    const { r0, c0, r1, c1 } = range;
+    if (r0 === r1 && c0 === c1) return;
+    const cols = flatColsRef.current, rows = flatRowsRef.current;
+    const src = cols[c0] && rows[r0]
+      ? valuesRef.current[cellKey(cols[c0].line.id, rows[r0].variantId, cols[c0].setQty)] ?? ''
+      : '';
+    const keys: string[] = [];
+    for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++) {
+      for (let c = Math.min(c0, c1); c <= Math.max(c0, c1); c++) {
+        if (r === r0 && c === c0) continue;
+        keys.push(cellKey(cols[c].line.id, rows[r].variantId, cols[c].setQty));
+      }
+    }
+    setValues(prev => {
+      const next = { ...prev };
+      keys.forEach(k => { next[k] = src; });
+      return next;
+    });
+    setDirty(prev => { const s = new Set(prev); keys.forEach(k => s.add(k)); return s; });
+    toast({ title: `Đã fill ${keys.length} ô${src === '' ? ' (xoá giá)' : ` = ${src}`}` });
+  }, [toast]);
+
+  const onCellMouseDown = (r: number, c: number) => {
+    pendingDrag.current = { r, c };
     const onUp = () => {
       document.removeEventListener('mouseup', onUp);
-      const range = fillRef.current;
-      setFill(null);
-      if (!range) return;
-      const { r0, c0, r1, c1 } = range;
-      if (r0 === r1 && c0 === c1) return;
-      const cols = flatColsRef.current, rows = flatRowsRef.current;
-      const src = cols[c0] && rows[r0]
-        ? valuesRef.current[cellKey(cols[c0].line.id, rows[r0].variantId, cols[c0].setQty)] ?? ''
-        : '';
-      const keys: string[] = [];
-      for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++) {
-        for (let c = Math.min(c0, c1); c <= Math.max(c0, c1); c++) {
-          if (r === r0 && c === c0) continue;
-          keys.push(cellKey(cols[c].line.id, rows[r].variantId, cols[c].setQty));
-        }
-      }
-      setValues(prev => {
-        const next = { ...prev };
-        keys.forEach(k => { next[k] = src; });
-        return next;
-      });
-      setDirty(prev => { const s = new Set(prev); keys.forEach(k => s.add(k)); return s; });
-      toast({ title: `Đã fill ${keys.length} ô${src === '' ? ' (xoá giá)' : ` = ${src}`}` });
+      pendingDrag.current = null;
+      applyFill();
     };
     document.addEventListener('mouseup', onUp);
   };
 
-  const extendFill = (r: number, c: number) => {
-    setFill(prev => {
-      if (!prev) return prev;
-      // Dominant axis wins: dragging further vertically → fill the column, else the row.
-      const dr = Math.abs(r - prev.r0), dc = Math.abs(c - prev.c0);
-      return dr >= dc
-        ? { ...prev, r1: r, c1: prev.c0 }
-        : { ...prev, r1: prev.r0, c1: c };
-    });
+  /** Constrain to the dominant axis, re-evaluated every move so you can change direction mid-drag. */
+  const constrained = (anchor: { r: number; c: number }, r: number, c: number): FillRange => {
+    const dr = Math.abs(r - anchor.r), dc = Math.abs(c - anchor.c);
+    return dr >= dc
+      ? { r0: anchor.r, c0: anchor.c, r1: r, c1: anchor.c }
+      : { r0: anchor.r, c0: anchor.c, r1: anchor.r, c1: c };
+  };
+
+  const onCellMouseEnter = (r: number, c: number) => {
+    const start = pendingDrag.current;
+    if (!start) return;
+    if (!fillRef.current) {
+      if (start.r === r && start.c === c) return; // still inside the press-down cell
+      window.getSelection()?.removeAllRanges();   // cancel any text selection started in the input
+      setFill(constrained(start, r, c));
+    } else {
+      setFill(constrained(start, r, c));
+    }
   };
 
   const inFill = (r: number, c: number): boolean => {
@@ -551,13 +566,17 @@ export const CogsMatrix = () => {
                           const val = values[key] ?? '';
                           const isDirty = dirty.has(key);
                           const lineEdge = c < flatCols.length - 1 && flatCols[c + 1].line.id !== col.line.id;
-                          const isFocused = focused?.r === r && focused?.c === c;
                           const highlighted = inFill(r, c);
+                          const isAnchor = fill && fill.r0 === r && fill.c0 === c;
                           return (
                             <td
                               key={key}
-                              onMouseEnter={() => { if (fill) extendFill(r, c); }}
-                              className={`relative border-b p-0 ${lineEdge ? 'border-r' : 'border-r border-r-slate-100'} ${highlighted ? 'bg-teal-100/70' : ''}`}
+                              onMouseDown={() => onCellMouseDown(r, c)}
+                              onMouseEnter={() => onCellMouseEnter(r, c)}
+                              onDragStart={e => e.preventDefault()}
+                              className={`relative border-b p-0 transition-colors duration-75
+                                ${lineEdge ? 'border-r' : 'border-r border-r-slate-100'}
+                                ${highlighted ? (isAnchor ? 'bg-teal-200/80 ring-1 ring-inset ring-teal-500' : 'bg-teal-100/70') : ''}`}
                             >
                               <input
                                 id={`cogs-cell-${r}-${c}`}
@@ -565,21 +584,14 @@ export const CogsMatrix = () => {
                                 onChange={e => setCell(key, e.target.value)}
                                 onKeyDown={e => onKeyDown(e, r, c)}
                                 onPaste={e => onPaste(e, r, c)}
-                                onFocus={e => { setFocused({ r, c }); e.currentTarget.select(); }}
+                                onFocus={e => e.currentTarget.select()}
                                 inputMode="decimal"
                                 placeholder="—"
                                 className={`w-full h-8 px-2 text-right text-sm outline-none bg-transparent
                                   focus:bg-teal-50 focus:ring-2 focus:ring-inset focus:ring-teal-400
-                                  placeholder:text-slate-200 ${isDirty ? 'bg-amber-50' : ''} ${highlighted ? 'bg-transparent' : ''}`}
+                                  placeholder:text-slate-200 ${isDirty ? 'bg-amber-50' : ''}
+                                  ${fill ? 'pointer-events-none' : ''}`}
                               />
-                              {isFocused && !fill && (
-                                // Fill handle — kéo ngang/dọc để copy giá như Excel.
-                                <div
-                                  onMouseDown={e => startFill(e, r, c)}
-                                  title="Kéo để fill giá"
-                                  className="absolute -bottom-[3px] -right-[3px] w-2.5 h-2.5 bg-teal-500 border border-white rounded-[2px] cursor-crosshair z-10"
-                                />
-                              )}
                             </td>
                           );
                         })}
@@ -603,7 +615,7 @@ export const CogsMatrix = () => {
       <p className="text-xs text-slate-400">
         💡 Mẹo: bấm vào ô rồi gõ giá — tự lưu sau ~1 giây. Di chuyển bằng phím mũi tên / Enter.
         Copy nguyên vùng từ Excel/Google Sheets rồi dán (Ctrl+V) vào ô bắt đầu.
-        <b> Kéo ô vuông xanh</b> ở góc ô đang chọn (ngang hoặc dọc) để fill giá như Excel.
+        <b> Giữ chuột trên 1 ô rồi kéo</b> ngang/dọc để fill giá ô đó sang cả vùng (như Excel).
         <b> Set N</b> = tổng giá vốn khi khách mua N cái (đã gồm ship của set đó).
       </p>
 
