@@ -469,6 +469,9 @@ model ProductVariant {
   title            String
   productId        BigInt
   inventoryItemId  BigInt?  // for Shopify cost sync
+  // Variant (or parent product) image, backfilled lazily from the Shopify
+  // Products API when the COGS matrix loads — display-only.
+  imageUrl         String?
   // Total per-unit landed cost: product cost + per-unit supplier shipping.
   // OrderLineItem.unitBasecost is a frozen snapshot of this value at sync time.
   basecost         Decimal  @db.Decimal(10, 2) @default(0)
