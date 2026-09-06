@@ -48,9 +48,12 @@ export class ShopifyApiClient {
     // Determine the correct API base URL based on current environment
     this.baseUrl = this.getApiBaseUrl();
 
-    // Save to localStorage
-    localStorage.setItem('shopify_store_url', this.config.storeUrl);
-    localStorage.setItem('shopify_access_token', this.config.accessToken);
+    // NOTE: constructing a client deliberately persists NOTHING. It used to
+    // write storeUrl + accessToken into localStorage, which meant every
+    // orders fetch quietly cached the signed-in merchant's Shopify token in
+    // the browser — and logout never cleared it, so the next account to log
+    // in on that machine booted with the previous merchant's store. The
+    // active store now lives solely in AuthContext (backend-owned).
   }
 
   private getApiBaseUrl(): string {
@@ -60,17 +63,11 @@ export class ShopifyApiClient {
     return '/api/shopify';
   }
 
-  static fromLocalStorage(): ShopifyApiClient | null {
-    const storeUrl = localStorage.getItem('shopify_store_url');
-    const accessToken = localStorage.getItem('shopify_access_token');
-
-    if (storeUrl && accessToken) {
-      return new ShopifyApiClient({ storeUrl, accessToken });
-    }
-
-    return null;
-  }
-
+  /**
+   * Purge the retired `shopify_store_url` / `shopify_access_token` pair.
+   * Nothing writes them any more; this only evicts values left behind by
+   * older builds. Safe to call on every boot and on logout.
+   */
   static clearLocalStorage(): void {
     localStorage.removeItem('shopify_store_url');
     localStorage.removeItem('shopify_access_token');

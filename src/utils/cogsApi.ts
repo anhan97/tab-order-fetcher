@@ -159,21 +159,14 @@ export class COGSApiClient {
     return response;
   }
 
-  // Create from localStorage (for migration)
-  static fromLocalStorage(): COGSApiClient | null {
-    const userId = localStorage.getItem('user_id');
-    const storeId = localStorage.getItem('store_id');
-    
-    if (!userId || !storeId) {
-      return null;
-    }
-    
-    return new COGSApiClient(userId, storeId);
-  }
-
-  // Save to localStorage (for migration)
-  static saveToLocalStorage(userId: string, storeId: string): void {
-    localStorage.setItem('user_id', userId);
-    localStorage.setItem('store_id', storeId);
+  /**
+   * Evict the retired `user_id` / `store_id` pair. These held the literal
+   * string 'default-user' plus a store slug, and the matching
+   * from/saveToLocalStorage helpers meant every merchant shared one COGS
+   * bucket. Callers now pass the authenticated user + active store id.
+   */
+  static clearLocalStorage(): void {
+    localStorage.removeItem('user_id');
+    localStorage.removeItem('store_id');
   }
 }

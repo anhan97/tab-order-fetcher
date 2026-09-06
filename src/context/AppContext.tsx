@@ -60,22 +60,28 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppContextProvider = ({ children }: { children: ReactNode }) => {
-    // Bridge from AuthContext: shopifyConfig now derives from the user's
-    // active store record (which is loaded from the backend). Falling back
-    // to legacy localStorage keeps existing sessions working until they
-    // re-login. Once the user goes through /login → /connect, AuthContext
-    // owns the truth.
-    const { activeStore } = useAuth();
-    const [isShopifyConnected, setIsShopifyConnected] = useState(() => {
-        return !!localStorage.getItem('shopify_store_url');
-    });
+    // AuthContext is the ONLY source of "which store am I looking at" — it
+    // derives activeStore from the backend, scoped to the signed-in user.
+    // We deliberately do NOT seed this from localStorage: the old code booted
+    // shopifyConfig from `shopify_store_url` / `shopify_access_token`, which
+    // logout never cleared, so the next account on that browser opened the
+    // dashboard on the previous merchant's store.
+    const { user, activeStore } = useAuth();
+    const [isShopifyConnected, setIsShopifyConnected] = useState(false);
     const [shopifyConfig, setShopifyConfig] = useState<{ storeUrl: string; accessToken: string } | null>(null);
 
-    // Re-sync shopifyConfig + connection flag whenever the active store changes.
+    // Re-sync shopifyConfig + connection flag whenever the active store
+    // changes — including to null (logged out, no store yet, or the store
+    // list failed to load). Without the else branch a stale config would
+    // survive a store switch or a logout.
     useEffect(() => {
         if (activeStore) {
             setShopifyConfig({ storeUrl: activeStore.storeDomain, accessToken: activeStore.accessToken });
             setIsShopifyConnected(true);
+        } else {
+            setShopifyConfig(null);
+            setIsShopifyConnected(false);
+            setOrders([]);
         }
     }, [activeStore]);
 
@@ -141,25 +147,16 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
         // no longer exists.
         try { localStorage.removeItem('fb_mode_preference'); } catch { /* ignore */ }
 
-        const savedShopifyClient = ShopifyApiClient.fromLocalStorage();
+        // One-time purge: older builds cached the merchant's Shopify domain +
+        // Admin API token here and booted shopifyConfig from them. That pair
+        // outlived logout, so it leaked one account's store into the next
+        // session. AuthContext owns the active store now — evict the leftovers
+        // (the token especially) from any browser that ran an older build.
+        ShopifyApiClient.clearLocalStorage();
+        COGSApiClient.clearLocalStorage();
+
         const savedCogsConfigs = localStorage.getItem('cogs_configs');
         const savedFacebookAccounts = localStorage.getItem('facebook_accounts');
-
-        if (savedShopifyClient) {
-            const storeUrl = localStorage.getItem('shopify_store_url') || '';
-            const accessToken = localStorage.getItem('shopify_access_token') || '';
-            setShopifyConfig({ storeUrl, accessToken });
-            setIsShopifyConnected(true);
-
-            if (storeUrl) {
-                const userId = 'default-user';
-                const storeId = storeUrl.replace('.myshopify.com', '');
-                COGSApiClient.saveToLocalStorage(userId, storeId);
-            }
-            // FB connection probe moved to the effect keyed on shopifyConfig
-            // below — it must also run for JWT sessions (activeStore), which
-            // never enter this legacy-localStorage branch.
-        }
 
         // Stale localStorage cleanup — old code paths used to persist FB
         // tokens here. Wipe so they don't get re-read.
@@ -273,11 +270,16 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     useEffect(() => {
         const loadOrders = async () => {
             try {
-                // Use stored config if available, otherwise fallback to env (dev mode)
-                const storeUrl = shopifyConfig?.storeUrl || import.meta.env.VITE_SHOPIFY_SHOP_DOMAIN || '';
-                const accessToken = shopifyConfig?.accessToken || import.meta.env.VITE_SHOPIFY_ACCESS_TOKEN || '';
+                // No env fallback: VITE_SHOPIFY_SHOP_DOMAIN / _ACCESS_TOKEN
+                // baked a single "default store" into the bundle that every
+                // user hit whenever their own store hadn't resolved yet.
+                const storeUrl = shopifyConfig?.storeUrl;
+                const accessToken = shopifyConfig?.accessToken;
 
-                if (!storeUrl || !accessToken) return;
+                if (!storeUrl || !accessToken) {
+                    setOrders([]);
+                    return;
+                }
 
                 const client = new ShopifyApiClient({ storeUrl, accessToken });
                 const response = await client.getOrders({
@@ -435,14 +437,19 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
         }
     };
 
+    // Identity comes from the authenticated session, not from localStorage.
+    // This used to be `COGSApiClient.fromLocalStorage()`, which read a
+    // `user_id` of the literal string 'default-user' and a `store_id` derived
+    // from the cached store domain — so every merchant read and wrote the SAME
+    // shared COGS bucket, and the backend happily lazy-created a placeholder
+    // 'default-user' + '<slug>.myshopify.com' store to hang it off.
     const handleRefreshCOGS = async () => {
+        if (!user || !activeStore) return;
         try {
-            const client = COGSApiClient.fromLocalStorage();
-            if (client) {
-                const configs = await client.getCOGSConfigs();
-                setCogsConfigs(configs);
-                localStorage.setItem('cogs_configs', JSON.stringify(configs));
-            }
+            const client = new COGSApiClient(user.id, activeStore.id);
+            const configs = await client.getCOGSConfigs();
+            setCogsConfigs(configs);
+            localStorage.setItem('cogs_configs', JSON.stringify(configs));
         } catch (error) {
             console.error('Error refreshing COGS from database:', error);
         }

@@ -18,6 +18,8 @@ import {
   validateCogsConfig
 } from '@/utils/minimalCogsResolver';
 import { sampleCogsConfig } from '@/utils/sampleMinimalCogs';
+import { apiFetch } from '@/utils/apiClient';
+import { useAuth } from '@/context/AuthContext';
 
 interface MinimalCOGSManagementProps {
   onUpdateCOGS?: (config: CogsConfig) => void;
@@ -41,6 +43,7 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   const [editingProduct, setEditingProduct] = useState<ProductCog | null>(null);
   const [editingCombo, setEditingCombo] = useState<ComboCog | null>(null);
   const { toast } = useToast();
+  const { activeStore } = useAuth();
 
   // Form states
   const [newProduct, setNewProduct] = useState<Partial<ProductCog>>({
@@ -255,41 +258,25 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   useEffect(() => {
     setJsonText(JSON.stringify(config, null, 2));
     loadProducts();
-  }, [config]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, activeStore]);
 
+  // Products come from the signed-in user's ACTIVE store. This used to read
+  // `shopify_store_url` / `shopify_access_token` straight out of localStorage,
+  // which survived logout and so served the previous merchant's catalogue.
+  // apiFetch attaches the JWT + X-Shopify-Store-Domain from AuthContext, and
+  // the backend resolves the real token from the DB.
   const loadProducts = async () => {
+    if (!activeStore) {
+      setProducts([]);
+      return;
+    }
     try {
-      const storeUrl = localStorage.getItem('shopify_store_url');
-      const accessToken = localStorage.getItem('shopify_access_token');
-
-      if (!storeUrl || !accessToken) {
-        console.log('Shopify not connected, skipping product fetch');
-        return;
-      }
-
-      // Use localhost API when running on ngrok
-      const apiBaseUrl = window.location.origin.includes('ngrok')
-        ? 'http://localhost:3001/api'
-        : '/api';
-
-      const response = await fetch(`${apiBaseUrl}/shopify/products?status=active&limit=50`, {
-        headers: {
-          'X-Shopify-Store-Domain': storeUrl,
-          'X-Shopify-Access-Token': accessToken,
-        },
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Failed to fetch products:', response.status, errorText);
-        return;
-      }
-
-      const data = await response.json();
-      console.log('Products loaded:', data.products?.length || 0, 'products');
+      const data = await apiFetch<{ products?: any[] }>('/api/shopify/products?status=active&limit=50');
       setProducts(data.products || []);
     } catch (error) {
       console.error('Error fetching products:', error);
+      setProducts([]);
     }
   };
 

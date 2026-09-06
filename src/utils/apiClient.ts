@@ -11,6 +11,11 @@
 const TOKEN_KEY = 'auth_token';
 const REFRESH_KEY = 'auth_refresh_token';
 const STORE_KEY = 'active_store_domain';
+// Retired keys from the pre-JWT "paste your Admin API token" flow. Nothing
+// writes them any more, but a browser that ran an older build still holds
+// them — and they used to survive logout, leaking the previous merchant's
+// store (and token) into the next session. clear() evicts them for good.
+const LEGACY_KEYS = ['shopify_store_url', 'shopify_access_token'];
 
 export class ApiError extends Error {
   status: number;
@@ -130,5 +135,6 @@ export const auth = {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem(STORE_KEY);
+    LEGACY_KEYS.forEach(k => localStorage.removeItem(k));
   }
 };
