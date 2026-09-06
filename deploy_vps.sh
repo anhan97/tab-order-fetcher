@@ -157,11 +157,26 @@ for i in $(seq 1 60); do
 done
 [ "$BACKEND_OK" = "1" ] || warn "Backend chưa healthy sau ~3 phút. Xem log:  cd $REPO_DIR && docker compose logs backend"
 
-# ─────────────────────────── 6. NGINX ───────────────────────────
-step "Cấu hình nginx reverse proxy → 127.0.0.1:${APP_PORT}"
+# ─────────────────────── 6. REVERSE PROXY — nginx host, HOẶC proxy sẵn có ───────────────────────
+# Cổng 80 có thể đang do proxy khác giữ (Caddy/Traefik/nginx chạy trong Docker của app khác
+# trên cùng VPS). Tắt nó = sập app kia, nên script KHÔNG đụng vào: chỉ để app này nghe ở
+# 127.0.0.1:${APP_PORT} rồi in sẵn cấu hình để bạn đấu domain vào proxy đang chạy.
+step "Kiểm tra ai đang giữ cổng 80"
+PORT80_OWNER="$(ss -ltnp 2>/dev/null | grep -E '(:|\*)80 ' | head -1 || true)"
+EXTERNAL_PROXY=0
+PROXY_CT=""
+if [ -n "$PORT80_OWNER" ] && ! echo "$PORT80_OWNER" | grep -q 'nginx'; then
+  EXTERNAL_PROXY=1
+  echo "$PORT80_OWNER"
+  PROXY_CT="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E '0\.0\.0\.0:80->' | awk '{print $1}' | head -1 || true)"
+  warn "Cổng 80 đã có proxy khác dùng${PROXY_CT:+ (container: ${PROXY_CT})} → BỎ QUA nginx host + Certbot."
+  warn "Tắt proxy đó sẽ sập app khác đang chạy, nên script không đụng tới. Xem hướng dẫn đấu nối ở cuối."
+else
+  echo "Cổng 80 trống (hoặc đang do nginx host dùng) → cấu hình nginx như bình thường."
+fi
+
 VHOST="/etc/nginx/sites-available/tab-order-fetcher"
 CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
-[ -f "$VHOST" ] && cp "$VHOST" "${VHOST}.bak_$(date +%F_%H%M%S)"
 
 proxy_block() {
   cat <<'BLOCK'
@@ -204,35 +219,48 @@ reload_nginx() {
   if ! systemctl reload-or-restart nginx; then
     warn "Không khởi động được nginx. Chẩn đoán:"
     systemctl status nginx --no-pager -l 2>&1 | tail -20 || true
-    ss -ltnp 2>/dev/null | grep -E ':80\s|:443\s' || true
-    die "nginx không chạy được — hay gặp nhất là dịch vụ khác đang giữ cổng 80/443 (apache2?).
-     Gỡ/tắt nó rồi chạy lại script:  sudo systemctl disable --now apache2"
+    ss -ltnp 2>/dev/null | grep -E '(:|\*)(80|443) ' || true
+    die "nginx không bind được cổng 80/443."
   fi
   systemctl enable nginx >/dev/null 2>&1 || true
 }
 
-if [ -f "${CERT_DIR}/fullchain.pem" ]; then
-  write_vhost https
-  echo "Dùng cert Let's Encrypt sẵn có tại ${CERT_DIR}."
+TLS_DONE=0
+
+if [ "$EXTERNAL_PROXY" = "1" ]; then
+  step "Dọn nginx host (không dùng tới)"
+  # Gỡ vhost script từng tạo + tắt service để nó khỏi fail đi fail lại mỗi lần boot.
+  rm -f /etc/nginx/sites-enabled/tab-order-fetcher
+  systemctl disable --now nginx >/dev/null 2>&1 || true
+  echo "Đã tắt nginx host. TLS do proxy đang chạy (${PROXY_CT:-proxy ngoài}) lo."
+  TLS_DONE=1   # Caddy/Traefik tự cấp cert — URL cuối cùng vẫn là https
 else
-  write_vhost http
+  step "Cấu hình nginx reverse proxy → 127.0.0.1:${APP_PORT}"
+  [ -f "$VHOST" ] && cp "$VHOST" "${VHOST}.bak_$(date +%F_%H%M%S)"
+  if [ -f "${CERT_DIR}/fullchain.pem" ]; then
+    write_vhost https
+    echo "Dùng cert Let's Encrypt sẵn có tại ${CERT_DIR}."
+    TLS_DONE=1
+  else
+    write_vhost http
+  fi
+  ln -sf "$VHOST" /etc/nginx/sites-enabled/tab-order-fetcher
+  rm -f /etc/nginx/sites-enabled/default
+  reload_nginx
+  echo "nginx OK"
 fi
-ln -sf "$VHOST" /etc/nginx/sites-enabled/tab-order-fetcher
-rm -f /etc/nginx/sites-enabled/default
-reload_nginx
-echo "nginx OK"
 
 step "Firewall (ufw)"
 ufw allow OpenSSH >/dev/null
-ufw allow 'Nginx Full' >/dev/null
+ufw allow 80/tcp   >/dev/null
+ufw allow 443/tcp  >/dev/null
 ufw --force enable >/dev/null
-echo "Mở 22/80/443. Cổng 3001/55432 đã bind 127.0.0.1 nên không lộ ra internet."
+echo "Mở 22/80/443. Cổng 3001/8080/55432 đã bind 127.0.0.1 nên không lộ ra internet."
 
 # ─────────────────────────── 7. TLS ───────────────────────────
-TLS_DONE=0
-[ -f "${CERT_DIR}/fullchain.pem" ] && TLS_DONE=1
-
-if [ "$TLS_DONE" = "1" ]; then
+if [ "$EXTERNAL_PROXY" = "1" ]; then
+  step "Bỏ qua Certbot — proxy ngoài tự lo chứng chỉ"
+elif [ "$TLS_DONE" = "1" ]; then
   step "Chứng chỉ HTTPS đã có — bỏ qua Certbot (systemd timer tự gia hạn)"
 elif [ "$SKIP_TLS" = "1" ]; then
   warn "Bỏ qua cấp cert (không có domain hoặc SKIP_TLS=1)."
@@ -265,6 +293,44 @@ if ! grep -qF "FRONTEND_URL=${FINAL_URL}" .env.docker; then
 fi
 
 # ─────────────────────────── 8. XONG ───────────────────────────
+# ── Có proxy ngoài: in sẵn cấu hình để đấu domain vào, script không tự sửa app khác ──
+if [ "$EXTERNAL_PROXY" = "1" ]; then
+  FRONTEND_ID="$(docker compose ps -q frontend 2>/dev/null | head -1)"
+  FRONTEND_CT="$(docker inspect -f '{{.Name}}' "$FRONTEND_ID" 2>/dev/null | sed 's|^/||')"
+  APP_NET="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$FRONTEND_ID" 2>/dev/null | awk '{print $1}')"
+  step "CẦN LÀM TAY: trỏ ${DOMAIN} vào proxy ${PROXY_CT:-đang giữ cổng 80}"
+  cat <<EOF
+App đã chạy ở 127.0.0.1:${APP_PORT}, nhưng cổng 80/443 do ${PROXY_CT:-proxy khác} giữ.
+Đấu thêm domain vào proxy đó (KHÔNG tắt nó — app khác đang chạy):
+
+  1) Cho proxy vào chung mạng Docker với app này:
+       sudo docker network connect ${APP_NET} ${PROXY_CT}
+
+  2) Tìm Caddyfile của proxy:
+       sudo docker inspect ${PROXY_CT} --format '{{range .Mounts}}{{.Source}} => {{.Destination}}{{"\n"}}{{end}}'
+
+  3) Thêm vào Caddyfile (Caddy tự xin cert cho domain mới):
+       ${DOMAIN} {
+           reverse_proxy ${FRONTEND_CT}:80
+       }
+
+  4) Nạp lại cấu hình:
+       sudo docker exec ${PROXY_CT} caddy reload --config /etc/caddy/Caddyfile
+
+  5) Cho lần đầu bền vững: 'docker network connect' sẽ MẤT khi container proxy bị
+     tạo lại (docker compose up/down). Thêm hẳn vào compose của app kia:
+       networks:
+         default:
+         appnet:
+           external: true
+           name: ${APP_NET}
+     rồi ở service proxy:  networks: [default, appnet]
+
+Dùng Traefik/nginx-proxy thay vì Caddy thì nguyên tắc y hệt: proxy vào mạng
+${APP_NET}, trỏ upstream tới ${FRONTEND_CT}:80.
+EOF
+fi
+
 step "HOÀN TẤT"
 docker compose ps
 
