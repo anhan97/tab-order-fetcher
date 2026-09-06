@@ -446,7 +446,7 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     const handleRefreshCOGS = async () => {
         if (!user || !activeStore) return;
         try {
-            const client = new COGSApiClient(user.id, activeStore.id);
+            const client = new COGSApiClient();
             const configs = await client.getCOGSConfigs();
             setCogsConfigs(configs);
             localStorage.setItem('cogs_configs', JSON.stringify(configs));

@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Upload, FileText, CheckCircle, AlertCircle, Download, Zap, Bell } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { apiFetch } from '@/utils/apiClient';
 import { ShopifyApiClient } from '@/utils/shopifyApi';
 import { parseCsvFile } from '@/utils/csvParser';
 import { detectShippingCompany } from '@/utils/trackingUtils';
@@ -216,12 +217,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
   const loadShippingCompanies = async () => {
     try {
       const apiBaseUrl = '/api';
-      const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies`);
-
-      if (response.ok) {
-        const data = await response.json();
-        setShippingCompanies(data);
-      }
+      setShippingCompanies(await apiFetch<any[]>(`${apiBaseUrl}/cogs/shipping-companies`));
     } catch (error) {
       console.warn('Error loading shipping companies:', error);
     }

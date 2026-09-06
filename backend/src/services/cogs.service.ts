@@ -129,8 +129,11 @@ export class COGSService {
     try {
       console.log('Creating COGS config with data:', { userId, storeId, data });
 
-      // First, ensure User and ShopifyStore records exist
-      await this.ensureUserAndStoreExist(userId, storeId);
+      // No lazy-create here any more. requireAuth proves the user exists
+      // and resolveStore proves the store is theirs, so both rows are
+      // guaranteed. The helper this replaced fabricated a User with a
+      // literal 'default-password' and a ShopifyStore with a placeholder
+      // access token for whatever ids the caller happened to send.
 
       const config = await prisma.cOGSConfig.upsert({
         where: {
@@ -302,48 +305,6 @@ export class COGSService {
   }
 
   // Ensure User and ShopifyStore records exist
-  private static async ensureUserAndStoreExist(userId: string, storeId: string) {
-    try {
-      // Check if user exists, create if not
-      const user = await prisma.user.findUnique({
-        where: { id: userId }
-      });
-
-      if (!user) {
-        console.log('Creating user:', userId);
-        await prisma.user.create({
-          data: {
-            id: userId,
-            email: `${userId}@example.com`, // Default email
-            password: 'default-password', // This should be hashed in production
-            firstName: 'Default',
-            lastName: 'User'
-          }
-        });
-      }
-
-      // Check if store exists, create if not
-      const store = await prisma.shopifyStore.findUnique({
-        where: { id: storeId }
-      });
-
-      if (!store) {
-        console.log('Creating store:', storeId);
-        await prisma.shopifyStore.create({
-          data: {
-            id: storeId,
-            userId: userId,
-            storeDomain: `${storeId}.myshopify.com`,
-            accessToken: 'default-token' // This should be the actual token in production
-          }
-        });
-      }
-    } catch (error: any) {
-      console.error('Error ensuring user and store exist:', error);
-      throw new Error(`Failed to ensure user and store exist: ${error.message}`);
-    }
-  }
-
   // Update an existing COGS configuration
   static async updateCOGSConfig(userId: string, configId: string, data: Partial<COGSConfigData>) {
     try {

@@ -1,7 +1,7 @@
 import { COGSConfig, ComboPricing, ComboPricingData, PricingTier, PricingTierData } from '@/types/order';
-import config from '@/config/app';
+import { apiFetch } from '@/utils/apiClient';
 
-const BASE_URL = config.cogsApiUrl;
+const BASE_URL = '/api/cogs';
 
 export interface COGSConfigData {
   productSKU: string;
@@ -15,34 +15,21 @@ export interface COGSConfigData {
   comboPricing?: ComboPricingData[];
 }
 
+/**
+ * Client for /api/cogs.
+ *
+ * Takes no identity arguments: it used to be constructed with a userId and
+ * storeId that were sent as `X-User-Id` / `X-Store-Id`, which the backend
+ * trusted verbatim. Identity now rides on the JWT and the active-store
+ * header that apiFetch attaches, and the server resolves both itself.
+ *
+ * The base URL is relative too — it used to come from `config.cogsApiUrl`,
+ * which falls back to a hardcoded `http://localhost:3001/api/cogs` whenever
+ * VITE_COGS_API_URL is unset, i.e. in every production build.
+ */
 export class COGSApiClient {
-  private userId: string;
-  private storeId: string;
-
-  constructor(userId: string, storeId: string) {
-    this.userId = userId;
-    this.storeId = storeId;
-  }
-
   private async makeRequest(endpoint: string, options: RequestInit = {}) {
-    const url = `${BASE_URL}${endpoint}`;
-    
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-Id': this.userId,
-        'X-Store-Id': this.storeId,
-        ...options.headers,
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.details || `HTTP error! status: ${response.status}`);
-    }
-
-    return response.json();
+    return apiFetch<any>(`${BASE_URL}${endpoint}`, options);
   }
 
   // Get all COGS configurations
@@ -100,7 +87,7 @@ export class COGSApiClient {
 
   // Combo Pricing methods
   async addComboPricing(configId: string, comboData: ComboPricingData): Promise<ComboPricing> {
-    const response = await this.makeRequest(`/configs/${configId}/combo-pricing`, {
+    const response = await this.makeRequest(`/${configId}/combo-pricing`, {
       method: 'POST',
       body: JSON.stringify(comboData),
     });
@@ -108,7 +95,7 @@ export class COGSApiClient {
   }
 
   async updateComboPricing(comboId: string, comboData: Partial<ComboPricingData>): Promise<ComboPricing> {
-    const response = await this.makeRequest(`/configs/combo-pricing/${comboId}`, {
+    const response = await this.makeRequest(`/combo-pricing/${comboId}`, {
       method: 'PUT',
       body: JSON.stringify(comboData),
     });
@@ -116,7 +103,7 @@ export class COGSApiClient {
   }
 
   async deleteComboPricing(comboId: string): Promise<void> {
-    await this.makeRequest(`/configs/combo-pricing/${comboId}`, {
+    await this.makeRequest(`/combo-pricing/${comboId}`, {
       method: 'DELETE',
     });
   }
@@ -131,7 +118,7 @@ export class COGSApiClient {
   }
 
   async updatePricingTier(tierId: string, tierData: Partial<PricingTierData>): Promise<PricingTier> {
-    const response = await this.makeRequest(`/configs/pricing-tiers/${tierId}`, {
+    const response = await this.makeRequest(`/pricing-tiers/${tierId}`, {
       method: 'PUT',
       body: JSON.stringify(tierData),
     });
@@ -139,7 +126,7 @@ export class COGSApiClient {
   }
 
   async deletePricingTier(tierId: string): Promise<void> {
-    await this.makeRequest(`/configs/pricing-tiers/${tierId}`, {
+    await this.makeRequest(`/pricing-tiers/${tierId}`, {
       method: 'DELETE',
     });
   }
@@ -155,7 +142,7 @@ export class COGSApiClient {
       discountAmount: number;
     };
   } | null> {
-    const response = await this.makeRequest(`/configs/pricing/${variantId}/${country}/${quantity}`);
+    const response = await this.makeRequest(`/pricing/${variantId}/${country}/${quantity}`);
     return response;
   }
 
@@ -163,7 +150,7 @@ export class COGSApiClient {
    * Evict the retired `user_id` / `store_id` pair. These held the literal
    * string 'default-user' plus a store slug, and the matching
    * from/saveToLocalStorage helpers meant every merchant shared one COGS
-   * bucket. Callers now pass the authenticated user + active store id.
+   * bucket. Identity comes from the JWT now; this only cleans up old browsers.
    */
   static clearLocalStorage(): void {
     localStorage.removeItem('user_id');

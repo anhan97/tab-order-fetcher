@@ -1,23 +1,29 @@
 import express from 'express';
 import { COGSService } from '../services/cogs.service';
+import { requireAuth, requireActive } from '../middleware/require-auth';
+import { resolveStore } from '../middleware/resolve-store';
 
 const router = express.Router();
 
-// Get all COGS configurations for a user and store
-router.get('/configs', async (req, res) => {
-  try {
-    const userId = req.headers['x-user-id'] as string;
-    const storeId = req.headers['x-store-id'] as string;
+/**
+ * Identity comes from the JWT, never from the client.
+ *
+ * Every handler below used to read `X-User-Id` / `X-Store-Id` straight off
+ * the request with no auth middleware mounted at all, so anyone who could
+ * reach the port could read or write any merchant's COGS by guessing an id
+ * — and the frontend duly sent the literal string 'default-user', which is
+ * how a placeholder user and a `<slug>.myshopify.com` store ended up in the
+ * database. Same pattern as cogs-matrix.routes / orders.routes now:
+ * requireAuth fills req.userId, resolveStore narrows to one of THAT user's
+ * stores (mounted per-route, since /shipping-companies is a global table
+ * and must stay reachable by users who have no store yet).
+ */
+router.use(requireAuth, requireActive);
 
-    if (!userId || !storeId) {
-      return res.status(400).json({
-        error: 'Missing required headers',
-        missing: {
-          userId: !userId,
-          storeId: !storeId
-        }
-      });
-    }
+// Get all COGS configurations for a user and store
+router.get('/configs', resolveStore, async (req, res) => {
+  try {
+    const { userId, storeId } = req.resolved!;
 
     const configs = await COGSService.getCOGSConfigs(userId, storeId);
     res.json({ configs });
@@ -31,20 +37,9 @@ router.get('/configs', async (req, res) => {
 });
 
 // Create a new COGS configuration
-router.post('/configs', async (req, res) => {
+router.post('/configs', resolveStore, async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
-    const storeId = req.headers['x-store-id'] as string;
-
-    if (!userId || !storeId) {
-      return res.status(400).json({
-        error: 'Missing required headers',
-        missing: {
-          userId: !userId,
-          storeId: !storeId
-        }
-      });
-    }
+    const { userId, storeId } = req.resolved!;
 
     const config = await COGSService.createCOGSConfig(userId, storeId, req.body);
     res.status(201).json({ config });
@@ -60,17 +55,9 @@ router.post('/configs', async (req, res) => {
 // Update an existing COGS configuration
 router.put('/configs/:configId', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { configId } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({
-        error: 'Missing required headers',
-        missing: {
-          userId: !userId
-        }
-      });
-    }
 
     const config = await COGSService.updateCOGSConfig(userId, configId, req.body);
     res.json({ config });
@@ -86,17 +73,9 @@ router.put('/configs/:configId', async (req, res) => {
 // Delete a COGS configuration
 router.delete('/configs/:configId', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { configId } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({
-        error: 'Missing required headers',
-        missing: {
-          userId: !userId
-        }
-      });
-    }
 
     await COGSService.deleteCOGSConfig(userId, configId);
     res.json({ success: true });
@@ -110,20 +89,9 @@ router.delete('/configs/:configId', async (req, res) => {
 });
 
 // Bulk create COGS configurations
-router.post('/configs/bulk', async (req, res) => {
+router.post('/configs/bulk', resolveStore, async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
-    const storeId = req.headers['x-store-id'] as string;
-
-    if (!userId || !storeId) {
-      return res.status(400).json({
-        error: 'Missing required headers',
-        missing: {
-          userId: !userId,
-          storeId: !storeId
-        }
-      });
-    }
+    const { userId, storeId } = req.resolved!;
 
     const { configs } = req.body;
     if (!Array.isArray(configs)) {
@@ -163,13 +131,10 @@ router.post('/configs/bulk', async (req, res) => {
 // Combo Pricing routes
 router.post('/:configId/combo-pricing', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { configId } = req.params;
     const comboData = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     if (!comboData.supplier || !comboData.country || !comboData.comboType ||
       !comboData.quantity || comboData.productCost === undefined || comboData.shippingCost === undefined) {
@@ -192,13 +157,10 @@ router.post('/:configId/combo-pricing', async (req, res) => {
 
 router.put('/combo-pricing/:comboId', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { comboId } = req.params;
     const comboData = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const combo = await COGSService.updateComboPricing(userId, comboId, comboData);
     res.json(combo);
@@ -213,12 +175,9 @@ router.put('/combo-pricing/:comboId', async (req, res) => {
 
 router.delete('/combo-pricing/:comboId', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { comboId } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await COGSService.deleteComboPricing(userId, comboId);
     res.json(result);
@@ -234,13 +193,10 @@ router.delete('/combo-pricing/:comboId', async (req, res) => {
 // Legacy pricing tier routes for backward compatibility
 router.put('/pricing-tiers/:tierId', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { tierId } = req.params;
     const tierData = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const tier = await COGSService.updatePricingTier(userId, tierId, tierData);
     res.json(tier);
@@ -255,12 +211,9 @@ router.put('/pricing-tiers/:tierId', async (req, res) => {
 
 router.delete('/pricing-tiers/:tierId', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { tierId } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await COGSService.deletePricingTier(userId, tierId);
     res.json(result);
@@ -275,12 +228,9 @@ router.delete('/pricing-tiers/:tierId', async (req, res) => {
 
 router.get('/pricing/:variantId/:country/:quantity', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { variantId, country, quantity } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const quantityNum = parseInt(quantity);
     if (isNaN(quantityNum) || quantityNum < 1) {

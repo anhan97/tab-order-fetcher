@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { FacebookAdAccount } from '@/types/facebook';
 import { DashboardInsights } from '@/components/DashboardInsights';
 import { useAppContext } from '@/context/AppContext';
+import { apiFetch } from '@/utils/apiClient';
 import {
   getShopifyDateRange,
   getDateRangeFromPreset,
@@ -129,11 +130,7 @@ export const OrdersTable = ({
   useEffect(() => {
     const loadShippingCompanies = async () => {
       try {
-        const response = await fetch('/api/cogs/shipping-companies');
-        if (response.ok) {
-          const data = await response.json();
-          setShippingCompanies(data);
-        }
+        setShippingCompanies(await apiFetch<any[]>('/api/cogs/shipping-companies'));
       } catch (error) {
         console.error('Failed to load shipping companies:', error);
       }
@@ -708,22 +705,19 @@ export const OrdersTable = ({
         if (orderLines.length > 0) {
           const apiBaseUrl = '/api';
 
-          const response = await fetch(`${apiBaseUrl}/cogs/calculate`, {
+          // NOTE: /api/cogs/calculate has no backend route, so this has been
+          // failing (silently, into the catch below) for a while — totalCogs
+          // just stays 0. Left wired up rather than deleted because the P&L
+          // path that would replace it lives in /api/pl.
+          const result = await apiFetch<{ total_cogs?: number }>(`${apiBaseUrl}/cogs/calculate`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
             body: JSON.stringify({
               order_lines: orderLines,
               country_code: countryCode,
               shipping_company: shippingCompany
             }),
           });
-
-          if (response.ok) {
-            const result = await response.json();
-            totalCogs = result.total_cogs || 0;
-          }
+          totalCogs = result.total_cogs || 0;
         }
       } catch (error) {
         console.warn(`Failed to calculate COGS for order ${order.id}:`, error);

@@ -10,20 +10,28 @@ import {
   QuoteRequest
 } from '../types/cogs';
 
+import { requireAuth, requireActive } from '../middleware/require-auth';
+import { resolveStore } from '../middleware/resolve-store';
+
 const router = express.Router();
+
+/**
+ * Identity comes from the JWT, never from the client. Every handler here
+ * used to read `X-User-Id` / `X-Store-Id` off the request with no auth
+ * middleware mounted, so any caller who reached the port could read or
+ * write another merchant's pricebooks, combos and cost overrides by
+ * supplying an id. Same guard chain as cogs-matrix.routes.
+ */
+router.use(requireAuth, requireActive, resolveStore);
 
 // ===== PRICEBOOK ROUTES =====
 
 // POST /pricebooks
 router.post('/pricebooks', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
-    const storeId = req.headers['x-store-id'] as string;
+    const { userId, storeId } = req.resolved!;
     const data: CreatePricebookRequest = req.body;
 
-    if (!userId || !storeId) {
-      return res.status(400).json({ error: 'Missing X-User-Id or X-Store-Id header' });
-    }
 
     if (!data.country_code || !data.shipping_company || !data.currency) {
       return res.status(400).json({ 
@@ -46,13 +54,9 @@ router.post('/pricebooks', async (req, res) => {
 // GET /pricebooks
 router.get('/pricebooks', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
-    const storeId = req.headers['x-store-id'] as string;
+    const { userId, storeId } = req.resolved!;
     const { country_code, shipping_company } = req.query;
 
-    if (!userId || !storeId) {
-      return res.status(400).json({ error: 'Missing X-User-Id or X-Store-Id header' });
-    }
 
     const filters = {
       ...(country_code && { country_code: country_code as string }),
@@ -73,13 +77,10 @@ router.get('/pricebooks', async (req, res) => {
 // PATCH /pricebooks/:pricebook_id
 router.patch('/pricebooks/:pricebook_id', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
     const data = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await ComprehensiveCOGSService.updatePricebook(userId, pricebook_id, data);
     res.json(result);
@@ -95,12 +96,9 @@ router.patch('/pricebooks/:pricebook_id', async (req, res) => {
 // DELETE /pricebooks/:pricebook_id
 router.delete('/pricebooks/:pricebook_id', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await ComprehensiveCOGSService.deletePricebook(userId, pricebook_id);
     res.json(result);
@@ -118,13 +116,10 @@ router.delete('/pricebooks/:pricebook_id', async (req, res) => {
 // POST /pricebooks/:pricebook_id/tiers
 router.post('/pricebooks/:pricebook_id/tiers', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
     const data: CreateShippingTierRequest = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     if (!data.min_items || !data.max_items || data.shipping_cost === undefined) {
       return res.status(400).json({ 
@@ -147,12 +142,9 @@ router.post('/pricebooks/:pricebook_id/tiers', async (req, res) => {
 // GET /pricebooks/:pricebook_id/tiers
 router.get('/pricebooks/:pricebook_id/tiers', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const tiers = await ComprehensiveCOGSService.getShippingTiers(userId, pricebook_id);
     res.json(tiers);
@@ -168,13 +160,10 @@ router.get('/pricebooks/:pricebook_id/tiers', async (req, res) => {
 // PUT /pricebooks/:pricebook_id/tiers (bulk replace)
 router.put('/pricebooks/:pricebook_id/tiers', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
     const { tiers } = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     if (!Array.isArray(tiers)) {
       return res.status(400).json({ error: 'tiers must be an array' });
@@ -194,13 +183,10 @@ router.put('/pricebooks/:pricebook_id/tiers', async (req, res) => {
 // DELETE /pricebooks/:pricebook_id/tiers
 router.delete('/pricebooks/:pricebook_id/tiers', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
     const { min_items, max_items } = req.query;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     if (!min_items || !max_items) {
       return res.status(400).json({ 
@@ -230,13 +216,10 @@ router.delete('/pricebooks/:pricebook_id/tiers', async (req, res) => {
 // POST /pricebooks/:pricebook_id/variant-costs
 router.post('/pricebooks/:pricebook_id/variant-costs', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
     const data: CreateVariantCostOverrideRequest = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     if (!data.variant_id || data.override_cost === undefined) {
       return res.status(400).json({ 
@@ -259,12 +242,9 @@ router.post('/pricebooks/:pricebook_id/variant-costs', async (req, res) => {
 // GET /pricebooks/:pricebook_id/variant-costs
 router.get('/pricebooks/:pricebook_id/variant-costs', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const overrides = await ComprehensiveCOGSService.getVariantCostOverrides(userId, pricebook_id);
     res.json(overrides);
@@ -280,12 +260,9 @@ router.get('/pricebooks/:pricebook_id/variant-costs', async (req, res) => {
 // DELETE /pricebooks/:pricebook_id/variant-costs/:variant_id
 router.delete('/pricebooks/:pricebook_id/variant-costs/:variant_id', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id, variant_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await ComprehensiveCOGSService.deleteVariantCostOverride(
       userId, 
@@ -307,13 +284,9 @@ router.delete('/pricebooks/:pricebook_id/variant-costs/:variant_id', async (req,
 // POST /combos
 router.post('/combos', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
-    const storeId = req.headers['x-store-id'] as string;
+    const { userId, storeId } = req.resolved!;
     const data: CreateComboRequest = req.body;
 
-    if (!userId || !storeId) {
-      return res.status(400).json({ error: 'Missing X-User-Id or X-Store-Id header' });
-    }
 
     if (!data.name || !data.items || !Array.isArray(data.items)) {
       return res.status(400).json({ 
@@ -336,12 +309,9 @@ router.post('/combos', async (req, res) => {
 // GET /combos/:combo_id
 router.get('/combos/:combo_id', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { combo_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const combo = await ComprehensiveCOGSService.getCombo(userId, combo_id);
     res.json(combo);
@@ -357,13 +327,10 @@ router.get('/combos/:combo_id', async (req, res) => {
 // PATCH /combos/:combo_id
 router.patch('/combos/:combo_id', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { combo_id } = req.params;
     const data = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await ComprehensiveCOGSService.updateCombo(userId, combo_id, data);
     res.json(result);
@@ -379,12 +346,9 @@ router.patch('/combos/:combo_id', async (req, res) => {
 // DELETE /combos/:combo_id
 router.delete('/combos/:combo_id', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { combo_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await ComprehensiveCOGSService.deleteCombo(userId, combo_id);
     res.json(result);
@@ -402,13 +366,10 @@ router.delete('/combos/:combo_id', async (req, res) => {
 // POST /pricebooks/:pricebook_id/combo-overrides
 router.post('/pricebooks/:pricebook_id/combo-overrides', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
     const data: CreateComboOverrideRequest = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     if (!data.combo_id) {
       return res.status(400).json({ 
@@ -431,12 +392,9 @@ router.post('/pricebooks/:pricebook_id/combo-overrides', async (req, res) => {
 // GET /pricebooks/:pricebook_id/combo-overrides
 router.get('/pricebooks/:pricebook_id/combo-overrides', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const overrides = await ComprehensiveCOGSService.getComboOverrides(userId, pricebook_id);
     res.json(overrides);
@@ -452,12 +410,9 @@ router.get('/pricebooks/:pricebook_id/combo-overrides', async (req, res) => {
 // DELETE /pricebooks/:pricebook_id/combo-overrides/:combo_id
 router.delete('/pricebooks/:pricebook_id/combo-overrides/:combo_id', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const { pricebook_id, combo_id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     const result = await ComprehensiveCOGSService.deleteComboOverride(userId, pricebook_id, combo_id);
     res.json(result);
@@ -475,13 +430,9 @@ router.delete('/pricebooks/:pricebook_id/combo-overrides/:combo_id', async (req,
 // POST /pricebooks/import
 router.post('/pricebooks/import', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
-    const storeId = req.headers['x-store-id'] as string;
+    const { userId, storeId } = req.resolved!;
     const config: PricebookImportConfig = req.body;
 
-    if (!userId || !storeId) {
-      return res.status(400).json({ error: 'Missing X-User-Id or X-Store-Id header' });
-    }
 
     if (!config.country_code || !config.shipping_company || !config.currency) {
       return res.status(400).json({ 
@@ -504,12 +455,9 @@ router.post('/pricebooks/import', async (req, res) => {
 // POST /cost/quote
 router.post('/cost/quote', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] as string;
+    const userId = req.userId!;
     const request: QuoteRequest = req.body;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing X-User-Id header' });
-    }
 
     if (!request.country_code || !request.shipping_company || !request.currency) {
       return res.status(400).json({ 
