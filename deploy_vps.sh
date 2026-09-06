@@ -78,7 +78,9 @@ step "Cài gói hệ thống (git, nginx, certbot, openssl…)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
-  git nginx certbot python3-certbot-nginx curl ca-certificates ufw openssl
+  git nginx certbot python3-certbot-nginx curl ca-certificates ufw openssl iproute2
+# apt không phải lúc nào cũng tự bật nginx (image VPS tối giản, hoặc cài lỗi lần trước).
+systemctl enable --now nginx >/dev/null 2>&1 || true
 
 step "Cài Docker Engine + plugin compose"
 if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
@@ -195,7 +197,19 @@ write_vhost() {
   } > "$VHOST"
 }
 
-reload_nginx() { nginx -t && systemctl reload nginx; }
+reload_nginx() {
+  nginx -t || die "Cấu hình nginx sai cú pháp (xem output ngay trên)."
+  # 'reload' không khởi động được service đang tắt — VPS mới cài nginx hay bị vậy,
+  # nên dùng reload-or-restart: đang chạy thì reload, đang tắt thì start.
+  if ! systemctl reload-or-restart nginx; then
+    warn "Không khởi động được nginx. Chẩn đoán:"
+    systemctl status nginx --no-pager -l 2>&1 | tail -20 || true
+    ss -ltnp 2>/dev/null | grep -E ':80\s|:443\s' || true
+    die "nginx không chạy được — hay gặp nhất là dịch vụ khác đang giữ cổng 80/443 (apache2?).
+     Gỡ/tắt nó rồi chạy lại script:  sudo systemctl disable --now apache2"
+  fi
+  systemctl enable nginx >/dev/null 2>&1 || true
+}
 
 if [ -f "${CERT_DIR}/fullchain.pem" ]; then
   write_vhost https
