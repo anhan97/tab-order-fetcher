@@ -274,9 +274,12 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
                 // baked a single "default store" into the bundle that every
                 // user hit whenever their own store hadn't resolved yet.
                 const storeUrl = shopifyConfig?.storeUrl;
-                const accessToken = shopifyConfig?.accessToken;
+                // accessToken is '' for a store granted to us rather than
+                // owned — the backend proxy resolves the owner's token from
+                // the JWT, so only the domain is actually required here.
+                const accessToken = shopifyConfig?.accessToken ?? '';
 
-                if (!storeUrl || !accessToken) {
+                if (!storeUrl) {
                     setOrders([]);
                     return;
                 }

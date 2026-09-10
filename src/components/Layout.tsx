@@ -166,8 +166,16 @@ export const Layout = () => {
                                     <SelectContent>
                                         {stores.map(s => (
                                             <SelectItem key={s.id} value={s.storeDomain}>
-                                                <div className="truncate max-w-[180px]">
-                                                    {s.name || s.storeDomain}
+                                                <div className="flex items-center gap-2 max-w-[220px]">
+                                                    <span className="truncate">{s.name || s.storeDomain}</span>
+                                                    {/* Owned stores carry no badge — the badge marks the
+                                                        ones an admin delegated, and what you may do there. */}
+                                                    {s.access && s.access !== 'owner' && (
+                                                        <span className="shrink-0 text-[9px] uppercase tracking-wide font-semibold
+                                                                         rounded px-1.5 py-0.5 bg-slate-100 text-slate-600">
+                                                            {s.access}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </SelectItem>
                                         ))}
@@ -182,6 +190,11 @@ export const Layout = () => {
                                     <Plus className="h-3.5 w-3.5 mr-1.5" />
                                     Add another store
                                 </Button>
+                                {activeStore?.access && activeStore.access !== 'owner' && (
+                                    <p className="text-[10px] leading-snug text-slate-500 px-2 pt-1">
+                                        Bạn được cấp quyền <b>{activeStore.access}</b> ở store này — một số thao tác sẽ bị khoá.
+                                    </p>
+                                )}
                             </>
                         ) : (
                             <Button

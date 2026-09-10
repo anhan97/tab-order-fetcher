@@ -1,7 +1,7 @@
 import express from 'express';
 import { COGSService } from '../services/cogs.service';
 import { requireAuth, requireActive } from '../middleware/require-auth';
-import { resolveStore } from '../middleware/resolve-store';
+import { resolveStore, requireStoreCapability } from '../middleware/resolve-store';
 
 const router = express.Router();
 
@@ -37,7 +37,7 @@ router.get('/configs', resolveStore, async (req, res) => {
 });
 
 // Create a new COGS configuration
-router.post('/configs', resolveStore, async (req, res) => {
+router.post('/configs', resolveStore, requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
 
@@ -89,7 +89,7 @@ router.delete('/configs/:configId', async (req, res) => {
 });
 
 // Bulk create COGS configurations
-router.post('/configs/bulk', resolveStore, async (req, res) => {
+router.post('/configs/bulk', resolveStore, requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
 

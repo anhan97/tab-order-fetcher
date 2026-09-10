@@ -3,12 +3,30 @@ import { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.middleware';
 import { validateShopifyStore } from '../middleware/validation.middleware';
 import { requireStoreAccess } from '../middleware/store-access';
+import { can } from '../lib/store-access';
 import { ShopifyController } from '../controllers/shopify.controller';
 import { syncOrders } from '../services/order-sync.service';
 import { AuthenticatedRequest } from '../types/express';
 import { verifyShopifyCredentials, fetchShopifyOrders, updateOrderTracking } from '../services/shopify.service';
 
 const router = Router();
+
+/**
+ * Fulfillment gate for the Shopify proxy. requireStoreAccess resolves the
+ * caller's level (owner for the legacy token paths, the granted role for a
+ * StoreMember); writing tracking back to Shopify needs 'fulfill'.
+ */
+function requireFulfill(req: any, res: any, next: any) {
+  if (!can(req.storeAccess?.level, 'fulfill')) {
+    return res.status(403).json({
+      error: 'Your access to this store does not allow "fulfill"',
+      code: 'store_capability_denied',
+      requires: 'fulfill',
+      access: req.storeAccess?.level ?? null
+    });
+  }
+  next();
+}
 const prisma = new PrismaClient();
 const shopifyController = new ShopifyController();
 
@@ -145,7 +163,7 @@ router.post('/stores/:id/sync', authenticate, async (req, res) => {
 });
 
 // Update order tracking
-router.put('/orders/tracking', requireStoreAccess, async (req, res) => {
+router.put('/orders/tracking', requireStoreAccess, requireFulfill, async (req, res) => {
   try {
     const { storeDomain, accessToken } = req.storeAccess!;
 
@@ -192,7 +210,7 @@ router.put('/orders/tracking', requireStoreAccess, async (req, res) => {
 });
 
 // Batch tracking update endpoint for faster processing
-router.put('/orders/tracking/batch', requireStoreAccess, async (req, res) => {
+router.put('/orders/tracking/batch', requireStoreAccess, requireFulfill, async (req, res) => {
   try {
     const { storeDomain, accessToken } = req.storeAccess!;
 

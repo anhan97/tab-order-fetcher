@@ -19,6 +19,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 import { resolveStore } from '../middleware/resolve-store';
+import { requireStoreCapability } from '../middleware/resolve-store';
 import { decryptToken } from '../lib/token-crypto';
 import { audit } from '../lib/audit';
 
@@ -170,7 +171,7 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/lines', async (req: Request, res: Response) => {
+router.post('/lines', requireStoreCapability('costs'), async (req: Request, res: Response) => {
   try {
     const supplier = String(req.body?.supplier || 'Default').trim() || 'Default';
     const carrier = String(req.body?.carrier || '').trim();
@@ -201,7 +202,7 @@ router.post('/lines', async (req: Request, res: Response) => {
   }
 });
 
-router.patch('/lines/:id', async (req: Request, res: Response) => {
+router.patch('/lines/:id', requireStoreCapability('costs'), async (req: Request, res: Response) => {
   try {
     const existing = await prisma.cogsLine.findFirst({
       where: { id: req.params.id, storeId: req.resolved!.storeId }
@@ -234,7 +235,7 @@ router.patch('/lines/:id', async (req: Request, res: Response) => {
   }
 });
 
-router.delete('/lines/:id', async (req: Request, res: Response) => {
+router.delete('/lines/:id', requireStoreCapability('costs'), async (req: Request, res: Response) => {
   try {
     const del = await prisma.cogsLine.deleteMany({
       where: { id: req.params.id, storeId: req.resolved!.storeId }
@@ -251,7 +252,7 @@ router.delete('/lines/:id', async (req: Request, res: Response) => {
  *   { cells: [{ lineId, variantId, setQty, cost }] }
  * cost null/'' → delete the cell. Line ownership checked per store.
  */
-router.put('/prices', async (req: Request, res: Response) => {
+router.put('/prices', requireStoreCapability('costs'), async (req: Request, res: Response) => {
   try {
     const cells: any[] = Array.isArray(req.body?.cells) ? req.body.cells : [];
     if (cells.length === 0) return res.json({ ok: true, saved: 0, deleted: 0 });
@@ -300,7 +301,7 @@ router.put('/prices', async (req: Request, res: Response) => {
  * cell(set N) = variant override unit cost × N + shipping tier for N items.
  * Skips lines that already exist (idempotent, never overwrites matrix edits).
  */
-router.post('/import-pricebooks', async (req: Request, res: Response) => {
+router.post('/import-pricebooks', requireStoreCapability('costs'), async (req: Request, res: Response) => {
   try {
     const storeId = req.resolved!.storeId;
     let books = await prisma.pricebook.findMany({

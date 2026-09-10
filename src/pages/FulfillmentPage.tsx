@@ -35,6 +35,13 @@ interface FulfillOrder {
   totalAmount: number;
   currency: string;
   status: string;            // Shopify financial status
+  // Payment processing fee for this order, summed from the Shopify
+  // Transactions API (sale + capture − refund) by order-sync.service.
+  // Shopify reports 0 until the payout settles, so a fresh order legitimately
+  // shows 0 and fills in a day or two later — hence the "—" vs "0.00" split
+  // below: null means never synced, 0 means synced-and-genuinely-nothing-yet.
+  paymentFee: string | number | null;
+  paymentGateway: string | null;
   fulfillStatus: string;     // internal lifecycle
   deliveryStatus: string | null;
   trackingNumber: string | null;
@@ -42,6 +49,17 @@ interface FulfillOrder {
   shippingAddress: Record<string, string | null> | null;
   processedAt: string | null;
   lineItems: Array<{ id: string; title: string | null; sku: string | null; quantity: number; price: string | number }>;
+}
+
+/**
+ * Decimal columns arrive as strings over JSON, so Number() them before
+ * formatting. null/undefined means the order predates transaction sync —
+ * show a dash rather than a misleading 0.00.
+ */
+function fmtFee(v: string | number | null | undefined): string {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : '—';
 }
 
 const STATUS_TABS = ['ALL', 'PENDING', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'UNPAID'] as const;
@@ -185,6 +203,7 @@ export const FulfillmentPage = () => {
                 <TableHead>Khách hàng</TableHead>
                 <TableHead>Sản phẩm</TableHead>
                 <TableHead className="text-right">Tổng</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Phí TT</TableHead>
                 <TableHead>Thanh toán</TableHead>
                 <TableHead>Fulfillment</TableHead>
                 <TableHead>Tracking</TableHead>
@@ -194,13 +213,13 @@ export const FulfillmentPage = () => {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="h-32 text-center text-slate-400">
+                  <TableCell colSpan={10} className="h-32 text-center text-slate-400">
                     <Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Đang tải…
                   </TableCell>
                 </TableRow>
               ) : orders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="h-32 text-center text-slate-400">
+                  <TableCell colSpan={10} className="h-32 text-center text-slate-400">
                     Không có đơn nào. Bấm "Đồng bộ ngay" nếu vừa kết nối store.
                   </TableCell>
                 </TableRow>
@@ -221,6 +240,12 @@ export const FulfillmentPage = () => {
                   </TableCell>
                   <TableCell className="text-right font-medium whitespace-nowrap">
                     {o.totalAmount.toLocaleString()} {o.currency}
+                  </TableCell>
+                  <TableCell className="text-right whitespace-nowrap tabular-nums">
+                    {fmtFee(o.paymentFee)}
+                    {o.paymentGateway && (
+                      <div className="text-[10px] text-slate-400">{o.paymentGateway}</div>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={o.status === 'paid' ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-700'}>

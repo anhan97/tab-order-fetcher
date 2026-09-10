@@ -18,13 +18,21 @@ import { Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { verifyAccessToken } from '../lib/jwt';
 import { decryptToken } from '../lib/token-crypto';
+import { resolveStoreAccess, type StoreAccessLevel } from '../lib/store-access';
 
 const prisma = new PrismaClient();
 
 declare global {
   namespace Express {
     interface Request {
-      storeAccess?: { storeId: string; userId: string; storeDomain: string; accessToken: string };
+      storeAccess?: {
+        storeId: string;
+        userId: string;
+        storeDomain: string;
+        accessToken: string;
+        /** Caller's level in this store; 'owner' on the legacy token paths. */
+        level: StoreAccessLevel;
+      };
     }
   }
 }
@@ -53,17 +61,23 @@ export async function requireStoreAccess(req: Request, res: Response, next: Next
               code: claims.status === 'PENDING' ? 'account_pending' : 'account_suspended'
             });
           }
-          const store = await prisma.shopifyStore.findUnique({
-            where: { userId_storeDomain: { userId: claims.id, storeDomain } }
-          });
+          // Owned OR admin-granted. The Shopify call still runs with the
+          // OWNER's token from the DB — a granted member never holds it, so
+          // revoking their StoreMember row cuts access immediately.
+          const access = await resolveStoreAccess(claims.id, { storeDomain });
+          if (!access) {
+            return res.status(404).json({ error: `Store ${storeDomain} not found for this user` });
+          }
+          const store = await prisma.shopifyStore.findUnique({ where: { id: access.storeId } });
           if (!store || !store.isActive) {
             return res.status(404).json({ error: `Store ${storeDomain} not found for this user` });
           }
           req.storeAccess = {
             storeId: store.id,
-            userId: store.userId,
+            userId: claims.id,
             storeDomain,
-            accessToken: decryptToken(store.accessToken)
+            accessToken: decryptToken(store.accessToken),
+            level: access.level
           };
           return next();
         }
@@ -87,7 +101,9 @@ export async function requireStoreAccess(req: Request, res: Response, next: Next
       storeId: match.id,
       userId: match.userId,
       storeDomain,
-      accessToken: headerToken
+      accessToken: headerToken,
+      // Holding the raw token is the legacy proof of ownership.
+      level: 'owner'
     };
     next();
   } catch (e: any) {

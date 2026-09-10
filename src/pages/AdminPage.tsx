@@ -21,6 +21,7 @@ import { apiFetch, ApiError } from '@/utils/apiClient';
 import { useToast } from '@/hooks/use-toast';
 import { FacebookAppsManager } from '@/components/FacebookAppsManager';
 import { ShopifyAppConfigCard } from '@/components/ShopifyAppConfigCard';
+import { StoreMembersDialog } from '@/components/StoreMembersDialog';
 
 interface AdminStats {
   users: number;
@@ -135,6 +136,8 @@ export const AdminPage = () => {
   const [selected, setSelected] = useState<AdminUserDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'users' | 'stores' | 'apps'>('users');
+  // Which store's member list is open (null = dialog closed).
+  const [membersFor, setMembersFor] = useState<AdminStoreRow | null>(null);
 
   const loadUsers = async (q = '') => {
     setLoading(true);
@@ -423,16 +426,17 @@ export const AdminPage = () => {
                       <th className="text-right px-4 py-2">Orders</th>
                       <th className="text-left px-4 py-2">Status</th>
                       <th className="text-left px-4 py-2">Created</th>
+                      <th className="text-right px-4 py-2">Phân quyền</th>
                     </tr>
                   </thead>
                   <tbody>
                     {storesLoading && stores.length === 0 && (
-                      <tr><td colSpan={7} className="text-center py-10 text-slate-400">
+                      <tr><td colSpan={8} className="text-center py-10 text-slate-400">
                         <Loader2 className="h-4 w-4 animate-spin inline mr-2" /> Loading stores…
                       </td></tr>
                     )}
                     {!storesLoading && stores.length === 0 && (
-                      <tr><td colSpan={7} className="text-center py-10 text-slate-400">No stores matched.</td></tr>
+                      <tr><td colSpan={8} className="text-center py-10 text-slate-400">No stores matched.</td></tr>
                     )}
                     {stores.map(s => (
                       <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50/50">
@@ -456,6 +460,13 @@ export const AdminPage = () => {
                             : <Badge variant="outline">inactive</Badge>}
                         </td>
                         <td className="px-4 py-2 text-xs text-slate-500">{new Date(s.createdAt).toISOString().slice(0, 10)}</td>
+                        <td className="px-4 py-2 text-right">
+                          <Button size="sm" variant="outline" className="h-7 text-xs"
+                                  onClick={() => setMembersFor(s)}>
+                            <Users className="h-3 w-3 mr-1" />
+                            Members
+                          </Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -463,6 +474,12 @@ export const AdminPage = () => {
               </div>
             </CardContent>
           </Card>
+
+          <StoreMembersDialog
+            storeId={membersFor?.id ?? null}
+            storeLabel={membersFor ? (membersFor.name ? `${membersFor.name} — ${membersFor.storeDomain}` : membersFor.storeDomain) : ''}
+            onClose={() => setMembersFor(null)}
+          />
         </TabsContent>
 
         <TabsContent value="apps" className="mt-4">

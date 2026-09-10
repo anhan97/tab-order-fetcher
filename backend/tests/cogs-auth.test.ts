@@ -14,6 +14,8 @@ import express from 'express';
 import { request, type Server } from 'http';
 import { AddressInfo } from 'net';
 import cogsRoutes from '../src/routes/cogs.routes';
+import plRoutes from '../src/routes/pl.routes';
+import adminRoutes from '../src/routes/admin.routes';
 import comprehensiveCogsRoutes from '../src/routes/comprehensive-cogs.routes';
 
 let server: Server;
@@ -24,6 +26,8 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/cogs', cogsRoutes);
   app.use('/api/comprehensive-cogs', comprehensiveCogsRoutes);
+  app.use('/api/pl', plRoutes);
+  app.use('/api/admin', adminRoutes);
   await new Promise<void>(resolve => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
@@ -105,5 +109,45 @@ describe('COGS routers reject unauthenticated callers', () => {
       Authorization: `Bearer ${forged}`
     });
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * resolveStore's "explicit override" branch used to trust ?userId=&storeId=
+ * ahead of every auth check, so these URLs impersonated another tenant
+ * outright — and /api/pl mounted resolveStore with no requireAuth at all,
+ * making it reachable with no credentials whatsoever.
+ */
+describe('explicit userId/storeId cannot impersonate a tenant', () => {
+  const IMPERSONATION = '?userId=someone-elses-user-id&storeId=someone-elses-store-id';
+
+  it.each([
+    ['/api/pl/summary', 'GET'],
+    ['/api/pl/daily', 'GET'],
+    ['/api/cogs/configs', 'GET'],
+    ['/api/comprehensive-cogs/pricebooks', 'GET'],
+  ])('%s %s rejects the override without a token', async (path, method) => {
+    const res = await call(`${path}${IMPERSONATION}`, method, undefined);
+    expect([401, 403]).toContain(res.status);
+  });
+
+  it('rejects the override carried in the body too', async () => {
+    const res = await call('/api/pl/recompute', 'POST', {
+      userId: 'someone-elses-user-id',
+      storeId: 'someone-elses-store-id'
+    });
+    expect([401, 403]).toContain(res.status);
+  });
+});
+
+describe('admin store-member endpoints require an admin', () => {
+  it.each([
+    ['/api/admin/stores/some-store/members', 'GET', undefined],
+    ['/api/admin/stores/some-store/members', 'PUT', { email: 'x@y.z', role: 'manager' }],
+    ['/api/admin/stores/some-store/members/some-user', 'DELETE', undefined],
+    ['/api/admin/users/some-user/stores', 'GET', undefined],
+  ])('%s %s → 401/403 without an admin token', async (path, method, body) => {
+    const res = await call(path, method, body);
+    expect([401, 403]).toContain(res.status);
   });
 });

@@ -12,13 +12,26 @@ export interface AuthUser {
   status?: string;
 }
 
+/** Mirrors lib/store-access.ts on the backend — keep the two in step. */
+export type StoreAccessLevel = 'owner' | 'manager' | 'cs' | 'finance' | 'viewer';
+export type StoreCapability = 'read' | 'sync' | 'fulfill' | 'costs' | 'manage';
+
 export interface UserStore {
   id: string;
   storeDomain: string;
+  /**
+   * Empty string for stores you were GRANTED rather than own — the raw Admin
+   * API token bypasses every capability check, so the backend only hands it to
+   * the owner. Nothing client-side needs it: /api/shopify/* resolves the
+   * owner's token server-side once the JWT proves who is asking.
+   */
   accessToken: string;
   name: string | null;
   defaultShippingCompany: string | null;
   defaultSupplier: string | null;
+  access?: StoreAccessLevel;
+  isOwner?: boolean;
+  capabilities?: StoreCapability[];
 }
 
 interface AuthContextType {
@@ -40,6 +53,12 @@ interface AuthContextType {
   addStore: (storeDomain: string, accessToken: string, name?: string) => Promise<UserStore>;
   /** Soft-delete a store. */
   removeStore: (id: string) => Promise<void>;
+  /**
+   * May the signed-in user do `capability` in the ACTIVE store? Mirrors the
+   * server gate so the UI can disable a control instead of letting the user
+   * click it and collect a 403. The server stays authoritative.
+   */
+  canInStore: (capability: StoreCapability) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -144,6 +163,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setActiveStore(null);
   }, []);
 
+  // Server sends the resolved list; falling back to full access keeps older
+  // backends (which answer without `capabilities`) working unchanged.
+  const canInStore = useCallback((capability: StoreCapability): boolean => {
+    if (!activeStore) return false;
+    if (!activeStore.capabilities) return true;
+    return activeStore.capabilities.includes(capability);
+  }, [activeStore]);
+
   const setActiveStoreByDomain = useCallback((domain: string | null) => {
     if (!domain) {
       authStore.setActiveStore(null);
@@ -188,7 +215,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       refreshStores,
       setActiveStoreByDomain,
       addStore,
-      removeStore
+      removeStore,
+      canInStore
     }}>
       {children}
     </AuthContext.Provider>

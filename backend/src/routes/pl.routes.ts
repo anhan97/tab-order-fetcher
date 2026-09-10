@@ -16,12 +16,16 @@ import { backfillShippingCompaniesFromTracking } from '../services/carrier-backf
 import { seedDefaultPricebooks } from '../services/pricebook-seed.service';
 import { aggregateByPeriod, compareTwoPeriods, PeriodKind } from '../services/period-aggregation.service';
 import { importCostCsv } from '../services/cost-csv-import.service';
-import { resolveStore } from '../middleware/resolve-store';
+import { resolveStore, requireStoreCapability } from '../middleware/resolve-store';
+import { requireAuth, requireActive } from '../middleware/require-auth';
 
 const router = Router();
 const prisma = new PrismaClient();
 
-router.use(resolveStore);
+// requireAuth/requireActive were missing here: every other store-scoped
+// router mounts them, and without them the approval gate (PENDING/SUSPENDED)
+// simply did not apply to P&L.
+router.use(requireAuth, requireActive, resolveStore);
 
 function parseDate(s: any, fallback?: Date): Date {
   if (!s) return fallback ?? new Date();
@@ -326,7 +330,7 @@ router.get('/today/debug', async (req, res) => {
 // POST /api/pl/today/invalidate — drop the today cache for this store. Called
 // after data-changing actions that should be reflected immediately (CSV
 // import, manual recompute) instead of waiting for the 5min TTL.
-router.post('/today/invalidate', async (req, res) => {
+router.post('/today/invalidate', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     invalidateTodayCache(userId, storeId);
@@ -342,7 +346,7 @@ router.post('/today/invalidate', async (req, res) => {
 // waiting for the 5-min scheduler. Returns counts of accounts / rows
 // written. Today's P&L cache is also invalidated so the next /today call
 // re-aggregates from the freshly-persisted rows.
-router.post('/refresh-fb-metrics', async (req, res) => {
+router.post('/refresh-fb-metrics', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const { syncCampaignMetricsForUser, DEFAULT_SYNC_DAYS_BACK } = await import('../services/fb-metrics-store.service');
@@ -357,7 +361,7 @@ router.post('/refresh-fb-metrics', async (req, res) => {
 
 // POST /api/pl/finalize-yesterday  body: { tz? }
 // Manual trigger for the EOD finalize step (otherwise scheduled by the cron).
-router.post('/finalize-yesterday', async (req, res) => {
+router.post('/finalize-yesterday', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const tz = readTz(req);
@@ -382,7 +386,7 @@ router.get('/preview', async (req, res) => {
 });
 
 // POST /api/pl/recompute  body: { from, to, tz? }
-router.post('/recompute', async (req, res) => {
+router.post('/recompute', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const tz = readTz(req);
@@ -398,7 +402,7 @@ router.post('/recompute', async (req, res) => {
 });
 
 // POST /api/pl/recompute-day  body: { date, tz? }
-router.post('/recompute-day', async (req, res) => {
+router.post('/recompute-day', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const tz = readTz(req);
@@ -412,7 +416,7 @@ router.post('/recompute-day', async (req, res) => {
 });
 
 // POST /api/pl/sync-orders  body: { since?, until?, pullTransactions?, syncBalances? }
-router.post('/sync-orders', async (req, res) => {
+router.post('/sync-orders', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { storeId } = req.resolved!;
     const { since, until, pullTransactions, syncBalances } = req.body || {};
@@ -449,7 +453,7 @@ router.get('/store-settings', async (req, res) => {
 });
 
 // PUT /api/pl/store-settings  body: { defaultShippingCompany? }
-router.put('/store-settings', async (req, res) => {
+router.put('/store-settings', requireStoreCapability('manage'), async (req, res) => {
   try {
     const { storeId } = req.resolved!;
     const { defaultShippingCompany } = req.body || {};
@@ -478,7 +482,7 @@ router.get('/shipping-companies', async (_req, res) => {
 });
 
 // PUT /api/pl/shipping-companies/:id  body: { name?, display_name?, tracking_prefixes?, is_active? }
-router.put('/shipping-companies/:id', async (req, res) => {
+router.put('/shipping-companies/:id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { id } = req.params;
     const { name, display_name, tracking_prefixes, is_active } = req.body || {};
@@ -500,7 +504,7 @@ router.put('/shipping-companies/:id', async (req, res) => {
 // POST /api/pl/recompute-cogs  body: { from?, to? }
 // Re-runs cost snapshot calculation for every order in the window. Use this after
 // changing baseCost / pricebook / default supplier.
-router.post('/recompute-cogs', async (req, res) => {
+router.post('/recompute-cogs', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const { from, to } = req.body || {};
@@ -523,7 +527,7 @@ router.post('/recompute-cogs', async (req, res) => {
 // Accepts the supplier-side CSV with shipping cost per order. Extracts per-SKU
 // cost from single-item orders and writes it as PricebookVariantCostOverride
 // scoped by (country, carrier). Updates ProductVariant.baseCost as fallback.
-router.post('/import-cost-csv', async (req, res) => {
+router.post('/import-cost-csv', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const { csv, supplier } = req.body || {};
@@ -538,7 +542,7 @@ router.post('/import-cost-csv', async (req, res) => {
 });
 
 // POST /api/pl/backfill-carriers  body: { windowDays? }
-router.post('/backfill-carriers', async (req, res) => {
+router.post('/backfill-carriers', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { storeId } = req.resolved!;
     const days = parseInt(req.body?.windowDays ?? '30', 10);
@@ -550,7 +554,7 @@ router.post('/backfill-carriers', async (req, res) => {
 });
 
 // POST /api/pl/seed-pricebooks  body: { supplier?, shippingCompany?, currency? }
-router.post('/seed-pricebooks', async (req, res) => {
+router.post('/seed-pricebooks', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const result = await seedDefaultPricebooks(userId, storeId, req.body || {});
@@ -595,7 +599,7 @@ router.get('/compare', async (req, res) => {
 });
 
 // POST /api/pl/sync-balances  body: { since, until }
-router.post('/sync-balances', async (req, res) => {
+router.post('/sync-balances', requireStoreCapability('sync'), async (req, res) => {
   try {
     const { storeId } = req.resolved!;
     const { since, until } = req.body || {};
@@ -629,7 +633,7 @@ router.get('/operating-cost', async (req, res) => {
 });
 
 // POST /api/pl/operating-cost  body: { date, category, amount, description?, currency? }
-router.post('/operating-cost', async (req, res) => {
+router.post('/operating-cost', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const { date, category, amount, description, currency } = req.body || {};
@@ -654,7 +658,7 @@ router.post('/operating-cost', async (req, res) => {
 });
 
 // PUT /api/pl/operating-cost/:id
-router.put('/operating-cost/:id', async (req, res) => {
+router.put('/operating-cost/:id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { id } = req.params;
     const { date, category, amount, description, currency } = req.body || {};
@@ -675,7 +679,7 @@ router.put('/operating-cost/:id', async (req, res) => {
 });
 
 // DELETE /api/pl/operating-cost/:id
-router.delete('/operating-cost/:id', async (req, res) => {
+router.delete('/operating-cost/:id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { id } = req.params;
     await prisma.operatingCost.delete({ where: { id } });

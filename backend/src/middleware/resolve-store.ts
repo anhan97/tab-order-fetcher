@@ -3,13 +3,26 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { decryptToken, encryptToken } from '../lib/token-crypto';
+import { loadRole } from './require-role';
+import {
+  resolveStoreAccess, listAccessibleStores, can,
+  type StoreAccessLevel, type StoreCapability
+} from '../lib/store-access';
 
 const prisma = new PrismaClient();
 
 declare global {
   namespace Express {
     interface Request {
-      resolved?: { userId: string; storeId: string; storeDomain: string };
+      resolved?: {
+        userId: string;
+        storeId: string;
+        storeDomain: string;
+        /** Caller's access level in THIS store: owner | manager | cs | finance | viewer. */
+        level?: StoreAccessLevel;
+        /** Store's owner — differs from userId when access came from a grant. */
+        ownerId?: string;
+      };
     }
   }
 }
@@ -35,7 +48,10 @@ function userIdFromAuthHeader(req: Request): string | null {
  * Resolve the (User, ShopifyStore) tuple for a request.
  *
  * Resolution order:
- *   1. Explicit `userId`/`storeId` in query/body — for service-to-service.
+ *   1. Explicit `userId`/`storeId` in query/body — ADMIN ONLY. This used to
+ *      be honoured for anyone, before any auth check, which meant
+ *      `?userId=<victim>&storeId=<their store>` impersonated them outright —
+ *      unauthenticated on routers that mount resolveStore without requireAuth.
  *   2. JWT in `Authorization: Bearer …` + `X-Shopify-Store-Domain` — the
  *      logged-in user picks which of THEIR stores this request targets.
  *      Token comes from DB (the header `X-Shopify-Access-Token` is ignored
@@ -48,35 +64,59 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
   try {
     const rawDomain = (req.headers['x-shopify-store-domain'] || req.headers['x-shopify-store-url']) as string | undefined;
 
-    // 1. Explicit override
+    // 1. Explicit override — admins only.
+    //
+    // Anyone could previously pass ?userId=&storeId= and be resolved as that
+    // user, ahead of every auth branch below. A non-admin who sends these now
+    // just falls through to normal resolution (their own stores) rather than
+    // getting an error, so a stray param cannot lock a real user out.
     const explicitUser = (req.query.userId as string) || (req.body && req.body.userId);
     const explicitStore = (req.query.storeId as string) || (req.body && req.body.storeId);
     if (explicitUser && explicitStore) {
-      req.resolved = { userId: explicitUser, storeId: explicitStore, storeDomain: rawDomain ? normalizeDomain(rawDomain) : '' };
-      return next();
+      const callerId = userIdFromAuthHeader(req);
+      const callerRole = callerId ? await loadRole(callerId) : null;
+      if (callerRole === 'admin') {
+        const store = await prisma.shopifyStore.findUnique({ where: { id: explicitStore } });
+        req.resolved = {
+          userId: explicitUser,
+          storeId: explicitStore,
+          storeDomain: store?.storeDomain || (rawDomain ? normalizeDomain(rawDomain) : ''),
+          level: 'owner',
+          ownerId: store?.userId || explicitUser
+        };
+        return next();
+      }
     }
 
     // 2. JWT-authenticated user picks one of their stores
     const authedUserId = userIdFromAuthHeader(req);
     if (authedUserId) {
       const domain = rawDomain ? normalizeDomain(rawDomain) : null;
-      let store = null;
-      if (domain) {
-        store = await prisma.shopifyStore.findUnique({
-          where: { userId_storeDomain: { userId: authedUserId, storeDomain: domain } }
-        });
+
+      // Owned OR admin-granted (StoreMember) — resolveStoreAccess covers both
+      // and reports which, so downstream capability gates know what to allow.
+      let access = domain
+        ? await resolveStoreAccess(authedUserId, { storeDomain: domain })
+        : null;
+
+      // No domain header (or a domain they can't open) → fall back to the
+      // first store they can reach at all, owned ones first.
+      if (!access) {
+        const [first] = await listAccessibleStores(authedUserId);
+        if (first) {
+          access = { storeId: first.id, storeDomain: first.storeDomain, ownerId: first.ownerId, level: first.access };
+        }
       }
-      // If domain not specified, default to the user's first active store.
-      if (!store) {
-        store = await prisma.shopifyStore.findFirst({
-          where: { userId: authedUserId, isActive: true },
-          orderBy: { createdAt: 'asc' }
-        });
-      }
-      if (!store) {
+      if (!access) {
         return res.status(404).json({ error: 'No store found for this user. Add one via /api/auth/stores.' });
       }
-      req.resolved = { userId: authedUserId, storeId: store.id, storeDomain: store.storeDomain };
+      req.resolved = {
+        userId: authedUserId,
+        storeId: access.storeId,
+        storeDomain: access.storeDomain,
+        level: access.level,
+        ownerId: access.ownerId
+      };
       return next();
     }
 
@@ -105,7 +145,7 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       decryptToken(s.accessToken) === accessToken && !s.user.email.endsWith('@autocreated.local')
     );
     if (realStore) {
-      req.resolved = { userId: realStore.userId, storeId: realStore.id, storeDomain };
+      req.resolved = { userId: realStore.userId, storeId: realStore.id, storeDomain, level: 'owner', ownerId: realStore.userId };
       return next();
     }
 
@@ -132,10 +172,54 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       });
     }
 
-    req.resolved = { userId: user.id, storeId: store.id, storeDomain };
+    req.resolved = { userId: user.id, storeId: store.id, storeDomain, level: 'owner', ownerId: user.id };
     next();
   } catch (e: any) {
     console.error('resolveStore error:', e);
     res.status(500).json({ error: 'Failed to resolve store', details: e?.message });
   }
+}
+
+
+/**
+ * Gate a store-scoped route on a capability. Mount AFTER resolveStore:
+ *
+ *   router.patch('/:id/tracking', requireStoreCapability('fulfill'), handler)
+ *
+ * 403 names the capability so the UI can say "you have read-only access to
+ * this store" instead of a bare Forbidden.
+ */
+export function requireStoreCapability(capability: StoreCapability) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const resolved = req.resolved;
+    if (!resolved) {
+      res.status(500).json({ error: 'requireStoreCapability used without resolveStore' });
+      return;
+    }
+    // Legacy header-auth paths set level 'owner'; a missing level would mean
+    // resolveStore was bypassed, so fail closed rather than assuming owner.
+    if (!can(resolved.level, capability)) {
+      res.status(403).json({
+        error: `Your access to this store does not allow "${capability}"`,
+        code: 'store_capability_denied',
+        requires: capability,
+        access: resolved.level ?? null
+      });
+      return;
+    }
+    next();
+  };
+}
+
+/** Only the store's owner (never a granted member) may do this. */
+export function requireStoreOwner(req: Request, res: Response, next: NextFunction): void {
+  if (req.resolved?.level !== 'owner') {
+    res.status(403).json({
+      error: 'Only the store owner can do this',
+      code: 'store_owner_required',
+      access: req.resolved?.level ?? null
+    });
+    return;
+  }
+  next();
 }

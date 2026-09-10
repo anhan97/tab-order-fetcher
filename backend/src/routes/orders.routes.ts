@@ -17,6 +17,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 import { resolveStore } from '../middleware/resolve-store';
+import { requireStoreCapability } from '../middleware/resolve-store';
 import { canTransition, isFulfillStatus, ORDER_FULFILL_TRANSITIONS } from '../lib/order-lifecycle';
 import {
   EXPORT_FIELDS, EXPORT_FIELD_MAP, DEFAULT_EXPORT_COLUMNS,
@@ -144,7 +145,7 @@ router.get('/export-presets', async (req: Request, res: Response) => {
 });
 
 /** Create-or-overwrite a preset by name (upsert on the (store, name) key). */
-router.post('/export-presets', async (req: Request, res: Response) => {
+router.post('/export-presets', requireStoreCapability('fulfill'), async (req: Request, res: Response) => {
   try {
     const name = String(req.body?.name || '').trim();
     const columns = sanitizeColumns(req.body?.columns);
@@ -165,7 +166,7 @@ router.post('/export-presets', async (req: Request, res: Response) => {
 });
 
 /** Delete a preset (scoped to the caller's store). */
-router.delete('/export-presets/:id', async (req: Request, res: Response) => {
+router.delete('/export-presets/:id', requireStoreCapability('fulfill'), async (req: Request, res: Response) => {
   try {
     await prisma.orderExportPreset.deleteMany({
       where: { id: req.params.id, storeId: req.resolved!.storeId }
@@ -267,7 +268,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
-router.patch('/:id/status', async (req: Request, res: Response) => {
+router.patch('/:id/status', requireStoreCapability('fulfill'), async (req: Request, res: Response) => {
   try {
     const to = String(req.body?.status || '').trim().toUpperCase();
     if (!isFulfillStatus(to)) {
@@ -311,7 +312,7 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
  *   - auto-advances PENDING/PROCESSING → SHIPPED
  *   - changing tracking on a DELIVERED order reverts it to SHIPPED
  */
-router.patch('/:id/tracking', async (req: Request, res: Response) => {
+router.patch('/:id/tracking', requireStoreCapability('fulfill'), async (req: Request, res: Response) => {
   try {
     const trackingNumber = String(req.body?.trackingNumber || '').trim();
     const trackingCompany = String(req.body?.trackingCompany || '').trim() || null;

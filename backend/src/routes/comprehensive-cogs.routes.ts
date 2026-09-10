@@ -11,7 +11,7 @@ import {
 } from '../types/cogs';
 
 import { requireAuth, requireActive } from '../middleware/require-auth';
-import { resolveStore } from '../middleware/resolve-store';
+import { resolveStore, requireStoreCapability } from '../middleware/resolve-store';
 
 const router = express.Router();
 
@@ -27,7 +27,7 @@ router.use(requireAuth, requireActive, resolveStore);
 // ===== PRICEBOOK ROUTES =====
 
 // POST /pricebooks
-router.post('/pricebooks', async (req, res) => {
+router.post('/pricebooks', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const data: CreatePricebookRequest = req.body;
@@ -75,7 +75,7 @@ router.get('/pricebooks', async (req, res) => {
 });
 
 // PATCH /pricebooks/:pricebook_id
-router.patch('/pricebooks/:pricebook_id', async (req, res) => {
+router.patch('/pricebooks/:pricebook_id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id } = req.params;
@@ -94,7 +94,7 @@ router.patch('/pricebooks/:pricebook_id', async (req, res) => {
 });
 
 // DELETE /pricebooks/:pricebook_id
-router.delete('/pricebooks/:pricebook_id', async (req, res) => {
+router.delete('/pricebooks/:pricebook_id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id } = req.params;
@@ -114,7 +114,7 @@ router.delete('/pricebooks/:pricebook_id', async (req, res) => {
 // ===== SHIPPING TIERS ROUTES =====
 
 // POST /pricebooks/:pricebook_id/tiers
-router.post('/pricebooks/:pricebook_id/tiers', async (req, res) => {
+router.post('/pricebooks/:pricebook_id/tiers', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id } = req.params;
@@ -158,7 +158,7 @@ router.get('/pricebooks/:pricebook_id/tiers', async (req, res) => {
 });
 
 // PUT /pricebooks/:pricebook_id/tiers (bulk replace)
-router.put('/pricebooks/:pricebook_id/tiers', async (req, res) => {
+router.put('/pricebooks/:pricebook_id/tiers', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id } = req.params;
@@ -181,7 +181,7 @@ router.put('/pricebooks/:pricebook_id/tiers', async (req, res) => {
 });
 
 // DELETE /pricebooks/:pricebook_id/tiers
-router.delete('/pricebooks/:pricebook_id/tiers', async (req, res) => {
+router.delete('/pricebooks/:pricebook_id/tiers', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id } = req.params;
@@ -214,7 +214,7 @@ router.delete('/pricebooks/:pricebook_id/tiers', async (req, res) => {
 // ===== VARIANT COST OVERRIDES ROUTES =====
 
 // POST /pricebooks/:pricebook_id/variant-costs
-router.post('/pricebooks/:pricebook_id/variant-costs', async (req, res) => {
+router.post('/pricebooks/:pricebook_id/variant-costs', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id } = req.params;
@@ -258,7 +258,7 @@ router.get('/pricebooks/:pricebook_id/variant-costs', async (req, res) => {
 });
 
 // DELETE /pricebooks/:pricebook_id/variant-costs/:variant_id
-router.delete('/pricebooks/:pricebook_id/variant-costs/:variant_id', async (req, res) => {
+router.delete('/pricebooks/:pricebook_id/variant-costs/:variant_id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id, variant_id } = req.params;
@@ -282,7 +282,7 @@ router.delete('/pricebooks/:pricebook_id/variant-costs/:variant_id', async (req,
 // ===== COMBO ROUTES =====
 
 // POST /combos
-router.post('/combos', async (req, res) => {
+router.post('/combos', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const data: CreateComboRequest = req.body;
@@ -325,7 +325,7 @@ router.get('/combos/:combo_id', async (req, res) => {
 });
 
 // PATCH /combos/:combo_id
-router.patch('/combos/:combo_id', async (req, res) => {
+router.patch('/combos/:combo_id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { combo_id } = req.params;
@@ -344,7 +344,7 @@ router.patch('/combos/:combo_id', async (req, res) => {
 });
 
 // DELETE /combos/:combo_id
-router.delete('/combos/:combo_id', async (req, res) => {
+router.delete('/combos/:combo_id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { combo_id } = req.params;
@@ -364,7 +364,7 @@ router.delete('/combos/:combo_id', async (req, res) => {
 // ===== COMBO OVERRIDES ROUTES =====
 
 // POST /pricebooks/:pricebook_id/combo-overrides
-router.post('/pricebooks/:pricebook_id/combo-overrides', async (req, res) => {
+router.post('/pricebooks/:pricebook_id/combo-overrides', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id } = req.params;
@@ -408,7 +408,7 @@ router.get('/pricebooks/:pricebook_id/combo-overrides', async (req, res) => {
 });
 
 // DELETE /pricebooks/:pricebook_id/combo-overrides/:combo_id
-router.delete('/pricebooks/:pricebook_id/combo-overrides/:combo_id', async (req, res) => {
+router.delete('/pricebooks/:pricebook_id/combo-overrides/:combo_id', requireStoreCapability('costs'), async (req, res) => {
   try {
     const userId = req.userId!;
     const { pricebook_id, combo_id } = req.params;
@@ -428,7 +428,7 @@ router.delete('/pricebooks/:pricebook_id/combo-overrides/:combo_id', async (req,
 // ===== UTILITY ROUTES =====
 
 // POST /pricebooks/import
-router.post('/pricebooks/import', async (req, res) => {
+router.post('/pricebooks/import', requireStoreCapability('costs'), async (req, res) => {
   try {
     const { userId, storeId } = req.resolved!;
     const config: PricebookImportConfig = req.body;
@@ -453,7 +453,7 @@ router.post('/pricebooks/import', async (req, res) => {
 });
 
 // POST /cost/quote
-router.post('/cost/quote', async (req, res) => {
+router.post('/cost/quote', requireStoreCapability('read'), async (req, res) => {
   try {
     const userId = req.userId!;
     const request: QuoteRequest = req.body;
