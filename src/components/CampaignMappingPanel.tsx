@@ -12,6 +12,7 @@ import { useAppContext } from '@/context/AppContext';
 import { useToast } from '@/hooks/use-toast';
 import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
+import { storeHeaders } from '@/utils/apiClient';
 
 interface CampaignRow {
   campaignId: string;
@@ -62,11 +63,7 @@ export function CampaignMappingPanel() {
 
   const authHeaders = useMemo(() => {
     if (!shopifyConfig) return {} as Record<string, string>;
-    return {
-      'Content-Type': 'application/json',
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    };
+    return storeHeaders(shopifyConfig);
   }, [shopifyConfig]);
 
   const load = async () => {

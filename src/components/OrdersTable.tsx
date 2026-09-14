@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils';
 import { FacebookAdAccount } from '@/types/facebook';
 import { DashboardInsights } from '@/components/DashboardInsights';
 import { useAppContext } from '@/context/AppContext';
-import { apiFetch } from '@/utils/apiClient';
+import { apiFetch, storeHeaders } from '@/utils/apiClient';
 import {
   getShopifyDateRange,
   getDateRangeFromPreset,
@@ -172,10 +172,7 @@ export const OrdersTable = ({
           to: new Date(dateRange.to.getFullYear(), dateRange.to.getMonth(), dateRange.to.getDate() + 1).toISOString()
         });
         const res = await fetch(`/api/pl/order-fees?${params}`, {
-          headers: {
-            'X-Shopify-Store-Domain': shopifyConfig.storeUrl,
-            'X-Shopify-Access-Token': shopifyConfig.accessToken
-          },
+          headers: storeHeaders(shopifyConfig),
           signal: ctrl.signal
         });
         if (!res.ok) return;
@@ -230,11 +227,7 @@ export const OrdersTable = ({
       ctrl = new AbortController();
       setIsLoadingAdSpend(true);
       try {
-        const headers = {
-          'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-          'X-Shopify-Access-Token': shopifyConfig.accessToken,
-          ...(timezone ? { 'X-Tz': timezone } : {})
-        };
+        const headers = storeHeaders(shopifyConfig, timezone ? { 'X-Tz': timezone } : {});
         // Today single-day → /api/pl/today (5min memo). Multi-day or
         // historical → /api/pl/daily (recent days re-aggregated live, older
         // from snapshot). Both honour CampaignStoreMapping for this store.

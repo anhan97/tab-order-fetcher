@@ -19,6 +19,7 @@ import {
 } from 'recharts';
 import { TrendingUp, Loader2 } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
+import { storeHeaders } from '@/utils/apiClient';
 
 interface DailyRow {
   date: string;
@@ -67,11 +68,7 @@ export const OverviewCharts = ({ from, to }: OverviewChartsProps) => {
     setLoading(true);
     (async () => {
       try {
-        const headers: Record<string, string> = {
-          'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-          'X-Shopify-Access-Token': shopifyConfig.accessToken
-        };
-        if (timezone) headers['X-Tz'] = timezone;
+        const headers = storeHeaders(shopifyConfig, timezone ? { 'X-Tz': timezone } : {});
         const q = new URLSearchParams({
           from: from.toISOString(),
           to: to.toISOString()

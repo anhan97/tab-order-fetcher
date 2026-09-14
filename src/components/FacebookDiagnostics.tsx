@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/context/AppContext';
 import { CheckCircle2, AlertTriangle, AlertOctagon, ExternalLink, RefreshCw, Loader2, Stethoscope } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { storeHeaders } from '@/utils/apiClient';
 
 type DiagnosisKind =
   | 'ok'
@@ -62,11 +63,8 @@ export const FacebookDiagnostics = () => {
   const [error, setError] = useState<string | null>(null);
 
   const headers = () => {
-    if (!shopifyConfig) return {};
-    return {
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    } as Record<string, string>;
+    if (!shopifyConfig) return {} as Record<string, string>;
+    return storeHeaders(shopifyConfig);
   };
 
   const run = async () => {

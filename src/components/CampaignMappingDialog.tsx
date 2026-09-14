@@ -10,6 +10,7 @@ import { Loader2, Search, Save, AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAppContext } from '@/context/AppContext';
 import { useToast } from '@/hooks/use-toast';
+import { storeHeaders } from '@/utils/apiClient';
 
 interface UserStore {
   id: string;
@@ -68,11 +69,7 @@ export function CampaignMappingDialog({ open, onOpenChange, accountId, accountNa
 
   const authHeaders = useMemo(() => {
     if (!shopifyConfig) return {} as Record<string, string>;
-    return {
-      'Content-Type': 'application/json',
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    };
+    return storeHeaders(shopifyConfig);
   }, [shopifyConfig]);
 
   const load = async () => {

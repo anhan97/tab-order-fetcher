@@ -11,6 +11,7 @@ import { useAppContext } from '@/context/AppContext';
 import { Search, RefreshCw, Plus, Trash2, CheckCircle2, Loader2, Building2, FileText, Wallet, Instagram, Globe, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CampaignMappingDialog } from './CampaignMappingDialog';
+import { storeHeaders } from '@/utils/apiClient';
 
 interface AdAccountAsset {
   accountId: string;
@@ -61,10 +62,7 @@ export const FacebookAssetManager = () => {
 
   const headers = (): Record<string, string> => {
     if (!shopifyConfig) return {};
-    return {
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    };
+    return storeHeaders(shopifyConfig);
   };
 
   const load = async () => {

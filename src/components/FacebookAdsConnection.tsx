@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { FacebookAdsApiClient } from '@/utils/facebookAdsApi';
-import { apiFetch } from '@/utils/apiClient';
+import { apiFetch, storeHeaders } from '@/utils/apiClient';
 import { useAppContext } from '@/context/AppContext';
 
 interface FacebookAdsConnectionProps {
@@ -32,10 +32,7 @@ export function FacebookAdsConnection({ onConnectionSuccess }: FacebookAdsConnec
   // stored under one identity and checked under another.
   const legacyHeaders = (): Record<string, string> => {
     if (!shopifyConfig) return {};
-    return {
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    };
+    return storeHeaders(shopifyConfig);
   };
 
   // On mount: fetch the user's registered FB App and either configure the

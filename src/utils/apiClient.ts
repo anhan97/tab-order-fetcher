@@ -36,6 +36,34 @@ export function buildHeaders(extra: Record<string, string> = {}): Record<string,
   return headers;
 }
 
+/**
+ * Headers for the call sites that still use bare `fetch` against store-scoped
+ * backend routes.
+ *
+ * Those sites used to authenticate purely by echoing the store's Admin API
+ * token in `X-Shopify-Access-Token`. That silently stopped working for anyone
+ * operating a store granted to them rather than owned: they hold no token, so
+ * the header went out EMPTY and the backend answered 401 on every call. The
+ * Bearer JWT is the identity now; the legacy token is only sent when we
+ * actually have one, because an empty value reads as a failed legacy attempt.
+ *
+ * Prefer apiFetch for new code — it adds refresh-and-retry on top of this.
+ */
+export function storeHeaders(
+  cfg?: { storeUrl?: string | null; accessToken?: string | null } | null,
+  extra: Record<string, string> = {}
+): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  if (cfg?.storeUrl) {
+    headers['X-Shopify-Store-Domain'] = cfg.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  }
+  if (cfg?.accessToken) {
+    headers['X-Shopify-Access-Token'] = cfg.accessToken;
+  }
+  // Fills in Authorization, plus the active-store domain if not set above.
+  return buildHeaders(headers);
+}
+
 async function parse(res: Response): Promise<any> {
   const text = await res.text();
   if (!text) return null;

@@ -45,6 +45,7 @@ import { useAppContext } from '@/context/AppContext';
 import { cn } from '@/lib/utils';
 import { useDragScroll } from '@/hooks/useDragScroll';
 import { FacebookReconnectDialog } from './FacebookReconnectDialog';
+import { storeHeaders } from '@/utils/apiClient';
 
 interface FacebookAdsManagerProps {
   account: FacebookAdAccount;
@@ -171,10 +172,7 @@ export function FacebookAdsManager({
   const { shopifyConfig } = useAppContext();
   useEffect(() => {
     if (!shopifyConfig) return;
-    setFacebookApiAuthHeaders({
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    });
+    setFacebookApiAuthHeaders(storeHeaders(shopifyConfig));
   }, [shopifyConfig]);
 
   const loadAccountData = async (range = initialDateRange) => {
@@ -251,10 +249,7 @@ export function FacebookAdsManager({
 
   const fetchMappedSpend = async () => {
     if (!shopifyConfig) return;
-    const headers = {
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    };
+    const headers = storeHeaders(shopifyConfig);
     try {
       const dayMs = 86400000;
       const fromDay = Math.floor(initialDateRange.from.getTime() / dayMs);
