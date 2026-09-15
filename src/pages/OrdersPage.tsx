@@ -69,13 +69,13 @@ export const OrdersPage = () => {
           <div className="p-4 bg-teal-50 rounded-full w-20 h-20 mx-auto flex items-center justify-center mb-5">
             <Store className="h-10 w-10 text-teal-500" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Chưa kết nối store nào</h2>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">No store connected</h2>
           <p className="text-slate-600 mb-6">
-            Kết nối cửa hàng Shopify của bạn để bắt đầu xem đơn hàng, lãi/lỗ và fulfillment.
+            Connect your Shopify store to start seeing orders, profit and fulfilment.
           </p>
           <Button onClick={() => navigate('/connect')} className="bg-teal-600 hover:bg-teal-700">
             <Store className="h-4 w-4 mr-1.5" />
-            Đi tới Stores để kết nối
+            Go to Stores to connect
           </Button>
         </Card>
       </div>

@@ -551,8 +551,8 @@ export const OrdersTable = ({
   const handleExportCSV = () => {
     if (orders.length === 0) { // Changed from filteredOrders to orders
       toast({
-        title: "Không có dữ liệu",
-        description: "Không có đơn hàng nào để xuất.",
+        title: "No data",
+        description: "There are no orders to export.",
         variant: "destructive",
       });
       return;
@@ -560,8 +560,8 @@ export const OrdersTable = ({
 
     exportToCSV(orders); // Changed from filteredOrders to orders
     toast({
-      title: "Xuất CSV thành công!",
-      description: `Đã xuất ${orders.length} đơn hàng ra file CSV.`, // Changed from filteredOrders to orders
+      title: "CSV exported",
+      description: `Exported ${orders.length} orders to CSV.`, // Changed from filteredOrders to orders
     });
   };
 
@@ -982,7 +982,7 @@ export const OrdersTable = ({
         <CardContent className="flex items-center justify-center py-12">
           <div className="text-center space-y-4">
             <RefreshCw className="h-8 w-8 animate-spin text-teal-500 mx-auto" />
-            <p className="text-slate-600">Đang tải dữ liệu đơn hàng từ Shopify...</p>
+            <p className="text-slate-600">Loading orders from Shopify…</p>
           </div>
         </CardContent>
       </Card>

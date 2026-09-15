@@ -8,7 +8,7 @@ export interface AuthUser {
   lastName: string | null;
   isVerified: boolean;
   role?: string;
-  /** PENDING (chờ admin duyệt) | ACTIVE | SUSPENDED */
+  /** PENDING (awaiting admin approval) | ACTIVE | SUSPENDED */
   status?: string;
 }
 

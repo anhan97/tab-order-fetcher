@@ -222,7 +222,7 @@ describe('OrdersTable', () => {
     // Wait for loading to complete
     await act(async () => {
       await vi.waitFor(() => {
-        expect(screen.queryByText('Đang tải dữ liệu đơn hàng từ Shopify...')).toBeNull();
+        expect(screen.queryByText('Loading orders from Shopify…')).toBeNull();
       });
     });
 
@@ -232,7 +232,7 @@ describe('OrdersTable', () => {
 
     // Switch to 7 days view
     await act(async () => {
-      const sevenDaysButton = screen.getByText('7 ngày qua');
+      const sevenDaysButton = screen.getByText('Last 7 days');
       fireEvent.click(sevenDaysButton);
     });
     
@@ -244,7 +244,7 @@ describe('OrdersTable', () => {
 
     // Switch to today's view
     await act(async () => {
-      const todayButton = screen.getByText('Hôm nay');
+      const todayButton = screen.getByText('Today');
       fireEvent.click(todayButton);
     });
     

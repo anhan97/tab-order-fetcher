@@ -94,7 +94,7 @@ export const FacebookAssetManager = () => {
         const j = await res.json().catch(() => ({}));
         throw new Error(j?.error || `${res.status}`);
       }
-      toast({ title: 'Đã thêm vào hệ thống', description: account.name });
+      toast({ title: 'Added to the system', description: account.name });
       await load();
       // Pop the mapping dialog so the user can immediately wire campaigns
       // to their stores — same flow they'd reach via the Mapping tab, but
@@ -108,7 +108,7 @@ export const FacebookAssetManager = () => {
   };
 
   const unenroll = async (account: AdAccountAsset) => {
-    if (!confirm(`Xóa "${account.name}" khỏi hệ thống? Dữ liệu spend lịch sử vẫn giữ lại.`)) return;
+    if (!confirm(`Remove "${account.name}" from the system? Historical spend data is kept.`)) return;
     setBusyId(account.accountId);
     try {
       const res = await fetch(`/api/facebook/assets/ad-accounts/${account.accountId}`, {
@@ -119,7 +119,7 @@ export const FacebookAssetManager = () => {
         const j = await res.json().catch(() => ({}));
         throw new Error(j?.error || `${res.status}`);
       }
-      toast({ title: 'Đã xóa khỏi hệ thống', description: account.name });
+      toast({ title: 'Removed from the system', description: account.name });
       await load();
     } catch (e: any) {
       toast({ title: 'Unenroll failed', description: e?.message || String(e), variant: 'destructive' });
@@ -161,7 +161,7 @@ export const FacebookAssetManager = () => {
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <Input
-              placeholder="Tìm theo tên, ID, BM..."
+              placeholder="Search by name, ID, BM…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"
@@ -169,7 +169,7 @@ export const FacebookAssetManager = () => {
           </div>
           <Button onClick={load} disabled={loading} variant="outline" size="sm">
             <RefreshCw className={cn('h-3.5 w-3.5 mr-1.5', loading && 'animate-spin')} />
-            {loading ? 'Đang tải...' : 'Refresh từ Facebook'}
+            {loading ? 'Loading…' : 'Refresh from Facebook'}
           </Button>
         </div>
 
@@ -183,7 +183,7 @@ export const FacebookAssetManager = () => {
           <Card>
             <CardContent className="p-8 flex items-center justify-center text-slate-500">
               <Loader2 className="h-5 w-5 animate-spin mr-2" />
-              Đang lấy danh sách asset từ Facebook...
+              Fetching your assets from Facebook…
             </CardContent>
           </Card>
         )}
@@ -193,7 +193,7 @@ export const FacebookAssetManager = () => {
             <TabsList>
               <TabsTrigger value="ad-accounts" className="gap-2">
                 <Wallet className="h-4 w-4" />
-                Tài khoản quảng cáo
+                Ad accounts
                 <span className="ml-1 text-xs text-slate-500">({data.adAccounts.length})</span>
               </TabsTrigger>
               <TabsTrigger value="pages" className="gap-2">
@@ -211,13 +211,13 @@ export const FacebookAssetManager = () => {
             <TabsContent value="ad-accounts" className="m-0 space-y-3">
               <div className="flex items-center gap-3 text-sm text-slate-600">
                 <span>
-                  <strong className="text-emerald-600">{enrolledCount}</strong> đã add ·{' '}
+                  <strong className="text-emerald-600">{enrolledCount}</strong> added ·{' '}
                   <strong>{data.adAccounts.length - enrolledCount}</strong> available
                 </span>
                 <div className="flex gap-1 ml-auto">
                   <FilterChip active={enrolmentFilter === 'all'} onClick={() => setEnrolmentFilter('all')}>All</FilterChip>
                   <FilterChip active={enrolmentFilter === 'enrolled'} onClick={() => setEnrolmentFilter('enrolled')}>
-                    <CheckCircle2 className="h-3 w-3 mr-1" />Đã add
+                    <CheckCircle2 className="h-3 w-3 mr-1" />Added
                   </FilterChip>
                   <FilterChip active={enrolmentFilter === 'available'} onClick={() => setEnrolmentFilter('available')}>Available</FilterChip>
                 </div>
@@ -228,18 +228,18 @@ export const FacebookAssetManager = () => {
                     <Table>
                       <TableHeader>
                         <TableRow className="bg-slate-50/60">
-                          <TableHead>Tài khoản quảng cáo</TableHead>
-                          <TableHead>Trạng thái tài khoản</TableHead>
-                          <TableHead>Loại tài khoản</TableHead>
-                          <TableHead>Tiền tệ</TableHead>
+                          <TableHead>Ad account</TableHead>
+                          <TableHead>Account status</TableHead>
+                          <TableHead>Account type</TableHead>
+                          <TableHead>Currency</TableHead>
                           <TableHead>BM</TableHead>
-                          <TableHead>Trạng thái đồng bộ</TableHead>
-                          <TableHead className="text-right">Hành động</TableHead>
+                          <TableHead>Sync status</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {filteredAdAccounts.length === 0 && (
-                          <TableRow><TableCell colSpan={7} className="text-center text-slate-400 py-6">Không có account nào.</TableCell></TableRow>
+                          <TableRow><TableCell colSpan={7} className="text-center text-slate-400 py-6">No accounts found.</TableCell></TableRow>
                         )}
                         {filteredAdAccounts.map(a => {
                           const isActive = a.accountStatus === 1;
@@ -273,7 +273,7 @@ export const FacebookAssetManager = () => {
                               </TableCell>
                               <TableCell>
                                 <span className="text-sm text-slate-600">
-                                  {a.accountType === 'business' ? 'Doanh nghiệp' : 'Cá nhân'}
+                                  {a.accountType === 'business' ? 'Business' : 'Personal'}
                                 </span>
                               </TableCell>
                               <TableCell className="text-sm">{a.currency || '—'}</TableCell>
@@ -290,7 +290,7 @@ export const FacebookAssetManager = () => {
                                 {a.enrolled ? (
                                   <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-200 gap-1">
                                     <CheckCircle2 className="h-3 w-3" />
-                                    Đã add
+                                    Added
                                   </Badge>
                                 ) : (
                                   <Badge variant="outline" className="text-slate-500 bg-slate-50 border-slate-200">Available</Badge>
@@ -316,7 +316,7 @@ export const FacebookAssetManager = () => {
                                       className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50"
                                     >
                                       <Trash2 className="h-3.5 w-3.5 mr-1" />
-                                      Xóa
+                                      Remove
                                     </Button>
                                   </div>
                                 ) : (
@@ -355,7 +355,7 @@ export const FacebookAssetManager = () => {
                       </TableHeader>
                       <TableBody>
                         {filteredPages.length === 0 && (
-                          <TableRow><TableCell colSpan={4} className="text-center text-slate-400 py-6">Không có page nào.</TableCell></TableRow>
+                          <TableRow><TableCell colSpan={4} className="text-center text-slate-400 py-6">No pages found.</TableCell></TableRow>
                         )}
                         {filteredPages.map(p => (
                           <TableRow key={p.pageId}>
@@ -372,7 +372,7 @@ export const FacebookAssetManager = () => {
                                       <Instagram className="h-4 w-4" />
                                     </span>
                                   </TooltipTrigger>
-                                  <TooltipContent>Page này có Instagram Business account</TooltipContent>
+                                  <TooltipContent>This page has a linked Instagram Business account</TooltipContent>
                                 </Tooltip>
                               ) : (
                                 <span className="text-xs text-slate-400">—</span>
@@ -386,7 +386,7 @@ export const FacebookAssetManager = () => {
                 </CardContent>
               </Card>
               <p className="text-xs text-slate-500 mt-2">
-                Pages liệt kê đọc từ <code>/me/accounts</code>. Khi launch ads (tab Auto-launch), bạn pick page từ list này.
+                Pages come from <code>/me/accounts</code>. When launching ads (Auto-launch tab), you pick a page from this list.
               </p>
             </TabsContent>
 
@@ -399,12 +399,12 @@ export const FacebookAssetManager = () => {
                         <TableRow className="bg-slate-50/60">
                           <TableHead>Business Manager</TableHead>
                           <TableHead>Business ID</TableHead>
-                          <TableHead className="text-right">Mở settings</TableHead>
+                          <TableHead className="text-right">Open settings</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {filteredBusinesses.length === 0 && (
-                          <TableRow><TableCell colSpan={3} className="text-center text-slate-400 py-6">Không có BM nào.</TableCell></TableRow>
+                          <TableRow><TableCell colSpan={3} className="text-center text-slate-400 py-6">No business managers found.</TableCell></TableRow>
                         )}
                         {filteredBusinesses.map(b => (
                           <TableRow key={b.businessId}>
@@ -432,7 +432,7 @@ export const FacebookAssetManager = () => {
                 </CardContent>
               </Card>
               <p className="text-xs text-slate-500 mt-2">
-                BMs đọc từ <code>/me/businesses</code>. Đây là context — không enroll vào hệ thống. Click "Settings" để mở BM trên Meta để add app, assign ad accounts, etc.
+                Business managers come from <code>/me/businesses</code>. This is context only — nothing is enrolled. Click "Settings" to open the BM on Meta, add the app and assign ad accounts, etc.
               </p>
             </TabsContent>
           </Tabs>

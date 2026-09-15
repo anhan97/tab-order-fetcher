@@ -1,6 +1,7 @@
 import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { Logo } from '@/components/Logo';
 import { Button } from '@/components/ui/button';
 import { TimezoneSelect } from '@/components/ui/timezone-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -35,7 +36,7 @@ import { useState } from 'react';
 
 const PAGE_SUBTITLES: Record<string, string> = {
     Dashboard: 'KPIs, daily breakdown, and order list',
-    Fulfillment: 'Vòng đời đơn hàng, tracking, export đi fulfill',
+    Fulfillment: 'Order lifecycle, tracking, and fulfilment exports',
     Tracking: 'Bulk-upload tracking numbers to Shopify',
     Analytics: 'Cross-channel ROAS & ad performance',
     'P&L': 'Daily / period profit, costs, and operating expenses',
@@ -107,9 +108,7 @@ export const Layout = () => {
                 isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
             )}>
                 <div className="h-16 flex items-center px-6 border-b border-slate-200/80 shrink-0">
-                    <div className="p-2 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-xl mr-3 shadow-sm shadow-teal-500/30">
-                        <ShoppingBag className="h-5 w-5 text-white" />
-                    </div>
+                    <Logo size={36} className="mr-3 rounded-xl shadow-sm shadow-teal-500/30" />
                     <div className="flex flex-col">
                         <span className="font-bold text-base text-slate-900 leading-tight">Order Manager</span>
                         <span className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Profit Suite</span>
@@ -192,7 +191,7 @@ export const Layout = () => {
                                 </Button>
                                 {activeStore?.access && activeStore.access !== 'owner' && (
                                     <p className="text-[10px] leading-snug text-slate-500 px-2 pt-1">
-                                        Bạn được cấp quyền <b>{activeStore.access}</b> ở store này — một số thao tác sẽ bị khoá.
+                                        You have <b>{activeStore.access}</b> access to this store — some actions are locked.
                                     </p>
                                 )}
                             </>
@@ -204,7 +203,7 @@ export const Layout = () => {
                                 onClick={() => navigate('/connect')}
                             >
                                 <Plus className="h-3.5 w-3.5 mr-1.5" />
-                                Kết nối store
+                                Connect a store
                             </Button>
                         )}
                     </div>

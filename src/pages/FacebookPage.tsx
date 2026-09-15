@@ -181,11 +181,11 @@ export const FacebookPage = () => {
             />
           ) : (
             <Card className="p-8 text-center text-slate-600">
-              <h3 className="font-semibold text-slate-900 mb-1">Chưa thấy ad account nào</h3>
+              <h3 className="font-semibold text-slate-900 mb-1">No ad accounts found</h3>
               <p className="text-sm">
-                Facebook đã kết nối nhưng token chưa thấy ad account nào (account đang
-                pending, bị disable, hoặc thiếu quyền <code>ads_read</code>). Mở tab{' '}
-                <strong>Diagnostics</strong> để xem chi tiết — không cần kết nối lại.
+                Facebook is connected, but the token sees no ad accounts (they may be
+                pending, disabled, or missing the <code>ads_read</code> scope). Open the{' '}
+                <strong>Diagnostics</strong> tab for details — no need to reconnect.
               </p>
             </Card>
           )}

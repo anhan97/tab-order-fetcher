@@ -27,10 +27,10 @@ export type StoreRole = (typeof STORE_ROLES)[number];
 
 /** One line each, so the admin picks a role without reading the source. */
 const ROLE_HELP: Record<StoreRole, string> = {
-  manager: 'Toàn quyền trong store này (trừ xoá store và cấp quyền cho người khác)',
-  cs:      'Xem mọi thứ + xử lý đơn: đổi trạng thái, nhập tracking, export',
-  finance: 'Xem mọi thứ + sửa chi phí: COGS, pricebook, chi phí vận hành',
-  viewer:  'Chỉ xem, không sửa được gì'
+  manager: 'Full control of this store (except deleting it or granting access)',
+  cs:      'View everything, plus work orders: status, tracking, export',
+  finance: 'View everything, plus edit costs: COGS, pricebooks, operating costs',
+  viewer:  'Read-only — cannot change anything'
 };
 
 const ROLE_BADGE: Record<string, string> = {
@@ -83,7 +83,7 @@ export const StoreMembersDialog = ({ storeId, storeLabel, onClose }: Props) => {
       setMembers(r.members || []);
       setOwner(r.owner || null);
     } catch (e: any) {
-      toast({ title: 'Không tải được danh sách', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not load members', description: e?.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -99,11 +99,11 @@ export const StoreMembersDialog = ({ storeId, storeLabel, onClose }: Props) => {
         method: 'PUT',
         body: JSON.stringify({ email: targetEmail.trim(), role: targetRole })
       });
-      toast({ title: 'Đã cấp quyền', description: `${targetEmail} → ${targetRole}` });
+      toast({ title: 'Access granted', description: `${targetEmail} → ${targetRole}` });
       setEmail('');
       await load();
     } catch (e: any) {
-      toast({ title: 'Cấp quyền thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not grant access', description: e?.message, variant: 'destructive' });
     } finally {
       setBusy(null);
     }
@@ -111,14 +111,14 @@ export const StoreMembersDialog = ({ storeId, storeLabel, onClose }: Props) => {
 
   const revoke = async (userId: string, label: string) => {
     if (!storeId) return;
-    if (!confirm(`Thu hồi quyền của ${label} trên store này?`)) return;
+    if (!confirm(`Revoke ${label}'s access to this store?`)) return;
     setBusy(userId);
     try {
       await apiFetch(`/api/admin/stores/${storeId}/members/${userId}`, { method: 'DELETE' });
-      toast({ title: 'Đã thu hồi', description: label });
+      toast({ title: 'Access revoked', description: label });
       await load();
     } catch (e: any) {
-      toast({ title: 'Thu hồi thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not revoke access', description: e?.message, variant: 'destructive' });
     } finally {
       setBusy(null);
     }
@@ -128,30 +128,30 @@ export const StoreMembersDialog = ({ storeId, storeLabel, onClose }: Props) => {
     <Dialog open={!!storeId} onOpenChange={o => { if (!o) onClose(); }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Phân quyền store</DialogTitle>
+          <DialogTitle>Store access</DialogTitle>
           <DialogDescription className="font-mono text-xs">{storeLabel}</DialogDescription>
         </DialogHeader>
 
         {owner && (
           <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
             <Crown className="h-4 w-4 text-amber-600 shrink-0" />
-            <span className="text-slate-700">Chủ sở hữu:</span>
+            <span className="text-slate-700">Owner:</span>
             <span className="font-mono text-xs">{owner.email}</span>
-            <span className="text-xs text-slate-500 ml-auto">Toàn quyền, không thể thu hồi</span>
+            <span className="text-xs text-slate-500 ml-auto">Full access, cannot be revoked</span>
           </div>
         )}
 
         {/* Grant / re-grant. The endpoint upserts, so entering an existing
             member's email simply changes their role. */}
         <div className="space-y-2 rounded-lg border border-slate-200 p-3">
-          <Label className="text-xs uppercase tracking-wide text-slate-500">Cấp quyền cho người khác</Label>
+          <Label className="text-xs uppercase tracking-wide text-slate-500">Grant access</Label>
           <div className="flex items-end gap-2">
             <div className="flex-1">
               <Input
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') void grant(email, role); }}
-                placeholder="email@dathangky.com"
+                placeholder="teammate@example.com"
                 className="h-9"
               />
             </div>
@@ -166,31 +166,31 @@ export const StoreMembersDialog = ({ storeId, storeLabel, onClose }: Props) => {
               {busy === 'grant'
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 : <UserPlus className="h-3.5 w-3.5 mr-1" />}
-              Cấp
+              Grant
             </Button>
           </div>
           <p className="text-[11px] text-slate-500">{ROLE_HELP[role]}</p>
           <p className="text-[11px] text-slate-400">
-            Người nhận phải đã đăng ký tài khoản. Nhập email của người đã là member để đổi vai trò.
+            They must already have an account. To change a role, enter the email of an existing member.
           </p>
         </div>
 
         <div className="max-h-72 overflow-y-auto">
           {loading ? (
             <div className="py-8 text-center text-slate-400">
-              <Loader2 className="h-4 w-4 animate-spin inline mr-2" /> Đang tải…
+              <Loader2 className="h-4 w-4 animate-spin inline mr-2" /> Loading…
             </div>
           ) : members.length === 0 ? (
             <div className="py-8 text-center text-sm text-slate-400">
-              Chưa cấp cho ai. Chỉ chủ sở hữu vào được store này.
+              Nobody has been granted access. Only the owner can open this store.
             </div>
           ) : (
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                 <tr>
-                  <th className="text-left px-3 py-2">Người dùng</th>
-                  <th className="text-left px-3 py-2">Vai trò</th>
-                  <th className="text-left px-3 py-2">Làm được gì</th>
+                  <th className="text-left px-3 py-2">User</th>
+                  <th className="text-left px-3 py-2">Role</th>
+                  <th className="text-left px-3 py-2">Can do</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -229,7 +229,7 @@ export const StoreMembersDialog = ({ storeId, storeLabel, onClose }: Props) => {
                         className="h-8 w-8 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
                         disabled={busy === m.userId}
                         onClick={() => void revoke(m.userId, m.email)}
-                        title="Thu hồi quyền"
+                        title="Revoke access"
                       >
                         {busy === m.userId
                           ? <Loader2 className="h-3.5 w-3.5 animate-spin" />

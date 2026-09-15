@@ -3,7 +3,7 @@
  *
  * Rows   = product variants (grouped by product).
  * Columns= "line ship" (supplier × carrier × country) — each line shows one
- *          sub-column per SET size (Set 1 = giá 1 cái, Set 2 = giá combo 2…).
+ *          sub-column per SET size (Set 1 = unit price, Set 2 = price for a pack of 2…).
  * Cell   = TOTAL landed cost (product + ship) for that set via that line.
  *
  * Feels like a spreadsheet: click & type, Arrow/Enter/Tab navigation, paste a
@@ -103,7 +103,7 @@ export const CogsMatrix = () => {
       setValues(vals);
       setDirty(new Set());
     } catch (e: any) {
-      toast({ title: 'Không tải được bảng giá', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not load the price matrix', description: e?.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -139,7 +139,7 @@ export const CogsMatrix = () => {
         setTimeout(() => setSaveState(s => (s === 'saved' ? 'idle' : s)), 1600);
       } catch (e: any) {
         setSaveState('idle');
-        toast({ title: 'Lưu giá thất bại', description: e?.message, variant: 'destructive' });
+        toast({ title: 'Could not save prices', description: e?.message, variant: 'destructive' });
       }
     }, 900);
     return () => clearTimeout(t);
@@ -243,7 +243,7 @@ export const CogsMatrix = () => {
       setDirty(pd => { const s = new Set(pd); newDirty.forEach(k => s.add(k)); return s; });
       return next;
     });
-    toast({ title: `Đã dán ${filled} ô` });
+    toast({ title: `Pasted ${filled} cells` });
   };
 
   // ── Excel-style drag-fill (no handle) ─────────────────────────────────────
@@ -279,7 +279,7 @@ export const CogsMatrix = () => {
       return next;
     });
     setDirty(prev => { const s = new Set(prev); keys.forEach(k => s.add(k)); return s; });
-    toast({ title: `Đã fill ${keys.length} ô${src === '' ? ' (xoá giá)' : ` = ${src}`}` });
+    toast({ title: `Filled ${keys.length} cells${src === '' ? ' (cleared)' : ` = ${src}`}` });
   }, [toast]);
 
   const onCellMouseDown = (r: number, c: number) => {
@@ -341,19 +341,19 @@ export const CogsMatrix = () => {
       setLineDialog(null);
       await load();
     } catch (e: any) {
-      toast({ title: 'Lưu line thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not save the ship line', description: e?.message, variant: 'destructive' });
     } finally {
       setFSaving(false);
     }
   };
 
   const deleteLine = async (line: MatrixLine) => {
-    if (!window.confirm(`Xoá line ${line.carrier} · ${line.countryCode}? Toàn bộ giá của line này sẽ mất.`)) return;
+    if (!window.confirm(`Delete line ${line.carrier} · ${line.countryCode}? Every price on it will be lost.`)) return;
     try {
       await apiFetch(`/api/cogs-matrix/lines/${line.id}`, { method: 'DELETE' });
       await load();
     } catch (e: any) {
-      toast({ title: 'Xoá line thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not delete the ship line', description: e?.message, variant: 'destructive' });
     }
   };
 
@@ -366,7 +366,7 @@ export const CogsMatrix = () => {
       await apiFetch(`/api/cogs-matrix/lines/${line.id}`, { method: 'PATCH', body: JSON.stringify({ setSizes: sizes }) });
       setLines(prev => prev.map(l => (l.id === line.id ? { ...l, setSizes: sizes } : l)));
     } catch (e: any) {
-      toast({ title: 'Không đổi được set', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not change the set', description: e?.message, variant: 'destructive' });
     }
   };
 
@@ -379,9 +379,9 @@ export const CogsMatrix = () => {
         method: 'POST',
         body: JSON.stringify({ from })
       });
-      toast({ title: `Đã tính lại giá vốn cho ${r.ordersProcessed} đơn (90 ngày)` });
+      toast({ title: `Recalculated COGS for ${r.ordersProcessed} orders (last 90 days)` });
     } catch (e: any) {
-      toast({ title: 'Tính lại P&L thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not recalculate P&L', description: e?.message, variant: 'destructive' });
     } finally {
       setApplying(false);
     }
@@ -395,12 +395,12 @@ export const CogsMatrix = () => {
       );
       toast({
         title: r.createdLines > 0
-          ? `Đã nhập ${r.createdLines} line, ${r.createdCells} ô giá từ cấu hình cũ`
-          : 'Không có gì mới để nhập (đã nhập trước đó hoặc chưa có dữ liệu cũ)'
+          ? `Imported ${r.createdLines} lines and ${r.createdCells} prices from the old config`
+          : 'Nothing new to import — already done, or there is no legacy data'
       });
       await load();
     } catch (e: any) {
-      toast({ title: 'Nhập dữ liệu cũ thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Legacy import failed', description: e?.message, variant: 'destructive' });
     } finally {
       setImporting(false);
     }
@@ -410,15 +410,15 @@ export const CogsMatrix = () => {
   if (!activeStore) {
     return (
       <div className="border-2 border-dashed rounded-xl p-12 text-center text-slate-500">
-        <div className="font-medium text-slate-700 mb-1">Chưa chọn store</div>
-        <p className="text-sm">Kết nối / chọn store ở sidebar để cấu hình bảng giá vốn.</p>
+        <div className="font-medium text-slate-700 mb-1">No store selected</div>
+        <p className="text-sm">Connect or pick a store in the sidebar to set up the cost matrix.</p>
       </div>
     );
   }
   if (loading) {
     return (
       <div className="h-64 flex items-center justify-center text-slate-400">
-        <Loader2 className="h-5 w-5 animate-spin mr-2" /> Đang tải bảng giá…
+        <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading price matrix…
       </div>
     );
   }
@@ -431,28 +431,28 @@ export const CogsMatrix = () => {
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[220px] max-w-sm">
           <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <Input placeholder="Tìm sản phẩm / SKU…" value={q} onChange={e => setQ(e.target.value)} className="pl-9 h-9" />
+          <Input placeholder="Search product / SKU…" value={q} onChange={e => setQ(e.target.value)} className="pl-9 h-9" />
         </div>
         <div className="flex-1" />
         <span className="text-xs text-slate-400 min-w-[90px] text-right">
-          {saveState === 'saving' && <span className="inline-flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Đang lưu…</span>}
-          {saveState === 'saved' && <span className="inline-flex items-center gap-1 text-emerald-600"><Check className="h-3 w-3" /> Đã lưu</span>}
-          {saveState === 'idle' && dirty.size > 0 && 'Đang gõ…'}
+          {saveState === 'saving' && <span className="inline-flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Saving…</span>}
+          {saveState === 'saved' && <span className="inline-flex items-center gap-1 text-emerald-600"><Check className="h-3 w-3" /> Saved</span>}
+          {saveState === 'idle' && dirty.size > 0 && 'Typing…'}
         </span>
-        <Button variant="outline" size="sm" onClick={() => void load()} title="Tải lại">
+        <Button variant="outline" size="sm" onClick={() => void load()} title="Reload">
           <RefreshCw className="h-4 w-4" />
         </Button>
-        <Button variant="outline" size="sm" onClick={importPricebooks} disabled={importing} title="Nhập line + giá từ cấu hình COGS cũ (không ghi đè)">
+        <Button variant="outline" size="sm" onClick={importPricebooks} disabled={importing} title="Import lines and prices from the old COGS config (never overwrites)">
           {importing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Download className="h-4 w-4 mr-1.5" />}
-          Nhập từ cấu hình cũ
+          Import legacy config
         </Button>
         <Button variant="outline" size="sm" onClick={applyToPL} disabled={applying}
-                title="Tính lại giá vốn các đơn 90 ngày gần nhất theo bảng giá này (P&L sẽ cập nhật)">
+                title="Recalculate COGS for the last 90 days of orders from this matrix (P&L updates too)">
           {applying ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Calculator className="h-4 w-4 mr-1.5" />}
-          Áp dụng vào P&L
+          Apply to P&L
         </Button>
         <Button size="sm" onClick={openCreate} className="bg-teal-600 hover:bg-teal-700">
-          <Plus className="h-4 w-4 mr-1.5" /> Thêm line ship
+          <Plus className="h-4 w-4 mr-1.5" /> Add ship line
         </Button>
       </div>
 
@@ -460,18 +460,18 @@ export const CogsMatrix = () => {
       {lines.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-slate-500 space-y-3">
           <Grid3X3 className="h-10 w-10 mx-auto text-slate-300" />
-          <div className="font-medium text-slate-700">Chưa có line ship nào</div>
+          <div className="font-medium text-slate-700">No ship lines yet</div>
           <p className="text-sm max-w-md mx-auto">
-            Mỗi <b>line ship</b> là một cột giá: supplier + đơn vị vận chuyển + quốc gia
-            (VD: <i>Default · YT · US</i>). Thêm line đầu tiên hoặc nhập lại từ cấu hình cũ.
+            Each <b>ship line</b> is one price column: supplier + carrier + country
+            (e.g. <i>Default · YT · US</i>). Add your first line, or import the old config.
           </p>
           <div className="flex justify-center gap-2 pt-1">
             <Button variant="outline" onClick={importPricebooks} disabled={importing}>
               {importing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Download className="h-4 w-4 mr-1.5" />}
-              Nhập từ cấu hình cũ
+              Import legacy config
             </Button>
             <Button onClick={openCreate} className="bg-teal-600 hover:bg-teal-700">
-              <Plus className="h-4 w-4 mr-1.5" /> Thêm line ship
+              <Plus className="h-4 w-4 mr-1.5" /> Add ship line
             </Button>
           </div>
         </div>
@@ -482,7 +482,7 @@ export const CogsMatrix = () => {
               {/* Line header row */}
               <tr className="sticky top-0 z-30">
                 <th className="sticky left-0 z-40 bg-slate-100 border-b border-r px-3 py-2 text-left min-w-[260px] font-semibold text-slate-700">
-                  Sản phẩm
+                  Product
                 </th>
                 {lines.map(line => (
                   <th key={line.id} colSpan={line.setSizes.length}
@@ -504,19 +504,19 @@ export const CogsMatrix = () => {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => changeSets(line, 'add')}>
-                            <Plus className="h-4 w-4 mr-2" /> Thêm set {Math.max(...line.setSizes) + 1}
+                            <Plus className="h-4 w-4 mr-2" /> Add set {Math.max(...line.setSizes) + 1}
                           </DropdownMenuItem>
                           {line.setSizes.length > 1 && (
                             <DropdownMenuItem onClick={() => changeSets(line, 'removeLast')}>
-                              <Trash2 className="h-4 w-4 mr-2" /> Ẩn set {Math.max(...line.setSizes)} (giá vẫn được giữ)
+                              <Trash2 className="h-4 w-4 mr-2" /> Hide set {Math.max(...line.setSizes)} (prices are kept)
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onClick={() => openEdit(line)}>
-                            <Pencil className="h-4 w-4 mr-2" /> Sửa line
+                            <Pencil className="h-4 w-4 mr-2" /> Edit line
                           </DropdownMenuItem>
                           <DropdownMenuItem className="text-rose-600" onClick={() => deleteLine(line)}>
-                            <Trash2 className="h-4 w-4 mr-2" /> Xoá line
+                            <Trash2 className="h-4 w-4 mr-2" /> Delete line
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -527,7 +527,7 @@ export const CogsMatrix = () => {
               {/* Set sub-header row */}
               <tr className="sticky top-[46px] z-30">
                 <th className="sticky left-0 z-40 bg-slate-50 border-b border-r px-3 py-1 text-left text-[11px] font-normal text-slate-400">
-                  giá = tổng cost (hàng + ship) cho cả set
+                  price = total cost (goods + shipping) for the whole set
                 </th>
                 {flatCols.map((col, ci) => (
                   <th key={`${col.line.id}-${col.setQty}`}
@@ -603,7 +603,7 @@ export const CogsMatrix = () => {
               {flatRows.length === 0 && (
                 <tr>
                   <td colSpan={flatCols.length + 1} className="h-24 text-center text-slate-400">
-                    Không có sản phẩm khớp tìm kiếm.
+                    No products match your search.
                   </td>
                 </tr>
               )}
@@ -613,26 +613,26 @@ export const CogsMatrix = () => {
       )}
 
       <p className="text-xs text-slate-400">
-        💡 Mẹo: bấm vào ô rồi gõ giá — tự lưu sau ~1 giây. Di chuyển bằng phím mũi tên / Enter.
-        Copy nguyên vùng từ Excel/Google Sheets rồi dán (Ctrl+V) vào ô bắt đầu.
-        <b> Giữ chuột trên 1 ô rồi kéo</b> ngang/dọc để fill giá ô đó sang cả vùng (như Excel).
-        <b> Set N</b> = tổng giá vốn khi khách mua N cái (đã gồm ship của set đó).
+        💡 Tip: click a cell and type — it saves after about a second. Move with the arrow keys or Enter.
+        Copy a range from Excel or Google Sheets and paste (Ctrl+V) into the first cell.
+        <b> Hold the mouse on a cell and drag</b> across or down to fill that price over the range, like Excel.
+        <b> Set N</b> = total cost when a customer buys N units, shipping for that set included.
       </p>
 
       {/* Line create/edit dialog */}
       <Dialog open={!!lineDialog} onOpenChange={o => { if (!o) setLineDialog(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{lineDialog?.mode === 'edit' ? 'Sửa line ship' : 'Thêm line ship'}</DialogTitle>
+            <DialogTitle>{lineDialog?.mode === 'edit' ? 'Edit ship line' : 'Add ship line'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <Label className="text-sm">Đơn vị vận chuyển (line) *</Label>
+              <Label className="text-sm">Carrier (line) *</Label>
               <Input value={fCarrier} onChange={e => setFCarrier(e.target.value)} placeholder="VD: YT, LP, SF, YunExpress…" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-sm">Quốc gia *</Label>
+                <Label className="text-sm">Country *</Label>
                 <Select value={fCountry} onValueChange={setFCountry}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -641,7 +641,7 @@ export const CogsMatrix = () => {
                 </Select>
               </div>
               <div>
-                <Label className="text-sm">Tiền tệ</Label>
+                <Label className="text-sm">Currency</Label>
                 <Select value={fCurrency} onValueChange={setFCurrency}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -651,18 +651,18 @@ export const CogsMatrix = () => {
               </div>
             </div>
             <div>
-              <Label className="text-sm">Supplier (tuỳ chọn)</Label>
+              <Label className="text-sm">Supplier (optional)</Label>
               <Input value={fSupplier} onChange={e => setFSupplier(e.target.value)} placeholder="Default" />
               <p className="text-[11px] text-slate-400 mt-1">
-                Để "Default" nếu chỉ có 1 nhà cung cấp. Đặt tên riêng khi cùng 1 line ship nhưng giá theo supplier khác nhau.
+                Leave it as "Default" if you have one supplier. Name it when the same ship line has different prices per supplier.
               </p>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setLineDialog(null)}>Huỷ</Button>
+            <Button variant="outline" onClick={() => setLineDialog(null)}>Cancel</Button>
             <Button onClick={saveLine} disabled={fSaving || !fCarrier.trim()} className="bg-teal-600 hover:bg-teal-700">
               {fSaving && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
-              {lineDialog?.mode === 'edit' ? 'Lưu' : 'Thêm line'}
+              {lineDialog?.mode === 'edit' ? 'Save' : 'Add line'}
             </Button>
           </DialogFooter>
         </DialogContent>

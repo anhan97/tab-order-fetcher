@@ -75,7 +75,10 @@ const STATUS_BADGE: Record<string, string> = {
 const PAGE_SIZE = 50;
 
 export const FulfillmentPage = () => {
-  const { activeStore } = useAuth();
+  const { activeStore, user } = useAuth();
+  // Processing fees are internal margin data, not something every operator on
+  // a store should see — gate the column on the global admin role.
+  const canSeePaymentFee = user?.role === 'admin';
   const { toast } = useToast();
   const [tab, setTab] = useState<string>('ALL');
   const [q, setQ] = useState('');
@@ -104,7 +107,7 @@ export const FulfillmentPage = () => {
       setTotal(r.total);
       setTabs(r.tabs || {});
     } catch (e: any) {
-      toast({ title: 'Không tải được đơn hàng', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not load orders', description: e?.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -118,10 +121,10 @@ export const FulfillmentPage = () => {
     setSyncing(true);
     try {
       await apiFetch(`/api/shopify/stores/${activeStore.id}/sync`, { method: 'POST' });
-      toast({ title: 'Đã đồng bộ đơn từ Shopify' });
+      toast({ title: 'Orders synced from Shopify' });
       await load();
     } catch (e: any) {
-      toast({ title: 'Đồng bộ thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Sync failed', description: e?.message, variant: 'destructive' });
     } finally {
       setSyncing(false);
     }
@@ -139,8 +142,8 @@ export const FulfillmentPage = () => {
     return (
       <div className="max-w-2xl mx-auto mt-8">
         <Card className="p-10 text-center">
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Chưa chọn store</h2>
-          <p className="text-slate-600">Kết nối / chọn store ở sidebar trước khi quản lý fulfillment.</p>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">No store selected</h2>
+          <p className="text-slate-600">Connect or pick a store in the sidebar to manage fulfilment.</p>
         </Card>
       </div>
     );
@@ -155,12 +158,12 @@ export const FulfillmentPage = () => {
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-slate-900">Fulfillment</h1>
           <p className="text-xs text-slate-500">
-            Đơn + trạng thái giao hàng tự đồng bộ từ Shopify (webhook + 10 phút/lần) — quản lý đơn trên Shopify, ở đây chỉ xem &amp; export
+            Orders and delivery status sync from Shopify automatically (webhooks, plus every 10 minutes). Manage orders in Shopify; this view is read-only and for exports.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
           {syncing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
-          Đồng bộ ngay
+          Sync now
         </Button>
         <Button size="sm" onClick={() => setExportOpen(true)} className="bg-teal-600 hover:bg-teal-700">
           <Download className="h-4 w-4 mr-1.5" />
@@ -172,7 +175,7 @@ export const FulfillmentPage = () => {
         <TabsList className="flex-wrap h-auto">
           {STATUS_TABS.map(t => (
             <TabsTrigger key={t} value={t} className="gap-1.5">
-              {t === 'ALL' ? 'Tất cả' : t === 'UNPAID' ? 'Chưa thanh toán' : t}
+              {t === 'ALL' ? 'All' : t === 'UNPAID' ? 'Unpaid' : t}
               <Badge variant="secondary" className="text-[10px] px-1.5">{tabs[t] ?? 0}</Badge>
             </TabsTrigger>
           ))}
@@ -183,14 +186,14 @@ export const FulfillmentPage = () => {
         <div className="relative flex-1 max-w-sm">
           <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <Input
-            placeholder="Tìm số đơn / tên / SĐT / tracking…"
+            placeholder="Search order no. / name / phone / tracking…"
             value={qDraft}
             onChange={e => setQDraft(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') setQ(qDraft.trim()); }}
             className="pl-9"
           />
         </div>
-        <Button variant="outline" onClick={() => setQ(qDraft.trim())}>Tìm</Button>
+        <Button variant="outline" onClick={() => setQ(qDraft.trim())}>Search</Button>
       </div>
 
       <Card>
@@ -198,29 +201,31 @@ export const FulfillmentPage = () => {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Đơn</TableHead>
-                <TableHead>Ngày</TableHead>
-                <TableHead>Khách hàng</TableHead>
-                <TableHead>Sản phẩm</TableHead>
-                <TableHead className="text-right">Tổng</TableHead>
-                <TableHead className="text-right whitespace-nowrap">Phí TT</TableHead>
-                <TableHead>Thanh toán</TableHead>
+                <TableHead>Order</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Customer</TableHead>
+                <TableHead>Products</TableHead>
+                <TableHead className="text-right">Total</TableHead>
+                {canSeePaymentFee && (
+                  <TableHead className="text-right whitespace-nowrap">Payment fee</TableHead>
+                )}
+                <TableHead>Payment</TableHead>
                 <TableHead>Fulfillment</TableHead>
                 <TableHead>Tracking</TableHead>
-                <TableHead className="text-right">Hành động</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="h-32 text-center text-slate-400">
-                    <Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Đang tải…
+                  <TableCell colSpan={canSeePaymentFee ? 10 : 9} className="h-32 text-center text-slate-400">
+                    <Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…
                   </TableCell>
                 </TableRow>
               ) : orders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="h-32 text-center text-slate-400">
-                    Không có đơn nào. Bấm "Đồng bộ ngay" nếu vừa kết nối store.
+                  <TableCell colSpan={canSeePaymentFee ? 10 : 9} className="h-32 text-center text-slate-400">
+                    No orders yet. Hit &quot;Sync now&quot; if you just connected the store.
                   </TableCell>
                 </TableRow>
               ) : orders.map(o => (
@@ -241,12 +246,14 @@ export const FulfillmentPage = () => {
                   <TableCell className="text-right font-medium whitespace-nowrap">
                     {o.totalAmount.toLocaleString()} {o.currency}
                   </TableCell>
-                  <TableCell className="text-right whitespace-nowrap tabular-nums">
-                    {fmtFee(o.paymentFee)}
-                    {o.paymentGateway && (
-                      <div className="text-[10px] text-slate-400">{o.paymentGateway}</div>
-                    )}
-                  </TableCell>
+                  {canSeePaymentFee && (
+                    <TableCell className="text-right whitespace-nowrap tabular-nums">
+                      {fmtFee(o.paymentFee)}
+                      {o.paymentGateway && (
+                        <div className="text-[10px] text-slate-400">{o.paymentGateway}</div>
+                      )}
+                    </TableCell>
+                  )}
                   <TableCell>
                     <Badge variant="outline" className={o.status === 'paid' ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-700'}>
                       {o.status}
@@ -260,9 +267,9 @@ export const FulfillmentPage = () => {
                   </TableCell>
                   <TableCell className="text-xs font-mono">{o.trackingNumber || '—'}</TableCell>
                   <TableCell className="text-right whitespace-nowrap">
-                    {/* Read-only by design: trạng thái tự sync từ Shopify,
-                        không có nút đổi trạng thái / huỷ / gắn tracking ở đây. */}
-                    <Button variant="ghost" size="sm" onClick={() => setDetail(o)} title="Chi tiết">
+                    {/* Read-only by design: status syncs from Shopify, so there is
+                        no change-status / cancel / set-tracking control here. */}
+                    <Button variant="ghost" size="sm" onClick={() => setDetail(o)} title="Details">
                       <Eye className="h-4 w-4" />
                     </Button>
                   </TableCell>
@@ -274,7 +281,7 @@ export const FulfillmentPage = () => {
       </Card>
 
       <div className="flex items-center justify-between text-sm text-slate-500">
-        <span>{total} đơn · trang {page}/{pages}</span>
+        <span>{total} orders · page {page}/{pages}</span>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
             <ChevronLeft className="h-4 w-4" />
@@ -289,7 +296,7 @@ export const FulfillmentPage = () => {
       <Dialog open={!!detail} onOpenChange={open => { if (!open) setDetail(null); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Đơn #{detail?.orderNumber}</DialogTitle>
+            <DialogTitle>Order #{detail?.orderNumber}</DialogTitle>
           </DialogHeader>
           {detail && (
             <div className="space-y-4 text-sm">
@@ -299,18 +306,18 @@ export const FulfillmentPage = () => {
                 {detail.deliveryStatus && <Badge variant="outline">{detail.deliveryStatus}</Badge>}
               </div>
               <div>
-                <div className="font-semibold text-slate-900 mb-1">Khách hàng</div>
+                <div className="font-semibold text-slate-900 mb-1">Customer</div>
                 <div>{detail.customerName || '—'}</div>
                 <div className="text-slate-500">{detail.customerEmail}</div>
                 <div className="text-slate-500">{detail.customerPhone}</div>
               </div>
               <div>
-                <div className="font-semibold text-slate-900 mb-1">Địa chỉ giao hàng</div>
+                <div className="font-semibold text-slate-900 mb-1">Shipping address</div>
                 <div className="text-slate-600">{addressLine(detail) || '—'}</div>
                 {detail.shippingAddress?.zip && <div className="text-slate-500">Zip: {detail.shippingAddress.zip}</div>}
               </div>
               <div>
-                <div className="font-semibold text-slate-900 mb-1">Sản phẩm</div>
+                <div className="font-semibold text-slate-900 mb-1">Products</div>
                 {detail.lineItems.map(li => (
                   <div key={li.id} className="flex justify-between border-b border-slate-100 py-1">
                     <span>{li.quantity}× {li.title ?? li.sku ?? '?'}</span>
@@ -318,7 +325,7 @@ export const FulfillmentPage = () => {
                   </div>
                 ))}
                 <div className="flex justify-between font-semibold pt-1.5">
-                  <span>Tổng</span>
+                  <span>Total</span>
                   <span>{detail.totalAmount.toLocaleString()} {detail.currency}</span>
                 </div>
               </div>

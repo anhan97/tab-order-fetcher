@@ -47,8 +47,8 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
 
     if (!selectedFile.name.toLowerCase().endsWith('.csv')) {
       toast({
-        title: "Lỗi file",
-        description: "Vui lòng chọn file CSV.",
+        title: "Invalid file",
+        description: "Please choose a CSV file.",
         variant: "destructive",
       });
       return;
@@ -81,13 +81,13 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
       ).length;
 
       toast({
-        title: "Đã tải file!",
-        description: `Tìm thấy ${records.length} đơn hàng. ${autoDetectedCount > 0 ? `Tự động nhận diện ${autoDetectedCount} shipping company.` : ''}`,
+        title: "File loaded",
+        description: `Found ${records.length} orders. ${autoDetectedCount > 0 ? `Auto-detected ${autoDetectedCount} shipping companies.` : ''}`,
       });
     } catch (error) {
       toast({
-        title: "Lỗi đọc file",
-        description: "Không thể đọc file CSV. Vui lòng kiểm tra định dạng file.",
+        title: "Could not read file",
+        description: "Could not read the CSV. Please check the file format.",
         variant: "destructive",
       });
     }
@@ -138,8 +138,8 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
         setTrackingRecords([...updatedRecords]);
 
         toast({
-          title: "Hoàn thành cập nhật!",
-          description: `Thành công: ${result.summary.successful}, Lỗi: ${result.summary.failed}`,
+          title: "Update complete",
+          description: `Succeeded: ${result.summary.successful}, failed: ${result.summary.failed}`,
         });
 
       } else {
@@ -175,7 +175,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
             updatedRecords[index] = {
               ...record,
               status: 'error' as const,
-              error: error instanceof Error ? error.message : 'Lỗi không xác định'
+              error: error instanceof Error ? error.message : 'Unknown error'
             };
           }
 
@@ -195,8 +195,8 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
         const errorCount = updatedRecords.filter(r => r.status === 'error').length;
 
         toast({
-          title: "Hoàn thành cập nhật!",
-          description: `Thành công: ${successCount}, Lỗi: ${errorCount}`,
+          title: "Update complete",
+          description: `Succeeded: ${successCount}, failed: ${errorCount}`,
         });
       }
 
@@ -205,8 +205,8 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
     } catch (error) {
       console.error('Error processing tracking updates:', error);
       toast({
-        title: "Lỗi xử lý",
-        description: "Có lỗi xảy ra khi cập nhật tracking.",
+        title: "Processing error",
+        description: "Something went wrong while updating tracking.",
         variant: "destructive",
       });
     } finally {
@@ -264,15 +264,15 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
           <Alert>
             <FileText className="h-4 w-4" />
             <AlertDescription>
-              File CSV cần có các cột: Order Number, Tracking Number, Tracking Company.
-              Tùy chọn: Tracking URL (để thêm link tracking tùy chỉnh).
+              The CSV needs these columns: Order Number, Tracking Number, Tracking Company.
+              Optional: Tracking URL, to attach a custom tracking link.
               <Button
                 variant="link"
                 className="p-0 h-auto ml-2"
                 onClick={downloadTemplate}
               >
                 <Download className="h-3 w-3 mr-1" />
-                Tải template
+                Download template
               </Button>
             </AlertDescription>
           </Alert>
@@ -316,11 +316,11 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                       />
                       <Label htmlFor="notify-customer" className="flex items-center space-x-1">
                         <Bell className="h-4 w-4 text-blue-500" />
-                        <span>Gửi thông báo cho khách hàng</span>
+                        <span>Notify the customer</span>
                       </Label>
                     </div>
                     <div className="text-sm text-slate-600">
-                      {notifyCustomer ? 'Shopify sẽ gửi email tracking cho khách' : 'Không gửi email thông báo cho khách'}
+                      {notifyCustomer ? 'Shopify will email tracking to the customer' : 'No notification email will be sent'}
                     </div>
                   </div>
                 </div>
@@ -331,7 +331,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                     disabled={isProcessing || uploadComplete}
                     className="bg-teal-500 hover:bg-teal-600"
                   >
-                    {isProcessing ? `Đang xử lý... (${processingProgress.current}/${processingProgress.total})` : 'Cập nhật Tracking'}
+                    {isProcessing ? `Processing… (${processingProgress.current}/${processingProgress.total})` : 'Update tracking'}
                   </Button>
 
                   {uploadComplete && (
@@ -344,7 +344,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                         setProcessingProgress({ current: 0, total: 0 });
                       }}
                     >
-                      Tải file mới
+                      Upload a new file
                     </Button>
                   )}
                 </div>
@@ -352,7 +352,7 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
                 {isProcessing && (
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm text-slate-600">
-                      <span>Tiến độ xử lý</span>
+                      <span>Progress</span>
                       <span>{processingProgress.current}/{processingProgress.total}</span>
                     </div>
                     <div className="w-full bg-slate-200 rounded-full h-2">
@@ -374,19 +374,19 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
       {trackingRecords.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Danh sách cập nhật</CardTitle>
+            <CardTitle>Rows to update</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Trạng thái</TableHead>
-                    <TableHead>Mã đơn</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Order no.</TableHead>
                     <TableHead>Tracking Number</TableHead>
                     <TableHead>Tracking Company</TableHead>
                     <TableHead>Tracking URL</TableHead>
-                    <TableHead>Lỗi</TableHead>
+                    <TableHead>Error</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

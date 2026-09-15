@@ -399,7 +399,7 @@ export const CampaignWizard = ({ adAccounts }: Props) => {
       <Card>
         <CardContent className="p-6 flex items-center gap-3 text-slate-600">
           <AlertTriangle className="h-5 w-5 text-amber-500" />
-          <span>Bạn cần link ít nhất một Facebook ad account để dùng auto-launch. Vào tab "Assets" để link.</span>
+          <span>Link at least one Facebook ad account to use auto-launch. Head to the "Assets" tab.</span>
         </CardContent>
       </Card>
     );
@@ -497,11 +497,11 @@ export const CampaignWizard = ({ adAccounts }: Props) => {
                   <SelectTrigger>
                     <SelectValue placeholder={
                       !config.adAccountId
-                        ? '— chọn ad account trước —'
+                        ? '— pick an ad account first —'
                         : loadingMeta
-                          ? 'Đang tải pages…'
+                          ? 'Loading pages…'
                           : pages.length === 0
-                            ? 'Không tìm thấy page — disconnect & re-Connect Facebook để cấp lại quyền'
+                            ? 'No pages found — disconnect and reconnect Facebook to re-grant permissions'
                             : 'Pick a page...'
                     } />
                   </SelectTrigger>
@@ -513,8 +513,8 @@ export const CampaignWizard = ({ adAccounts }: Props) => {
                 </Select>
                 {config.adAccountId && !loadingMeta && pages.length === 0 && (
                   <p className="text-[11px] text-amber-700 mt-1">
-                    Page list rỗng — token FB Login thiếu <code className="font-mono">pages_show_list</code>.
-                    Vào /facebook → Disconnect → Connect lại để cấp quyền mới.
+                    Page list is empty — the FB Login token is missing <code className="font-mono">pages_show_list</code>.
+                    Go to /facebook → Disconnect → Connect again to grant it.
                   </p>
                 )}
               </div>
@@ -524,11 +524,11 @@ export const CampaignWizard = ({ adAccounts }: Props) => {
                   <SelectTrigger>
                     <SelectValue placeholder={
                       !config.adAccountId
-                        ? '— chọn ad account trước —'
+                        ? '— pick an ad account first —'
                         : loadingMeta
-                          ? 'Đang tải pixels…'
+                          ? 'Loading pixels…'
                           : pixels.length === 0
-                            ? 'Không có pixel trên account này — vào Ads Manager → Events Manager để tạo'
+                            ? 'No pixels on this account — create one in Ads Manager → Events Manager'
                             : 'Pick a pixel...'
                     } />
                   </SelectTrigger>
@@ -538,8 +538,8 @@ export const CampaignWizard = ({ adAccounts }: Props) => {
                 </Select>
                 {config.adAccountId && !loadingMeta && pixels.length === 0 && (
                   <p className="text-[11px] text-amber-700 mt-1">
-                    Không có pixel — kiểm tra: (1) ad account đã liên kết pixel chưa
-                    (Ads Manager → Pixels), (2) user là Advertiser trên BM owning the pixel.
+                    No pixels — check that (1) the ad account has a pixel linked
+                    (Ads Manager → Pixels), and (2) you are an Advertiser on the BM that owns it.
                   </p>
                 )}
               </div>

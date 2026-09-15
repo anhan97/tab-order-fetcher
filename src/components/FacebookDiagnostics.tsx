@@ -97,7 +97,7 @@ export const FacebookDiagnostics = () => {
             Account diagnostics
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Per-account check answering "tại sao account này load được, account kia không". Calls Facebook directly using your stored token — read-only, safe to re-run.
+            Per-account check answering "why does this account load and that one not". Calls Facebook directly using your stored token — read-only, safe to re-run.
           </p>
         </div>
         <Button onClick={run} disabled={loading} variant="outline" size="sm">

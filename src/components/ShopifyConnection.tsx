@@ -21,7 +21,7 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
 
   const handleConnect = async () => {
     if (!storeUrl || !accessToken) {
-      setError('Vui lòng nhập đầy đủ thông tin');
+      setError('Please fill in every field.');
       return;
     }
 
@@ -39,16 +39,16 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
         onConnectionSuccess({ storeUrl, accessToken });
         
         toast({
-          title: "Kết nối thành công!",
-          description: "Đã kết nối với Shopify store của bạn thông qua CORS proxy.",
+          title: "Connected",
+          description: "Connected to your Shopify store through the CORS proxy.",
         });
       } else {
-        throw new Error('Kết nối thất bại');
+        throw new Error('Connection failed');
       }
       
     } catch (err) {
       console.error('Connection error:', err);
-      setError('Không thể kết nối. Vui lòng kiểm tra lại thông tin Store URL và Access Token. Lỗi có thể do CORS hoặc thông tin xác thực không đúng.');
+      setError('Could not connect. Check the Store URL and Access Token — it may be a CORS problem or bad credentials.');
     } finally {
       setIsConnecting(false);
     }
@@ -58,17 +58,17 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
     <Card className="max-w-md mx-auto">
       <CardHeader>
         <CardTitle className="flex items-center space-x-2">
-          <span>Kết nối Shopify</span>
+          <span>Connect Shopify</span>
         </CardTitle>
         <CardDescription>
-          Nhập thông tin store để truy cập API (sử dụng CORS proxy)
+          Enter your store details to reach the API (via the CORS proxy)
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <Alert>
           <Info className="h-4 w-4" />
           <AlertDescription>
-            Ứng dụng sử dụng CORS proxy để truy cập Shopify API từ browser. Đảm bảo Store URL và Access Token chính xác.
+            The app uses a CORS proxy to reach the Shopify API from the browser. Make sure the Store URL and Access Token are correct.
           </AlertDescription>
         </Alert>
 
@@ -110,20 +110,20 @@ export const ShopifyConnection = ({ onConnectionSuccess }: ShopifyConnectionProp
           {isConnecting ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Đang kết nối...
+              Connecting…
             </>
           ) : (
             <>
               <CheckCircle className="mr-2 h-4 w-4" />
-              Kết nối
+              Connect
             </>
           )}
         </Button>
 
         <div className="text-xs text-slate-500 space-y-1">
-          <p>💡 Để lấy Access Token:</p>
-          <p>1. Vào Shopify Admin → Apps → Develop apps</p>
-          <p>2. Tạo private app với quyền read_orders</p>
+          <p>💡 To get an Access Token:</p>
+          <p>1. Go to Shopify Admin → Apps → Develop apps</p>
+          <p>2. Create a private app with the read_orders scope</p>
           <p>3. Copy Admin API access token</p>
         </div>
       </CardContent>

@@ -217,7 +217,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       const ops = await client.listOperatingCosts(fromD, toD);
       setCosts(ops.items);
     } catch (e: any) {
-      toast({ title: 'Lỗi tải dữ liệu', description: e?.message || String(e), variant: 'destructive' });
+      toast({ title: 'Could not load data', description: e?.message || String(e), variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -364,12 +364,12 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       const toD = dateAtUTC(to, true);
       const syncSince = opts.deep ? new Date(toD.getTime() - 90 * 86400000) : fromD;
       const sync = await client.syncOrders({ since: syncSince, until: toD, pullTransactions: true, syncBalances: true });
-      toast({ title: 'Đã sync orders', description: `Mới ${sync.ordersCreated}, cập nhật ${sync.ordersUpdated}, fees ${sync.transactionsSynced}` });
+      toast({ title: 'Orders synced', description: `${sync.ordersCreated} new, ${sync.ordersUpdated} updated, ${sync.transactionsSynced} fees` });
       const r = await client.recompute(fromD, toD);
-      toast({ title: 'Đã recompute P&L', description: `${r.days} ngày` });
+      toast({ title: 'P&L recomputed', description: `${r.days} days` });
       await load();
     } catch (e: any) {
-      toast({ title: 'Lỗi sync', description: e?.message || String(e), variant: 'destructive' });
+      toast({ title: 'Sync failed', description: e?.message || String(e), variant: 'destructive' });
     } finally { setBusy(false); }
   };
 
@@ -378,9 +378,9 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
     setBusy(true);
     try {
       const r = await client.recompute(dateAtUTC(from, false), dateAtUTC(to, true));
-      toast({ title: 'Recompute xong', description: `${r.days} ngày` });
+      toast({ title: 'Recompute finished', description: `${r.days} days` });
       await load();
-    } catch (e: any) { toast({ title: 'Lỗi recompute', description: e?.message || String(e), variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Recompute failed', description: e?.message || String(e), variant: 'destructive' }); }
     finally { setBusy(false); }
   };
 
@@ -389,10 +389,10 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
     setBusy(true);
     try {
       const r = await client.recomputeCogs(dateAtUTC(from, false), dateAtUTC(to, true));
-      toast({ title: 'Recompute COGS', description: `${r.ordersProcessed} đơn` });
+      toast({ title: 'Recompute COGS', description: `${r.ordersProcessed} orders` });
       await client.recompute(dateAtUTC(from, false), dateAtUTC(to, true));
       await load();
-    } catch (e: any) { toast({ title: 'Lỗi recompute COGS', description: e?.message || String(e), variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'COGS recompute failed', description: e?.message || String(e), variant: 'destructive' }); }
     finally { setBusy(false); }
   };
 
@@ -401,12 +401,12 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
     setBusy(true);
     try {
       const r = await client.backfillCarriers(30);
-      toast({ title: 'Đã backfill carriers', description: `Quét ${r.scanned} đơn, cập nhật ${r.updated}` });
+      toast({ title: 'Carriers backfilled', description: `Scanned ${r.scanned} orders, updated ${r.updated}` });
       const carriers = await client.listShippingCompanies();
       setShippingCompanies(carriers.items);
       await client.recompute(dateAtUTC(from, false), dateAtUTC(to, true));
       await load();
-    } catch (e: any) { toast({ title: 'Lỗi backfill', description: e?.message || String(e), variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Backfill failed', description: e?.message || String(e), variant: 'destructive' }); }
     finally { setBusy(false); }
   };
 
@@ -419,7 +419,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       await client.recomputeCogs(dateAtUTC(from, false), dateAtUTC(to, true));
       await client.recompute(dateAtUTC(from, false), dateAtUTC(to, true));
       await load();
-    } catch (e: any) { toast({ title: 'Lỗi seed pricebook', description: e?.message || String(e), variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Pricebook seed failed', description: e?.message || String(e), variant: 'destructive' }); }
     finally { setBusy(false); }
   };
 
@@ -429,11 +429,11 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
     try {
       const text = await file.text();
       const r = await client.importCostCsv(text);
-      toast({ title: 'CSV imported', description: `${r.singleItemOrders} đơn 1-item, ${r.variantOverridesWritten} overrides${r.unmappedSkus.length ? `, ${r.unmappedSkus.length} SKU unmapped` : ''}` });
+      toast({ title: 'CSV imported', description: `${r.singleItemOrders} single-item orders, ${r.variantOverridesWritten} overrides${r.unmappedSkus.length ? `, ${r.unmappedSkus.length} SKU unmapped` : ''}` });
       await client.recomputeCogs(dateAtUTC(from, false), dateAtUTC(to, true));
       await client.recompute(dateAtUTC(from, false), dateAtUTC(to, true));
       await load();
-    } catch (e: any) { toast({ title: 'Lỗi import CSV', description: e?.message || String(e), variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'CSV import failed', description: e?.message || String(e), variant: 'destructive' }); }
     finally { setBusy(false); }
   };
 
@@ -442,8 +442,8 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
     try {
       await client.updateStoreSettings({ defaultShippingCompany: value || null });
       setDefaultSupplier(value);
-      toast({ title: 'Đã lưu default supplier', description: value || '(none)' });
-    } catch (e: any) { toast({ title: 'Lỗi', description: e?.message || String(e), variant: 'destructive' }); }
+      toast({ title: 'Default supplier saved', description: value || '(none)' });
+    } catch (e: any) { toast({ title: 'Error', description: e?.message || String(e), variant: 'destructive' }); }
   };
 
   // --- CSV export ---
@@ -479,7 +479,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
   const addCost = async () => {
     if (!client) return;
     if (!costForm.amount || parseFloat(costForm.amount) <= 0) {
-      toast({ title: 'Nhập amount', variant: 'destructive' });
+      toast({ title: 'Enter an amount', variant: 'destructive' });
       return;
     }
     try {
@@ -493,8 +493,8 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       setCostForm({ ...costForm, amount: '', description: '' });
       await client.recomputeDay(day);
       await load();
-      toast({ title: 'Đã thêm chi phí' });
-    } catch (e: any) { toast({ title: 'Lỗi', description: e?.message || String(e), variant: 'destructive' }); }
+      toast({ title: 'Cost added' });
+    } catch (e: any) { toast({ title: 'Error', description: e?.message || String(e), variant: 'destructive' }); }
   };
 
   const deleteCost = async (id: string, dateStr: string) => {
@@ -503,7 +503,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       await client.deleteOperatingCost(id);
       await client.recomputeDay(dateAtUTC(dateStr.slice(0, 10), false));
       await load();
-    } catch (e: any) { toast({ title: 'Lỗi xoá', description: e?.message || String(e), variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Delete failed', description: e?.message || String(e), variant: 'destructive' }); }
   };
 
   if (!isShopifyConnected) {
@@ -511,7 +511,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       <Card>
         <CardContent className="p-6 flex items-center space-x-3 text-slate-600">
           <AlertTriangle className="h-5 w-5 text-amber-500" />
-          <span>Connect Shopify trước để xem P&L.</span>
+          <span>Connect Shopify to see your P&L.</span>
         </CardContent>
       </Card>
     );
@@ -661,14 +661,14 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                 <div className="min-w-[260px]">
                   <Label className="text-xs flex items-center space-x-1">
                     <Truck className="h-3 w-3" />
-                    <span>Default supplier (khi đơn chưa có tracking)</span>
+                    <span>Default supplier (for orders without tracking yet)</span>
                   </Label>
                   <Select value={defaultSupplier || '__none__'} onValueChange={v => saveDefaultSupplier(v === '__none__' ? '' : v)}>
                     <SelectTrigger className="w-72">
-                      <SelectValue placeholder="(không set)" />
+                      <SelectValue placeholder="(not set)" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__none__">(không set)</SelectItem>
+                      <SelectItem value="__none__">(not set)</SelectItem>
                       {shippingCompanies.map(c => (
                         <SelectItem key={c.id} value={c.name}>
                           {c.display_name || c.name}
@@ -679,8 +679,8 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                   </Select>
                 </div>
                 <div className="text-xs text-slate-500 max-w-md">
-                  Đơn chưa có tracking sẽ dùng supplier này để chọn pricebook.
-                  Đơn đã fulfill sẽ tự nhận diện qua prefix tracking (vd LP1000... → LP).
+                  Orders without tracking use this supplier to pick a pricebook.
+                  Fulfilled orders are detected from the tracking prefix (e.g. LP1000… → LP).
                 </div>
               </div>
             </CardContent>
@@ -765,7 +765,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                     <TableRow><TableCell colSpan={12} className="text-center text-slate-400">Loading…</TableCell></TableRow>
                   )}
                   {!loading && sortedBuckets.length === 0 && (
-                    <TableRow><TableCell colSpan={12} className="text-center text-slate-400">No data — bấm <em>Sync + recompute</em> để bắt đầu.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} className="text-center text-slate-400">No data — hit <em>Sync + recompute</em> to get started.</TableCell></TableRow>
                   )}
                   {sortedBuckets.map(b => (
                     <TableRow key={b.periodKey}>

@@ -90,7 +90,7 @@ export const ProfitPeriodView = ({ client }: Props) => {
       setBuckets(byPeriod.buckets);
       setComparison(cmp.totals);
     } catch (e: any) {
-      toast({ title: 'Lỗi tải period view', description: e?.message || String(e), variant: 'destructive' });
+      toast({ title: 'Could not load the period view', description: e?.message || String(e), variant: 'destructive' });
     } finally {
       setLoading(false);
     }

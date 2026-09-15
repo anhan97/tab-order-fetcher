@@ -92,7 +92,7 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
           setPresetName('');
         }
       } catch (e: any) {
-        toast({ title: 'Không tải được cấu hình cột', description: e?.message, variant: 'destructive' });
+        toast({ title: 'Could not load the column config', description: e?.message, variant: 'destructive' });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -135,8 +135,8 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
 
   const savePreset = async () => {
     const name = presetName.trim();
-    if (!name) return toast({ title: 'Nhập tên preset', variant: 'destructive' });
-    if (selected.length === 0) return toast({ title: 'Chọn ít nhất 1 cột', variant: 'destructive' });
+    if (!name) return toast({ title: 'Name the preset', variant: 'destructive' });
+    if (selected.length === 0) return toast({ title: 'Pick at least one column', variant: 'destructive' });
     setSaving(true);
     try {
       const { preset } = await apiFetch<{ preset: Preset }>('/api/orders/export-presets', {
@@ -148,9 +148,9 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
         return [...rest, preset].sort((a, b) => a.name.localeCompare(b.name));
       });
       setActivePresetId(preset.id);
-      toast({ title: `Đã lưu preset "${preset.name}"` });
+      toast({ title: `Saved preset "${preset.name}"` });
     } catch (e: any) {
-      toast({ title: 'Lưu preset thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not save the preset', description: e?.message, variant: 'destructive' });
     } finally {
       setSaving(false);
     }
@@ -164,14 +164,14 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
       await apiFetch(`/api/orders/export-presets/${p.id}`, { method: 'DELETE' });
       setPresets(prev => prev.filter(x => x.id !== p.id));
       setActivePresetId('');
-      toast({ title: `Đã xoá preset "${p.name}"` });
+      toast({ title: `Deleted preset "${p.name}"` });
     } catch (e: any) {
-      toast({ title: 'Xoá preset thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not delete the preset', description: e?.message, variant: 'destructive' });
     }
   };
 
   const download = async () => {
-    if (selected.length === 0) return toast({ title: 'Chọn ít nhất 1 cột', variant: 'destructive' });
+    if (selected.length === 0) return toast({ title: 'Pick at least one column', variant: 'destructive' });
     setBusy('download');
     try {
       const format = delimiter === 'tab' ? 'tsv' : 'csv';
@@ -192,16 +192,16 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1500);
-      toast({ title: 'Đã tải file export' });
+      toast({ title: 'Export downloaded' });
     } catch (e: any) {
-      toast({ title: 'Tải file thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Download failed', description: e?.message, variant: 'destructive' });
     } finally {
       setBusy(null);
     }
   };
 
   const copyText = async () => {
-    if (selected.length === 0) return toast({ title: 'Chọn ít nhất 1 cột', variant: 'destructive' });
+    if (selected.length === 0) return toast({ title: 'Pick at least one column', variant: 'destructive' });
     setBusy('copy');
     try {
       const format = delimiter === 'tab' ? 'tsv' : 'csv';
@@ -210,9 +210,9 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
       let text = await res.text();
       if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // strip BOM for clipboard
       await copyToClipboard(text);
-      toast({ title: 'Đã copy — dán thẳng vào Google Sheet / Excel' });
+      toast({ title: 'Copied — paste straight into Google Sheets or Excel' });
     } catch (e: any) {
-      toast({ title: 'Copy thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Copy failed', description: e?.message, variant: 'destructive' });
     } finally {
       setBusy(null);
     }
@@ -222,19 +222,19 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Tuỳ chỉnh cột export</DialogTitle>
+          <DialogTitle>Customise export columns</DialogTitle>
         </DialogHeader>
 
         {loading ? (
           <div className="h-64 flex items-center justify-center text-slate-400">
-            <Loader2 className="h-5 w-5 animate-spin mr-2" /> Đang tải…
+            <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading…
           </div>
         ) : (
           <div className="space-y-4">
             {/* Preset picker */}
             <div className="flex flex-wrap items-end gap-2">
               <div className="flex-1 min-w-[200px]">
-                <Label className="text-xs text-slate-500">Preset đã lưu</Label>
+                <Label className="text-xs text-slate-500">Saved presets</Label>
                 <Select
                   value={activePresetId || 'none'}
                   onValueChange={v => {
@@ -244,10 +244,10 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
                   }}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="— Chọn preset —" />
+                    <SelectValue placeholder="— Pick a preset —" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">— Không dùng preset —</SelectItem>
+                    <SelectItem value="none">— No preset —</SelectItem>
                     {presets.map(p => (
                       <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                     ))}
@@ -256,7 +256,7 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
               </div>
               <Button
                 variant="outline" size="sm" onClick={deletePreset}
-                disabled={!activePresetId} title="Xoá preset đang chọn"
+                disabled={!activePresetId} title="Delete the selected preset"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -265,11 +265,11 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
             {/* Two-panel column editor */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs text-slate-500">Cột sẽ export (theo thứ tự)</Label>
+                <Label className="text-xs text-slate-500">Columns to export (in order)</Label>
                 <ScrollArea className="h-56 rounded-md border mt-1">
                   <div className="p-1.5 space-y-1">
                     {selected.length === 0 ? (
-                      <div className="text-xs text-slate-400 p-3 text-center">Chưa chọn cột nào</div>
+                      <div className="text-xs text-slate-400 p-3 text-center">No columns selected</div>
                     ) : selected.map((key, idx) => (
                       <div key={key} className="flex items-center gap-1 rounded bg-slate-50 border px-2 py-1">
                         <span className="text-slate-300 text-xs w-5 tabular-nums">{idx + 1}</span>
@@ -289,11 +289,11 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
                 </ScrollArea>
               </div>
               <div>
-                <Label className="text-xs text-slate-500">Cột có sẵn (bấm để thêm)</Label>
+                <Label className="text-xs text-slate-500">Available columns (click to add)</Label>
                 <ScrollArea className="h-56 rounded-md border mt-1">
                   <div className="p-1.5 space-y-1">
                     {available.length === 0 ? (
-                      <div className="text-xs text-slate-400 p-3 text-center">Đã thêm hết cột</div>
+                      <div className="text-xs text-slate-400 p-3 text-center">All columns added</div>
                     ) : available.map(f => (
                       <button
                         key={f.key}
@@ -312,30 +312,30 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
             {/* Format + header options */}
             <div className="flex flex-wrap items-center gap-6">
               <div>
-                <Label className="text-xs text-slate-500 mb-1 block">Định dạng</Label>
+                <Label className="text-xs text-slate-500 mb-1 block">Format</Label>
                 <RadioGroup
                   value={delimiter}
                   onValueChange={v => setDelimiter(v as 'comma' | 'tab')}
                   className="flex gap-4"
                 >
                   <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                    <RadioGroupItem value="comma" id="fmt-comma" /> Dấu phẩy (CSV)
+                    <RadioGroupItem value="comma" id="fmt-comma" /> Comma (CSV)
                   </label>
                   <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                    <RadioGroupItem value="tab" id="fmt-tab" /> Tab (dán vào Sheet)
+                    <RadioGroupItem value="tab" id="fmt-tab" /> Tab (paste into Sheets)
                   </label>
                 </RadioGroup>
               </div>
               <label className="flex items-center gap-2 text-sm cursor-pointer mt-4">
                 <Checkbox checked={includeHeader} onCheckedChange={v => setIncludeHeader(!!v)} />
-                Kèm dòng tiêu đề
+                Include header row
               </label>
             </div>
 
             {/* Save preset */}
             <div className="flex items-end gap-2 border-t pt-3">
               <div className="flex-1">
-                <Label className="text-xs text-slate-500">Lưu bộ cột này thành preset</Label>
+                <Label className="text-xs text-slate-500">Save this column set as a preset</Label>
                 <Input
                   placeholder="VD: YunTu, Shengtu, US-supplier…"
                   value={presetName}
@@ -344,7 +344,7 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
               </div>
               <Button variant="outline" onClick={savePreset} disabled={saving}>
                 {saving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Save className="h-4 w-4 mr-1.5" />}
-                Lưu preset
+                Save preset
               </Button>
             </div>
           </div>
@@ -357,7 +357,7 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
           </Button>
           <Button onClick={download} disabled={!!busy || loading} className="bg-teal-600 hover:bg-teal-700">
             {busy === 'download' ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Download className="h-4 w-4 mr-1.5" />}
-            Tải file
+            Download
           </Button>
         </DialogFooter>
       </DialogContent>
