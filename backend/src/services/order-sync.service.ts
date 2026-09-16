@@ -2,6 +2,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { fetchShopifyOrders, fetchOrderTransactions, summarizeTransactionFees, fetchBalanceTransactions } from './shopify.service';
 import { resolveShippingCompanyForOrder } from './shipping-company.service';
 import { decryptToken } from '../lib/token-crypto';
+import { orderSignature, allocateComboCost } from '../lib/cogs-combo';
 
 const prisma = new PrismaClient();
 const THROTTLE_MS = parseInt(process.env.SHOPIFY_THROTTLE_MS || '500', 10);
@@ -408,6 +409,8 @@ function pickCogsLine(
  * basecost doesn't drift when prices are edited later).
  *
  * Cost source, in order:
+ *   0. Combo (CogsCombo): the basket exactly matches a combo priced on the
+ *      order's ship line → combo cost split across items by weight.
  *   1. COGS matrix (CogsLine × CogsPrice): pick the order's ship line via
  *      pickCogsLine, then per line item with quantity q:
  *        exact set price (setQty=q)            → unit = cost/q
@@ -454,6 +457,42 @@ export async function recomputeOrderCostSnapshots(_userId: string, storeId: stri
       select: { variantId: true, setQty: true, cost: true }
     });
     for (const p of prices) priceMap.set(`${p.variantId}:${p.setQty}`, p.cost);
+  }
+
+  // Combo first: when the whole basket is exactly a priced combo on this ship
+  // line, its cost wins over per-item prices — buying these products together
+  // is the reason the combo price exists.
+  if (line) {
+    const signature = orderSignature(order.lineItems);
+    const combo = signature
+      ? await prisma.cogsCombo.findUnique({
+          where: { storeId_signature: { storeId, signature } },
+          select: { prices: { where: { lineId: line.id }, select: { cost: true } } }
+        })
+      : null;
+    const comboCost = combo?.prices[0]?.cost;
+    if (comboCost !== undefined) {
+      const units = allocateComboCost(
+        Number(comboCost),
+        order.lineItems.map(li => {
+          const single = priceMap.get(`${li.variantId}:1`) ?? basecostMap.get(String(li.variantId));
+          return {
+            key: li.id,
+            qty: li.quantity > 0 ? li.quantity : 1,
+            singleUnitPrice: single !== undefined ? Number(single) : undefined
+          };
+        })
+      );
+      for (const li of order.lineItems) {
+        const unit = units.get(li.id);
+        if (unit === undefined) continue;
+        await prisma.orderLineItem.update({
+          where: { id: li.id },
+          data: { unitBasecost: new Prisma.Decimal(unit.toFixed(2)) }
+        });
+      }
+      return;
+    }
   }
 
   for (const li of order.lineItems) {

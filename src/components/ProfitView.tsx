@@ -37,6 +37,8 @@ const CATEGORIES = [
   { value: 'salary', label: 'Salary' },
   { value: 'app_fee', label: 'App / Subscription' },
   { value: 'domain', label: 'Domain / Hosting' },
+  // Adds to the Facebook ad spend column, on top of mapped campaign spend.
+  { value: 'fb_ads', label: 'Facebook ads (manual)' },
   { value: 'other_ads', label: 'Other ads (Google/TikTok)' },
   { value: 'misc', label: 'Misc' }
 ];

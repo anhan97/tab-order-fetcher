@@ -479,25 +479,74 @@ model CogsLine {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  prices CogsPrice[]
+  prices      CogsPrice[]
+  comboPrices CogsComboPrice[]
 
   @@unique([storeId, supplier, carrier, countryCode])
   @@index([storeId, sortOrder])
 }
 
 model CogsPrice {
-  id        String   @id @default(uuid())
-  lineId    String
-  variantId BigInt // Shopify variant id (matches ProductVariant.variantId)
-  setQty    Int // 1 = single, 2 = set of 2, …
+  id           String   @id @default(uuid())
+  lineId       String
+  variantId    BigInt // Shopify variant id (matches ProductVariant.variantId)
+  setQty       Int // 1 = single, 2 = set of 2, …
+  // Entered separately so the merchant can reason about goods vs. freight.
+  // cost is ALWAYS productCost + shippingCost and is the only field P&L reads.
+  productCost  Decimal  @default(0) @db.Decimal(12, 2)
+  shippingCost Decimal  @default(0) @db.Decimal(12, 2)
   // Total landed cost for setQty units via this line (product + shipping).
-  cost      Decimal  @db.Decimal(12, 2)
-  updatedAt DateTime @updatedAt
+  cost         Decimal  @db.Decimal(12, 2)
+  updatedAt    DateTime @updatedAt
 
   line CogsLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
 
   @@unique([lineId, variantId, setQty])
   @@index([variantId])
+}
+
+// A priced bundle of DIFFERENT variants, e.g. "shirt + cap". The matrix's set
+// columns only price N units of ONE variant; a combo prices a specific mix,
+// because two different products shipped together cost differently than
+// pricing each on its own.
+//
+// An order is costed from a combo only when its line items match the combo's
+// items EXACTLY (same variants, same quantities) — see
+// recomputeOrderCostSnapshots. Anything else falls back to per-item prices.
+model CogsCombo {
+  id        String   @id @default(uuid())
+  userId    String // store owner (tenant), like every other COGS row
+  storeId   String
+  name      String
+  // [{ variantId: "123", qty: 1 }, …] — canonical: merged by variant, sorted.
+  items     Json
+  // Order-independent key of items, e.g. "111x1,222x2". Lets P&L match an
+  // order in one lookup, and stops two combos describing the same basket.
+  signature String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prices CogsComboPrice[]
+
+  @@unique([storeId, signature])
+  @@index([storeId, sortOrder])
+}
+
+model CogsComboPrice {
+  id           String   @id @default(uuid())
+  comboId      String
+  lineId       String
+  productCost  Decimal  @default(0) @db.Decimal(12, 2)
+  shippingCost Decimal  @default(0) @db.Decimal(12, 2)
+  cost         Decimal  @db.Decimal(12, 2) // productCost + shippingCost
+  updatedAt    DateTime @updatedAt
+
+  combo CogsCombo @relation(fields: [comboId], references: [id], onDelete: Cascade)
+  line  CogsLine  @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@unique([comboId, lineId])
+  @@index([lineId])
 }
 
 // New comprehensive COGS system based on the specification

@@ -4,7 +4,10 @@
  * Rows   = product variants (grouped by product).
  * Columns= "line ship" (supplier × carrier × country) — each line shows one
  *          sub-column per SET size (Set 1 = unit price, Set 2 = price for a pack of 2…).
- * Cell   = TOTAL landed cost (product + ship) for that set via that line.
+ * Cell   = two inputs per set — product cost and shipping cost — plus a
+ *          read-only total. The server stores total = product + shipping.
+ *
+ * Below the grid, CogsCombos prices mixes of DIFFERENT products per ship line.
  *
  * Feels like a spreadsheet: click & type, Arrow/Enter/Tab navigation, paste a
  * whole block copied from Excel/Google Sheets, autosave (debounced) with a
@@ -31,8 +34,10 @@ import {
 import { apiFetch } from '@/utils/apiClient';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { CogsCombos, type MatrixCombo } from '@/components/CogsCombos';
+import { type CostPart, totalOf, fromServer } from '@/utils/cogsCost';
 
-interface MatrixVariant {
+export interface MatrixVariant {
   variantId: string;
   productId: string;
   sku: string | null;
@@ -43,7 +48,7 @@ interface MatrixVariant {
 
 /** Inclusive drag-fill range; anchor (r0,c0) is the cell whose value spreads. */
 interface FillRange { r0: number; c0: number; r1: number; c1: number; }
-interface MatrixLine {
+export interface MatrixLine {
   id: string;
   supplier: string;
   carrier: string;
@@ -51,22 +56,25 @@ interface MatrixLine {
   currency: string;
   setSizes: number[];
   sortOrder: number;
-  prices: Array<{ variantId: string; setQty: number; cost: string }>;
+  prices: Array<{ variantId: string; setQty: number; productCost: string; shippingCost: string; cost: string }>;
 }
 
 const COUNTRIES = ['US', 'CA', 'AU', 'GB', 'UK', 'NZ', 'DE', 'FR', 'IT', 'ES', 'NL', 'SE', 'NO', 'DK', 'IE', 'CH', 'AT', 'BE'];
 const CURRENCIES = ['USD', 'AUD', 'CAD', 'GBP', 'EUR'];
 
-const cellKey = (lineId: string, variantId: string, setQty: number) => `${lineId}|${variantId}|${setQty}`;
+const baseKey = (lineId: string, variantId: string, setQty: number) => `${lineId}|${variantId}|${setQty}`;
+const cellKey = (lineId: string, variantId: string, setQty: number, part: CostPart) =>
+  `${baseKey(lineId, variantId, setQty)}|${part}`;
 
-/** Flattened column list: one entry per (line, set). */
-interface FlatCol { line: MatrixLine; setQty: number; }
+/** Flattened EDITABLE columns: one per (line, set, part). Totals are not in here. */
+interface FlatCol { line: MatrixLine; setQty: number; part: CostPart; }
 
 export const CogsMatrix = () => {
   const { activeStore } = useAuth();
   const { toast } = useToast();
   const [variants, setVariants] = useState<MatrixVariant[]>([]);
   const [lines, setLines] = useState<MatrixLine[]>([]);
+  const [combos, setCombos] = useState<MatrixCombo[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -93,12 +101,16 @@ export const CogsMatrix = () => {
     if (!activeStore) return;
     setLoading(true);
     try {
-      const r = await apiFetch<{ variants: MatrixVariant[]; lines: MatrixLine[] }>('/api/cogs-matrix');
+      const r = await apiFetch<{ variants: MatrixVariant[]; lines: MatrixLine[]; combos?: MatrixCombo[] }>('/api/cogs-matrix');
       setVariants(r.variants);
       setLines(r.lines);
+      setCombos(r.combos ?? []);
       const vals: Record<string, string> = {};
       for (const l of r.lines) {
-        for (const p of l.prices) vals[cellKey(l.id, p.variantId, p.setQty)] = String(Number(p.cost));
+        for (const p of l.prices) {
+          vals[cellKey(l.id, p.variantId, p.setQty, 'p')] = fromServer(p.productCost ?? p.cost);
+          vals[cellKey(l.id, p.variantId, p.setQty, 's')] = fromServer(p.shippingCost ?? '0');
+        }
       }
       setValues(vals);
       setDirty(new Set());
@@ -124,10 +136,18 @@ export const CogsMatrix = () => {
       if (keys.length === 0) return;
       setSaveState('saving');
       try {
-        const cells = keys.map(k => {
-          const [lineId, variantId, setQty] = k.split('|');
-          const raw = valuesRef.current[k];
-          return { lineId, variantId, setQty: Number(setQty), cost: raw?.trim() ? raw : null };
+        // Both halves of a price are saved together — editing only the ship
+        // part must not wipe the product part on the server.
+        const bases = [...new Set(keys.map(k => k.slice(0, k.lastIndexOf('|'))))];
+        const cells = bases.map(b => {
+          const [lineId, variantId, setQty] = b.split('|');
+          const p = valuesRef.current[`${b}|p`] ?? '';
+          const s = valuesRef.current[`${b}|s`] ?? '';
+          return {
+            lineId, variantId, setQty: Number(setQty),
+            productCost: p.trim() ? p : null,
+            shippingCost: s.trim() ? s : null
+          };
         });
         await apiFetch('/api/cogs-matrix/prices', { method: 'PUT', body: JSON.stringify({ cells }) });
         setDirty(prev => {
@@ -147,7 +167,9 @@ export const CogsMatrix = () => {
 
   // ── Derived: filtered product groups + flat columns ───────────────────────
   const flatCols: FlatCol[] = useMemo(
-    () => lines.flatMap(line => line.setSizes.map(setQty => ({ line, setQty }))),
+    () => lines.flatMap(line =>
+      line.setSizes.flatMap(setQty => (['p', 's'] as CostPart[]).map(part => ({ line, setQty, part })))
+    ),
     [lines]
   );
 
@@ -185,6 +207,12 @@ export const CogsMatrix = () => {
 
   /** Visible row list (variant rows only, in render order) for keyboard/paste. */
   const flatRows = useMemo(() => groups.flatMap(g => g.variants), [groups]);
+
+  /** Every rendered price column: 2 inputs + 1 read-only total per set. */
+  const renderedColCount = useMemo(
+    () => lines.reduce((n, l) => n + l.setSizes.length * 3, 0),
+    [lines]
+  );
 
   // ── Cell editing ──────────────────────────────────────────────────────────
   const setCell = (key: string, raw: string) => {
@@ -234,7 +262,7 @@ export const CogsMatrix = () => {
           if (rr >= flatRows.length || cc >= flatCols.length) return;
           const cleaned = val.trim().replace(/[^0-9.,]/g, '');
           const col = flatCols[cc];
-          const key = cellKey(col.line.id, flatRows[rr].variantId, col.setQty);
+          const key = cellKey(col.line.id, flatRows[rr].variantId, col.setQty, col.part);
           next[key] = cleaned;
           newDirty.push(key);
           filled++;
@@ -264,13 +292,13 @@ export const CogsMatrix = () => {
     if (r0 === r1 && c0 === c1) return;
     const cols = flatColsRef.current, rows = flatRowsRef.current;
     const src = cols[c0] && rows[r0]
-      ? valuesRef.current[cellKey(cols[c0].line.id, rows[r0].variantId, cols[c0].setQty)] ?? ''
+      ? valuesRef.current[cellKey(cols[c0].line.id, rows[r0].variantId, cols[c0].setQty, cols[c0].part)] ?? ''
       : '';
     const keys: string[] = [];
     for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++) {
       for (let c = Math.min(c0, c1); c <= Math.max(c0, c1); c++) {
         if (r === r0 && c === c0) continue;
-        keys.push(cellKey(cols[c].line.id, rows[r].variantId, cols[c].setQty));
+        keys.push(cellKey(cols[c].line.id, rows[r].variantId, cols[c].setQty, cols[c].part));
       }
     }
     setValues(prev => {
@@ -485,7 +513,7 @@ export const CogsMatrix = () => {
                   Product
                 </th>
                 {lines.map(line => (
-                  <th key={line.id} colSpan={line.setSizes.length}
+                  <th key={line.id} colSpan={line.setSizes.length * 3}
                       className="bg-slate-100 border-b border-r px-2 py-1.5 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center gap-1">
                       <div className="leading-tight">
@@ -526,20 +554,31 @@ export const CogsMatrix = () => {
               </tr>
               {/* Set sub-header row */}
               <tr className="sticky top-[46px] z-30">
-                <th className="sticky left-0 z-40 bg-slate-50 border-b border-r px-3 py-1 text-left text-[11px] font-normal text-slate-400">
-                  price = total cost (goods + shipping) for the whole set
+                <th rowSpan={2} className="sticky left-0 z-40 bg-slate-50 border-b border-r px-3 py-1 text-left text-[11px] font-normal text-slate-400 align-top">
+                  per set: product cost + shipping cost = total
                 </th>
-                {flatCols.map((col, ci) => (
-                  <th key={`${col.line.id}-${col.setQty}`}
-                      className={`bg-slate-50 border-b px-2 py-1 text-center text-xs font-medium text-slate-500 min-w-[86px] ${ci < flatCols.length - 1 && flatCols[ci + 1].line.id !== col.line.id ? 'border-r' : 'border-r border-r-slate-100'}`}>
-                    Set {col.setQty}
+                {lines.flatMap(line => line.setSizes.map((setQty, si) => (
+                  <th key={`${line.id}-${setQty}`} colSpan={3}
+                      className={`bg-slate-50 border-b px-2 py-1 text-center text-xs font-medium text-slate-600
+                        ${si === line.setSizes.length - 1 ? 'border-r' : 'border-r border-r-slate-200'}`}>
+                    Set {setQty}
                   </th>
-                ))}
+                )))}
+              </tr>
+              {/* Part row: Product | Ship | Total */}
+              <tr className="sticky top-[72px] z-30">
+                {lines.flatMap(line => line.setSizes.flatMap((setQty, si) => [
+                  <th key={`${line.id}-${setQty}-p`} className="bg-slate-50 border-b border-r border-r-slate-100 px-1 py-0.5 text-center text-[10px] font-normal text-slate-500 min-w-[72px]">Product</th>,
+                  <th key={`${line.id}-${setQty}-s`} className="bg-slate-50 border-b border-r border-r-slate-100 px-1 py-0.5 text-center text-[10px] font-normal text-slate-500 min-w-[72px]">Ship</th>,
+                  <th key={`${line.id}-${setQty}-t`}
+                      className={`bg-slate-100/70 border-b px-1 py-0.5 text-center text-[10px] font-semibold text-slate-600 min-w-[64px]
+                        ${si === line.setSizes.length - 1 ? 'border-r' : 'border-r border-r-slate-200'}`}>Total</th>
+                ]))}
               </tr>
             </thead>
             <tbody>
               {groups.map(g => (
-                <FragmentGroup key={g.productId} label={g.label} image={g.image} colCount={flatCols.length}>
+                <FragmentGroup key={g.productId} label={g.label} image={g.image} colCount={renderedColCount}>
                   {g.variants.map(v => {
                     rowCounter += 1;
                     const r = rowCounter;
@@ -562,20 +601,18 @@ export const CogsMatrix = () => {
                           </div>
                         </td>
                         {flatCols.map((col, c) => {
-                          const key = cellKey(col.line.id, v.variantId, col.setQty);
+                          const key = cellKey(col.line.id, v.variantId, col.setQty, col.part);
                           const val = values[key] ?? '';
                           const isDirty = dirty.has(key);
-                          const lineEdge = c < flatCols.length - 1 && flatCols[c + 1].line.id !== col.line.id;
                           const highlighted = inFill(r, c);
                           const isAnchor = fill && fill.r0 === r && fill.c0 === c;
-                          return (
+                          const input = (
                             <td
                               key={key}
                               onMouseDown={() => onCellMouseDown(r, c)}
                               onMouseEnter={() => onCellMouseEnter(r, c)}
                               onDragStart={e => e.preventDefault()}
-                              className={`relative border-b p-0 transition-colors duration-75
-                                ${lineEdge ? 'border-r' : 'border-r border-r-slate-100'}
+                              className={`relative border-b border-r border-r-slate-100 p-0 transition-colors duration-75
                                 ${highlighted ? (isAnchor ? 'bg-teal-200/80 ring-1 ring-inset ring-teal-500' : 'bg-teal-100/70') : ''}`}
                             >
                               <input
@@ -587,6 +624,7 @@ export const CogsMatrix = () => {
                                 onFocus={e => e.currentTarget.select()}
                                 inputMode="decimal"
                                 placeholder="—"
+                                aria-label={`${v.shortTitle} · ${col.line.carrier} ${col.line.countryCode} · set ${col.setQty} · ${col.part === 'p' ? 'product' : 'shipping'} cost`}
                                 className={`w-full h-8 px-2 text-right text-sm outline-none bg-transparent
                                   focus:bg-teal-50 focus:ring-2 focus:ring-inset focus:ring-teal-400
                                   placeholder:text-slate-200 ${isDirty ? 'bg-amber-50' : ''}
@@ -594,6 +632,19 @@ export const CogsMatrix = () => {
                               />
                             </td>
                           );
+                          if (col.part === 'p') return input;
+                          // After the Ship input: the read-only total for this set.
+                          const base = baseKey(col.line.id, v.variantId, col.setQty);
+                          const total = totalOf(values[`${base}|p`], values[`${base}|s`]);
+                          const lastSetOfLine = col.setQty === col.line.setSizes[col.line.setSizes.length - 1];
+                          return [
+                            input,
+                            <td key={`${base}|t`}
+                                className={`border-b bg-slate-50/70 px-2 text-right text-sm tabular-nums font-medium text-slate-700
+                                  ${lastSetOfLine ? 'border-r' : 'border-r border-r-slate-200'}`}>
+                              {total || <span className="text-slate-200">—</span>}
+                            </td>
+                          ];
                         })}
                       </tr>
                     );
@@ -602,7 +653,7 @@ export const CogsMatrix = () => {
               ))}
               {flatRows.length === 0 && (
                 <tr>
-                  <td colSpan={flatCols.length + 1} className="h-24 text-center text-slate-400">
+                  <td colSpan={renderedColCount + 1} className="h-24 text-center text-slate-400">
                     No products match your search.
                   </td>
                 </tr>
@@ -616,8 +667,13 @@ export const CogsMatrix = () => {
         💡 Tip: click a cell and type — it saves after about a second. Move with the arrow keys or Enter.
         Copy a range from Excel or Google Sheets and paste (Ctrl+V) into the first cell.
         <b> Hold the mouse on a cell and drag</b> across or down to fill that price over the range, like Excel.
-        <b> Set N</b> = total cost when a customer buys N units, shipping for that set included.
+        <b> Set N</b> = cost when a customer buys N units of one product: enter <b>product</b> and <b>ship</b> cost, the total adds itself up.
+        Pasting a block fills Product and Ship columns in order and skips Total.
       </p>
+
+      {lines.length > 0 && (
+        <CogsCombos variants={variants} lines={lines} combos={combos} onChanged={load} />
+      )}
 
       {/* Line create/edit dialog */}
       <Dialog open={!!lineDialog} onOpenChange={o => { if (!o) setLineDialog(null); }}>

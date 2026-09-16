@@ -15,12 +15,21 @@ declare global {
   namespace Express {
     interface Request {
       resolved?: {
+        /**
+         * The TENANT whose data this request reads and writes — always the
+         * store's owner. Orders, P&L snapshots, operating costs, campaign
+         * mappings, COGS and the FB token that prices ad spend are all keyed
+         * by (userId, storeId) with userId = owner, so a granted member must
+         * resolve to the owner here or every query silently comes back empty.
+         */
         userId: string;
+        /** The person actually making the request. Equals userId for owners. */
+        actorId: string;
         storeId: string;
         storeDomain: string;
         /** Caller's access level in THIS store: owner | manager | cs | finance | viewer. */
         level?: StoreAccessLevel;
-        /** Store's owner — differs from userId when access came from a grant. */
+        /** Store's owner. Same as userId; kept for readability at call sites. */
         ownerId?: string;
       };
     }
@@ -79,6 +88,7 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
         const store = await prisma.shopifyStore.findUnique({ where: { id: explicitStore } });
         req.resolved = {
           userId: explicitUser,
+          actorId: callerId!,
           storeId: explicitStore,
           storeDomain: store?.storeDomain || (rawDomain ? normalizeDomain(rawDomain) : ''),
           level: 'owner',
@@ -111,7 +121,12 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
         return res.status(404).json({ error: 'No store found for this user. Add one via /api/auth/stores.' });
       }
       req.resolved = {
-        userId: authedUserId,
+        // Data is scoped to the OWNER, not the caller. This used to be
+        // authedUserId, so a manager's P&L, revenue and FB spend read from an
+        // empty userId=manager partition, and costs they entered were written
+        // there too — invisible on the owner's P&L and on their own.
+        userId: access.ownerId,
+        actorId: authedUserId,
         storeId: access.storeId,
         storeDomain: access.storeDomain,
         level: access.level,
@@ -145,7 +160,7 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       decryptToken(s.accessToken) === accessToken && !s.user.email.endsWith('@autocreated.local')
     );
     if (realStore) {
-      req.resolved = { userId: realStore.userId, storeId: realStore.id, storeDomain, level: 'owner', ownerId: realStore.userId };
+      req.resolved = { userId: realStore.userId, actorId: realStore.userId, storeId: realStore.id, storeDomain, level: 'owner', ownerId: realStore.userId };
       return next();
     }
 
@@ -172,7 +187,7 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       });
     }
 
-    req.resolved = { userId: user.id, storeId: store.id, storeDomain, level: 'owner', ownerId: user.id };
+    req.resolved = { userId: user.id, actorId: user.id, storeId: store.id, storeDomain, level: 'owner', ownerId: user.id };
     next();
   } catch (e: any) {
     console.error('resolveStore error:', e);

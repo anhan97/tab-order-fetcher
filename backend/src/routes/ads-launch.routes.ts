@@ -23,7 +23,7 @@
 
 import express, { Request, Response } from 'express';
 import multer from 'multer';
-import { resolveStore } from '../middleware/resolve-store';
+import { resolveStore, requireStoreCapability } from '../middleware/resolve-store';
 import {
   runBulkLaunch,
   listPromotablePages,
@@ -229,7 +229,7 @@ router.get('/templates', resolveStore, async (req: Request, res: Response) => {
   }
 });
 
-router.post('/templates', resolveStore, express.json({ limit: '2mb' }), async (req: Request, res: Response) => {
+router.post('/templates', resolveStore, requireStoreCapability('manage'), express.json({ limit: '2mb' }), async (req: Request, res: Response) => {
   try {
     const userId = req.resolved?.userId;
     if (!userId) return res.status(401).json({ error: 'Auth required' });
@@ -243,7 +243,7 @@ router.post('/templates', resolveStore, express.json({ limit: '2mb' }), async (r
   }
 });
 
-router.put('/templates/:id', resolveStore, express.json({ limit: '2mb' }), async (req: Request, res: Response) => {
+router.put('/templates/:id', resolveStore, requireStoreCapability('manage'), express.json({ limit: '2mb' }), async (req: Request, res: Response) => {
   try {
     const userId = req.resolved?.userId;
     if (!userId) return res.status(401).json({ error: 'Auth required' });
@@ -258,7 +258,7 @@ router.put('/templates/:id', resolveStore, express.json({ limit: '2mb' }), async
   }
 });
 
-router.delete('/templates/:id', resolveStore, async (req: Request, res: Response) => {
+router.delete('/templates/:id', resolveStore, requireStoreCapability('manage'), async (req: Request, res: Response) => {
   try {
     const userId = req.resolved?.userId;
     if (!userId) return res.status(401).json({ error: 'Auth required' });
@@ -296,7 +296,7 @@ router.get('/history/:id', resolveStore, async (req: Request, res: Response) => 
   }
 });
 
-router.post('/history/:id/rollback', resolveStore, async (req: Request, res: Response) => {
+router.post('/history/:id/rollback', resolveStore, requireStoreCapability('manage'), async (req: Request, res: Response) => {
   try {
     const userId = req.resolved?.userId;
     if (!userId) return res.status(401).json({ error: 'Auth required' });
@@ -314,6 +314,8 @@ router.post('/history/:id/rollback', resolveStore, async (req: Request, res: Res
 router.post(
   '/bulk-launch',
   resolveStore,
+  // Launching ads spends the store owner's money — manager/owner only.
+  requireStoreCapability('manage'),
   upload.array('files', 50),
   async (req: Request, res: Response) => {
     const body = req.body || {};

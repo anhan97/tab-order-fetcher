@@ -3,14 +3,18 @@
  *
  * Rows = the store's product variants (from ProductVariant, kept fresh by
  * order sync / product sync). Columns = CogsLine (supplier × carrier ×
- * country), each with sub-columns per SET size. A cell = CogsPrice: the TOTAL
- * landed cost (product + shipping) for that many units via that line.
+ * country), each with sub-columns per SET size. A cell = CogsPrice: product
+ * cost + shipping cost for that many units via that line (cost = their sum).
  *
- *   GET    /            whole matrix: variants + lines + prices
+ *   GET    /            whole matrix: variants + lines + prices + combos
  *   POST   /lines       create a line (column)
  *   PATCH  /lines/:id   update a line (carrier, country, supplier, setSizes…)
  *   DELETE /lines/:id   remove a line and its prices
  *   PUT    /prices      bulk upsert/delete cells (autosave from the grid)
+ *   POST   /combos      create a combo (a priced mix of different variants)
+ *   PATCH  /combos/:id  rename / change items
+ *   DELETE /combos/:id  remove a combo and its prices
+ *   PUT    /combo-prices  bulk upsert/delete combo cells
  *   POST   /import-pricebooks   one-time prefill from the legacy Pricebook data
  *
  * Identity: requireAuth + resolveStore (same pattern as orders.routes).
@@ -22,6 +26,9 @@ import { resolveStore } from '../middleware/resolve-store';
 import { requireStoreCapability } from '../middleware/resolve-store';
 import { decryptToken } from '../lib/token-crypto';
 import { audit } from '../lib/audit';
+import {
+  normalizeComboItems, comboSignature, validateCombo, parseMoney, type ComboItem
+} from '../lib/cogs-combo';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -96,7 +103,7 @@ router.get('/', async (req: Request, res: Response) => {
     // user+store rows share one physical shop domain (legacy synthetic-user
     // split), the variant row may be owned by another storeId and a plain
     // storeId filter would show an incomplete product list.
-    const [ownVariants, liVariants, lines] = await Promise.all([
+    const [ownVariants, liVariants, lines, combos] = await Promise.all([
       prisma.productVariant.findMany({
         where: { storeId },
         select: { variantId: true, productId: true, sku: true, title: true, basecost: true, imageUrl: true }
@@ -110,7 +117,14 @@ router.get('/', async (req: Request, res: Response) => {
       prisma.cogsLine.findMany({
         where: { storeId },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-        include: { prices: { select: { variantId: true, setQty: true, cost: true } } }
+        include: {
+          prices: { select: { variantId: true, setQty: true, productCost: true, shippingCost: true, cost: true } }
+        }
+      }),
+      prisma.cogsCombo.findMany({
+        where: { storeId },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        include: { prices: { select: { lineId: true, productCost: true, shippingCost: true, cost: true } } }
       })
     ]);
 
@@ -162,6 +176,20 @@ router.get('/', async (req: Request, res: Response) => {
         prices: l.prices.map(p => ({
           variantId: String(p.variantId),
           setQty: p.setQty,
+          productCost: String(p.productCost),
+          shippingCost: String(p.shippingCost),
+          cost: String(p.cost)
+        }))
+      })),
+      combos: combos.map(c => ({
+        id: c.id,
+        name: c.name,
+        items: normalizeComboItems(c.items),
+        sortOrder: c.sortOrder,
+        prices: c.prices.map(p => ({
+          lineId: p.lineId,
+          productCost: String(p.productCost),
+          shippingCost: String(p.shippingCost),
           cost: String(p.cost)
         }))
       }))
@@ -248,15 +276,36 @@ router.delete('/lines/:id', requireStoreCapability('costs'), async (req: Request
 });
 
 /**
+ * Turn one cell's { productCost, shippingCost } (or a legacy single `cost`)
+ * into what gets stored. Returns null to delete the cell, undefined to skip
+ * an invalid one. The total is always derived here, never trusted from the
+ * client, so cost === productCost + shippingCost holds for every row.
+ */
+function resolveCellCost(c: any): { productCost: number; shippingCost: number; cost: number } | null | undefined {
+  const hasSplit = c && ('productCost' in c || 'shippingCost' in c);
+  const product = parseMoney(hasSplit ? c.productCost : c?.cost);
+  const shipping = hasSplit ? parseMoney(c.shippingCost) : null;
+  if (Number.isNaN(product) || Number.isNaN(shipping)) return undefined;
+  if (product === null && shipping === null) return null;
+  const p = product ?? 0;
+  const s = shipping ?? 0;
+  return { productCost: p, shippingCost: s, cost: Math.round((p + s) * 100) / 100 };
+}
+
+const dec = (n: number) => new Prisma.Decimal(n.toFixed(2));
+
+/**
  * Bulk cell save (grid autosave). Body:
- *   { cells: [{ lineId, variantId, setQty, cost }] }
- * cost null/'' → delete the cell. Line ownership checked per store.
+ *   { cells: [{ lineId, variantId, setQty, productCost, shippingCost }] }
+ * Both parts empty → delete the cell. One part empty → it counts as 0.
+ * A legacy { cost } is still accepted and stored as product cost.
+ * Line ownership checked per store.
  */
 router.put('/prices', requireStoreCapability('costs'), async (req: Request, res: Response) => {
   try {
     const cells: any[] = Array.isArray(req.body?.cells) ? req.body.cells : [];
     if (cells.length === 0) return res.json({ ok: true, saved: 0, deleted: 0 });
-    if (cells.length > 2000) return res.status(400).json({ error: 'Tối đa 2000 ô mỗi lần lưu' });
+    if (cells.length > 2000) return res.status(400).json({ error: 'At most 2000 cells per save' });
 
     const storeLines = await prisma.cogsLine.findMany({
       where: { storeId: req.resolved!.storeId }, select: { id: true }
@@ -272,18 +321,21 @@ router.put('/prices', requireStoreCapability('costs'), async (req: Request, res:
       let variantId: bigint;
       try { variantId = BigInt(String(c?.variantId)); } catch { continue; }
 
-      const raw = c?.cost;
-      const isDelete = raw === null || raw === undefined || String(raw).trim() === '';
-      if (isDelete) {
+      const parts = resolveCellCost(c);
+      if (parts === undefined) continue;
+      if (parts === null) {
         ops.push(prisma.cogsPrice.deleteMany({ where: { lineId, variantId, setQty } }));
         deleted++;
       } else {
-        const cost = Number(String(raw).replace(',', '.'));
-        if (!Number.isFinite(cost) || cost < 0) continue;
+        const data = {
+          productCost: dec(parts.productCost),
+          shippingCost: dec(parts.shippingCost),
+          cost: dec(parts.cost)
+        };
         ops.push(prisma.cogsPrice.upsert({
           where: { lineId_variantId_setQty: { lineId, variantId, setQty } },
-          create: { lineId, variantId, setQty, cost: new Prisma.Decimal(cost.toFixed(2)) },
-          update: { cost: new Prisma.Decimal(cost.toFixed(2)) }
+          create: { lineId, variantId, setQty, ...data },
+          update: data
         }));
         saved++;
       }
@@ -354,11 +406,16 @@ router.post('/import-pricebooks', requireStoreCapability('costs'), async (req: R
       const cells: Prisma.CogsPriceCreateManyInput[] = [];
       for (const o of b.variantCostOverrides) {
         for (const n of setSizes) {
+          // The legacy data already separates goods from freight — keep that.
+          const product = Number(o.overrideCost) * n;
+          const shipping = tierFor(n);
           cells.push({
             lineId: line.id,
             variantId: o.variantId,
             setQty: n,
-            cost: new Prisma.Decimal((Number(o.overrideCost) * n + tierFor(n)).toFixed(2))
+            productCost: dec(product),
+            shippingCost: dec(shipping),
+            cost: dec(product + shipping)
           });
         }
       }
@@ -378,6 +435,146 @@ router.post('/import-pricebooks', requireStoreCapability('costs'), async (req: R
     res.json({ ok: true, createdLines, createdCells });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Import failed' });
+  }
+});
+
+// ── Combos ──────────────────────────────────────────────────────────────────
+
+/** Items must be variants this store actually sells — not arbitrary ids. */
+async function unknownVariants(storeId: string, items: ComboItem[]): Promise<string[]> {
+  const ids = items.map(i => BigInt(i.variantId));
+  const [own, sold] = await Promise.all([
+    prisma.productVariant.findMany({ where: { storeId, variantId: { in: ids } }, select: { variantId: true } }),
+    prisma.orderLineItem.findMany({
+      where: { order: { storeId }, variantId: { in: ids } },
+      distinct: ['variantId'],
+      select: { variantId: true }
+    })
+  ]);
+  const known = new Set([...own, ...sold].map(v => String(v.variantId)));
+  return items.map(i => i.variantId).filter(id => !known.has(id));
+}
+
+async function comboBody(req: Request, res: Response, storeId: string, requireAll: boolean) {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 120) : undefined;
+  if (requireAll && !name) { res.status(400).json({ error: 'Name the combo' }); return null; }
+
+  if (req.body?.items === undefined) {
+    if (requireAll) { res.status(400).json({ error: 'Add the products in this combo' }); return null; }
+    return { name, items: undefined as ComboItem[] | undefined };
+  }
+  const items = normalizeComboItems(req.body.items);
+  const problem = validateCombo(items);
+  if (problem) { res.status(400).json({ error: problem }); return null; }
+  const unknown = await unknownVariants(storeId, items);
+  if (unknown.length) { res.status(400).json({ error: `Unknown product variants: ${unknown.join(', ')}` }); return null; }
+  return { name, items };
+}
+
+const DUPLICATE = 'P2002';
+
+router.post('/combos', requireStoreCapability('costs'), async (req: Request, res: Response) => {
+  try {
+    const storeId = req.resolved!.storeId;
+    const body = await comboBody(req, res, storeId, true);
+    if (!body) return;
+    const count = await prisma.cogsCombo.count({ where: { storeId } });
+    const combo = await prisma.cogsCombo.create({
+      data: {
+        userId: req.resolved!.userId,
+        storeId,
+        name: body.name!,
+        items: body.items as any,
+        signature: comboSignature(body.items!),
+        sortOrder: count
+      }
+    });
+    res.json({ combo: { id: combo.id, name: combo.name, items: body.items, sortOrder: combo.sortOrder, prices: [] } });
+  } catch (e: any) {
+    if (e?.code === DUPLICATE) return res.status(409).json({ error: 'A combo with exactly these products already exists' });
+    res.status(500).json({ error: e?.message || 'Failed to create combo' });
+  }
+});
+
+router.patch('/combos/:id', requireStoreCapability('costs'), async (req: Request, res: Response) => {
+  try {
+    const storeId = req.resolved!.storeId;
+    const existing = await prisma.cogsCombo.findFirst({ where: { id: req.params.id, storeId } });
+    if (!existing) return res.status(404).json({ error: 'Combo not found' });
+    const body = await comboBody(req, res, storeId, false);
+    if (!body) return;
+    const combo = await prisma.cogsCombo.update({
+      where: { id: existing.id },
+      data: {
+        ...(body.name ? { name: body.name } : {}),
+        ...(body.items ? { items: body.items as any, signature: comboSignature(body.items) } : {})
+      }
+    });
+    res.json({ combo: { id: combo.id, name: combo.name, items: normalizeComboItems(combo.items) } });
+  } catch (e: any) {
+    if (e?.code === DUPLICATE) return res.status(409).json({ error: 'A combo with exactly these products already exists' });
+    res.status(500).json({ error: e?.message || 'Failed to update combo' });
+  }
+});
+
+router.delete('/combos/:id', requireStoreCapability('costs'), async (req: Request, res: Response) => {
+  try {
+    const r = await prisma.cogsCombo.deleteMany({ where: { id: req.params.id, storeId: req.resolved!.storeId } });
+    if (r.count === 0) return res.status(404).json({ error: 'Combo not found' });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to delete combo' });
+  }
+});
+
+/**
+ * Bulk combo cell save. Body:
+ *   { cells: [{ comboId, lineId, productCost, shippingCost }] }
+ * Same clearing rules as PUT /prices. Both ids must belong to this store.
+ */
+router.put('/combo-prices', requireStoreCapability('costs'), async (req: Request, res: Response) => {
+  try {
+    const cells: any[] = Array.isArray(req.body?.cells) ? req.body.cells : [];
+    if (cells.length === 0) return res.json({ ok: true, saved: 0, deleted: 0 });
+    if (cells.length > 2000) return res.status(400).json({ error: 'At most 2000 cells per save' });
+
+    const storeId = req.resolved!.storeId;
+    const [lines, combos] = await Promise.all([
+      prisma.cogsLine.findMany({ where: { storeId }, select: { id: true } }),
+      prisma.cogsCombo.findMany({ where: { storeId }, select: { id: true } })
+    ]);
+    const lineIds = new Set(lines.map(l => l.id));
+    const comboIds = new Set(combos.map(c => c.id));
+
+    let saved = 0, deleted = 0;
+    const ops: Prisma.PrismaPromise<any>[] = [];
+    for (const c of cells) {
+      const lineId = String(c?.lineId || '');
+      const comboId = String(c?.comboId || '');
+      if (!lineIds.has(lineId) || !comboIds.has(comboId)) continue;
+      const parts = resolveCellCost(c);
+      if (parts === undefined) continue;
+      if (parts === null) {
+        ops.push(prisma.cogsComboPrice.deleteMany({ where: { comboId, lineId } }));
+        deleted++;
+      } else {
+        const data = {
+          productCost: dec(parts.productCost),
+          shippingCost: dec(parts.shippingCost),
+          cost: dec(parts.cost)
+        };
+        ops.push(prisma.cogsComboPrice.upsert({
+          where: { comboId_lineId: { comboId, lineId } },
+          create: { comboId, lineId, ...data },
+          update: data
+        }));
+        saved++;
+      }
+    }
+    await prisma.$transaction(ops);
+    res.json({ ok: true, saved, deleted });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to save combo prices' });
   }
 });
 
