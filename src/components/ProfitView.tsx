@@ -28,7 +28,7 @@ import { ProfitApiClient, PLSnapshot, OperatingCostItem } from '@/utils/profitAp
 import { formatInTimeZone } from 'date-fns-tz';
 import { format } from 'date-fns';
 import { detectMarginAlerts, computeMargins, MarginAlert } from '@/utils/marginAlerts';
-import { todayInTz, addDaysToDateString, tzDayBoundsUtc } from '@/utils/dateUtils';
+import { todayInTz, addDaysToDateString, tzDayBoundsUtc, formatInTz } from '@/utils/dateUtils';
 import { cn } from '@/lib/utils';
 
 type Period = 'day' | 'week' | 'month' | 'quarter' | 'year';
@@ -232,9 +232,11 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
   // but defaults to whatever the page-level filter is.
   useEffect(() => {
     if (!externalRange) return;
-    setFrom(dateToYmd(externalRange.from));
-    setTo(dateToYmd(externalRange.to));
-  }, [externalRange?.from?.getTime(), externalRange?.to?.getTime()]);
+    // Store-tz calendar days. dateToYmd reads the BROWSER's local date, which
+    // turned a store-tz "today" viewed from another timezone into two days.
+    setFrom(formatInTz(externalRange.from, timezone, 'yyyy-MM-dd'));
+    setTo(formatInTz(externalRange.to, timezone, 'yyyy-MM-dd'));
+  }, [externalRange?.from?.getTime(), externalRange?.to?.getTime(), timezone]);
 
   // Auto-refresh every 5 min when the range includes today — matches the
   // backend's today-cache TTL so each refresh either gets the cached payload
@@ -526,7 +528,8 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
         <Card>
           <CardContent className="p-4">
             <div className="flex flex-wrap items-center gap-3">
-              {/* Date range picker */}
+              {/* Date range picker — hidden when the dashboard's shared picker drives the range */}
+              {!externalRange && (
               <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="min-w-[260px] justify-start text-left font-normal">
@@ -569,6 +572,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                   </div>
                 </PopoverContent>
               </Popover>
+              )}
 
               {/* Period grouping */}
               <Select value={period} onValueChange={(v: Period) => setPeriod(v)}>

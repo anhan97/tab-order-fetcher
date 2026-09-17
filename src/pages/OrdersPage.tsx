@@ -12,9 +12,9 @@
  * Why one page: per-tab data sources end up calling the same backend
  * (/api/pl/today, /api/pl/daily, /api/orders), so divergence between
  * three separate pages was a real bug-source. Mounting them under one
- * route makes that impossible. Each tab keeps its own filter UI for now
- * but subscribes to the shared AppContext.dateRange so changing the
- * range in one tab carries to the others on next render.
+ * route makes that impossible. One date picker sits above the tabs and is
+ * the only thing that sets AppContext.dateRange, so all three always show
+ * the same period (default: today in the store timezone).
  */
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -27,6 +27,7 @@ import { OverviewCharts } from '@/components/OverviewCharts';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { LayoutDashboard, BarChart3, ListOrdered, Store } from 'lucide-react';
+import { GlobalDateRange } from '@/components/GlobalDateRange';
 
 export const OrdersPage = () => {
   const {
@@ -84,6 +85,7 @@ export const OrdersPage = () => {
 
   return (
     <Tabs value={tab} onValueChange={v => setTab(v as typeof tab)} className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
       <TabsList
         className="grid w-full max-w-md"
         style={{ gridTemplateColumns: `repeat(${visibleTabs.length}, minmax(0, 1fr))` }}
@@ -104,6 +106,8 @@ export const OrdersPage = () => {
           </TabsTrigger>
         )}
       </TabsList>
+      <GlobalDateRange />
+      </div>
 
       {visibleTabs.includes('overview') && (
         <TabsContent value="overview" className="mt-0">

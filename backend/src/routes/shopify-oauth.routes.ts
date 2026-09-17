@@ -32,12 +32,17 @@ const router = Router();
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
 
+// read_shopify_payments_payouts: the ONLY way to get per-order payment fees.
+// Shopify's Transaction resource has no fee field; fees live in the Shopify
+// Payments balance ledger, which answers 403 without this scope. Stores
+// connected before it was added must reconnect to grant it.
+//
 // read_customers on top of read_orders: needed to read the customer object +
 // full shipping address on orders. NOTE: the scope alone is NOT enough —
 // Shopify also requires "Protected customer data access" to be approved for
 // the app (Partner Dashboard → API access), otherwise name/address/phone/
 // email come back redacted even with the scope granted.
-const SCOPES = process.env.SHOPIFY_SCOPES || 'read_orders,write_orders,read_products,read_customers';
+const SCOPES = process.env.SHOPIFY_SCOPES || 'read_orders,write_orders,read_products,read_customers,read_shopify_payments_payouts';
 
 type ResolvedApp = { clientId: string; clientSecret: string; source: 'user' | 'db' | 'env' };
 

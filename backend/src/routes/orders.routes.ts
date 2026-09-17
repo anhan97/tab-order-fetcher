@@ -5,6 +5,10 @@
  * replaces reading the live Shopify proxy for the fulfillment screens.
  *
  *   GET    /                 list w/ filters + tab counts (paginated)
+ *   POST   /sync             pull orders from Shopify (optional backfill `since`) + fees
+ *   GET    /sync-status      last order sync, last fee sync and why fees may be missing
+ *   POST   /cost-summary     what is owed to the supplier for a selection
+ *   POST   /supplier-statement  CSV of that selection for the supplier
  *   GET    /export           CSV export (same filters) — customer + address + items
  *   GET    /:id              detail incl. line items
  *   PATCH  /:id/status       lifecycle transition (state machine enforced)
@@ -25,12 +29,22 @@ import {
 } from '../lib/order-export-fields';
 import { decryptToken } from '../lib/token-crypto';
 import { updateOrderTracking } from '../services/shopify.service';
+import { syncOrders, syncBalanceTransactions } from '../services/order-sync.service';
 import { audit } from '../lib/audit';
+import {
+  stuckWhere, issuesWhere, issueReasons, daysSinceShipped, parseStuckDays
+} from '../lib/fulfillment-views';
+import {
+  orderCost, summarize, statementRows, STATEMENT_HEADER, type CostOrder
+} from '../lib/supplier-cost';
 
 const router = Router();
 const prisma = new PrismaClient();
 
 router.use(requireAuth, requireActive, resolveStore);
+
+type View = 'STUCK' | 'ISSUES';
+type Settlement = 'unsettled' | 'settled';
 
 interface ListFilters {
   storeId: string;
@@ -39,87 +53,234 @@ interface ListFilters {
   paymentStatus?: string;
   from?: Date;
   to?: Date;
+  view?: View;
+  stuckDays: number;
+  settlement?: Settlement;
 }
 
-function buildWhere(f: ListFilters): Prisma.OrderWhereInput {
-  const where: Prisma.OrderWhereInput = { storeId: f.storeId };
-  if (f.fulfillStatus) where.fulfillStatus = f.fulfillStatus;
-  if (f.paymentStatus === 'unpaid') where.status = { notIn: ['paid', 'refunded', 'partially_refunded'] };
-  else if (f.paymentStatus) where.status = f.paymentStatus;
-  if (f.from || f.to) {
-    where.processedAt = {};
-    if (f.from) (where.processedAt as any).gte = f.from;
-    if (f.to) (where.processedAt as any).lte = f.to;
+/**
+ * Filters compose with AND so a view's own OR (STUCK, ISSUES) can never clobber
+ * the search box's OR — spreading them into one object would silently drop
+ * one of the two.
+ */
+function buildWhere(f: ListFilters, now = new Date()): Prisma.OrderWhereInput {
+  const and: Prisma.OrderWhereInput[] = [];
+  if (f.fulfillStatus) and.push({ fulfillStatus: f.fulfillStatus });
+  if (f.paymentStatus === 'unpaid') and.push({ status: { notIn: ['paid', 'refunded', 'partially_refunded'] } });
+  else if (f.paymentStatus) and.push({ status: f.paymentStatus });
+
+  if (f.view === 'STUCK') and.push(stuckWhere(now, f.stuckDays));
+  else if (f.view === 'ISSUES') and.push(issuesWhere(now));
+  // STUCK / ISSUES describe current state — an order shipped a month ago is
+  // exactly what they exist for — so the date range only narrows the others.
+  else if (f.from || f.to) {
+    and.push({ processedAt: { ...(f.from ? { gte: f.from } : {}), ...(f.to ? { lte: f.to } : {}) } });
   }
+
+  if (f.settlement === 'unsettled') and.push({ supplierSettlementId: null });
+  else if (f.settlement === 'settled') and.push({ supplierSettlementId: { not: null } });
+
   if (f.q) {
-    where.OR = [
-      { orderNumber: { contains: f.q, mode: 'insensitive' } },
-      { customerName: { contains: f.q, mode: 'insensitive' } },
-      { customerEmail: { contains: f.q, mode: 'insensitive' } },
-      { customerPhone: { contains: f.q, mode: 'insensitive' } },
-      { trackingNumber: { contains: f.q, mode: 'insensitive' } }
-    ];
+    and.push({
+      OR: [
+        { orderNumber: { contains: f.q, mode: 'insensitive' } },
+        { customerName: { contains: f.q, mode: 'insensitive' } },
+        { customerEmail: { contains: f.q, mode: 'insensitive' } },
+        { customerPhone: { contains: f.q, mode: 'insensitive' } },
+        { trackingNumber: { contains: f.q, mode: 'insensitive' } }
+      ]
+    });
   }
-  return where;
+  return and.length ? { storeId: f.storeId, AND: and } : { storeId: f.storeId };
 }
 
-function parseFilters(req: Request): ListFilters {
+const validDate = (v: unknown): Date | undefined => {
+  if (!v) return undefined;
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? undefined : d;
+};
+
+function parseFilters(src: Record<string, any>, storeId: string): ListFilters {
+  const view = String(src.view || '').trim().toUpperCase();
+  const settlement = String(src.settlement || '').trim().toLowerCase();
   return {
-    storeId: req.resolved!.storeId,
-    q: String(req.query.q || '').trim() || undefined,
-    fulfillStatus: String(req.query.fulfillStatus || '').trim().toUpperCase() || undefined,
-    paymentStatus: String(req.query.paymentStatus || '').trim() || undefined,
-    from: req.query.from ? new Date(String(req.query.from)) : undefined,
-    to: req.query.to ? new Date(String(req.query.to)) : undefined
+    storeId,
+    q: String(src.q || '').trim() || undefined,
+    fulfillStatus: String(src.fulfillStatus || '').trim().toUpperCase() || undefined,
+    paymentStatus: String(src.paymentStatus || '').trim() || undefined,
+    from: validDate(src.from),
+    to: validDate(src.to),
+    view: view === 'STUCK' || view === 'ISSUES' ? view : undefined,
+    stuckDays: parseStuckDays(src.stuckDays),
+    settlement: settlement === 'unsettled' || settlement === 'settled' ? settlement : undefined
   };
 }
 
+const COST_LINE_SELECT = {
+  id: true, title: true, sku: true, variantTitle: true, quantity: true, price: true,
+  variantId: true, unitBasecost: true, unitProductCost: true, unitShippingCost: true
+} as const;
+
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const filters = parseFilters(req);
+    const filters = parseFilters(req.query, req.resolved!.storeId);
     const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10) || 50, 200);
     const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
+    const now = new Date();
 
-    const where = buildWhere(filters);
-    const [orders, total, statusCounts, unpaidCount] = await Promise.all([
+    const where = buildWhere(filters, now);
+    // Status tabs follow the date / search / settlement filters; the two
+    // attention views count across all dates, like the views themselves.
+    const tabBase = { ...filters, fulfillStatus: undefined, paymentStatus: undefined, view: undefined };
+    const [orders, total, statusCounts, unpaidCount, stuckCount, issuesCount] = await Promise.all([
       prisma.order.findMany({
         where,
-        orderBy: { processedAt: 'desc' },
+        orderBy: filters.view === 'STUCK' ? [{ shippedAt: 'asc' }, { processedAt: 'asc' }] : { processedAt: 'desc' },
         skip: offset,
         take: limit,
         include: {
-          // Explicit select: variantId/productId are BigInt and would crash
-          // res.json — the list view doesn't need them anyway.
-          lineItems: {
-            select: { id: true, title: true, sku: true, quantity: true, price: true }
-          }
+          lineItems: { select: COST_LINE_SELECT },
+          supplierSettlement: { select: { id: true, paidAt: true, reference: true, status: true } }
         }
       }),
       prisma.order.count({ where }),
-      // Tab counts ignore the fulfillStatus filter itself (a tab shows its own
-      // count regardless of which tab is active) but respect q/date filters.
-      prisma.order.groupBy({
-        by: ['fulfillStatus'],
-        where: buildWhere({ ...filters, fulfillStatus: undefined }),
-        _count: { _all: true }
-      }),
-      prisma.order.count({
-        where: {
-          ...buildWhere({ ...filters, fulfillStatus: undefined }),
-          status: { notIn: ['paid', 'refunded', 'partially_refunded'] }
-        }
-      })
+      prisma.order.groupBy({ by: ['fulfillStatus'], where: buildWhere(tabBase, now), _count: { _all: true } }),
+      prisma.order.count({ where: buildWhere({ ...tabBase, paymentStatus: 'unpaid' }, now) }),
+      prisma.order.count({ where: buildWhere({ ...tabBase, from: undefined, to: undefined, view: 'STUCK' }, now) }),
+      prisma.order.count({ where: buildWhere({ ...tabBase, from: undefined, to: undefined, view: 'ISSUES' }, now) })
     ]);
 
-    const tabs: Record<string, number> = { ALL: 0, UNPAID: unpaidCount };
+    const tabs: Record<string, number> = { ALL: 0, UNPAID: unpaidCount, STUCK: stuckCount, ISSUES: issuesCount };
     for (const row of statusCounts) {
       tabs[row.fulfillStatus] = row._count._all;
       tabs.ALL += row._count._all;
     }
 
-    res.json({ orders, total, limit, offset, tabs });
+    res.json({
+      orders: orders.map(o => {
+        const shipped = daysSinceShipped(o, now);
+        return {
+          ...o,
+          // BigInt is not JSON-serializable; the client only needs a flag.
+          lineItems: o.lineItems.map(({ variantId, ...li }) => ({ ...li, hasVariant: variantId !== null })),
+          supplierCost: orderCost(o),
+          issues: issueReasons(o, now),
+          daysSinceShipped: o.fulfillStatus === 'SHIPPED' || o.fulfillStatus === 'DELIVERED' ? shipped.days : null,
+          shippedAtEstimated: shipped.estimated
+        };
+      }),
+      total, limit, offset, tabs, stuckDays: filters.stuckDays
+    });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to list orders' });
+  }
+});
+
+// ── Sync ────────────────────────────────────────────────────────────────────
+
+/**
+ * Pull orders now. Without `since` this is the incremental sync (orders
+ * updated since the last run). With `since` it re-pulls every order created
+ * after that date — the way to fill a gap. Fees for the same window follow.
+ *
+ * Replaces POST /api/shopify/stores/:id/sync for this page: that route only
+ * accepted the store's owner, so a granted manager got a 404.
+ */
+router.post('/sync', requireStoreCapability('sync'), async (req: Request, res: Response) => {
+  try {
+    const storeId = req.resolved!.storeId;
+    const since = validDate(req.body?.since);
+    if (since && since.getTime() < Date.now() - 400 * 86_400_000) {
+      return res.status(400).json({ error: 'Backfill is limited to the last 400 days' });
+    }
+    const orders = await syncOrders(storeId, since ? { since, pullTransactions: false } : { pullTransactions: false });
+    const feeFrom = since ?? new Date(Date.now() - 14 * 86_400_000);
+    const fees = await syncBalanceTransactions(storeId, feeFrom, new Date());
+    await audit({
+      userId: req.resolved!.userId,
+      actorUserId: req.resolved!.actorId,
+      action: since ? 'orders.backfilled' : 'orders.synced',
+      target: req.resolved!.storeDomain,
+      metadata: { since: since?.toISOString() ?? null, created: orders.ordersCreated, updated: orders.ordersUpdated }
+    });
+    res.json({ orders, fees });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Sync failed' });
+  }
+});
+
+router.get('/sync-status', async (req: Request, res: Response) => {
+  try {
+    const store = await prisma.shopifyStore.findUnique({
+      where: { id: req.resolved!.storeId },
+      select: { ordersSyncedAt: true, feeSyncAt: true, feeSyncError: true }
+    });
+    const [orderCount, firstOrder] = await Promise.all([
+      prisma.order.count({ where: { storeId: req.resolved!.storeId } }),
+      prisma.order.findFirst({
+        where: { storeId: req.resolved!.storeId },
+        orderBy: { processedAt: 'asc' },
+        select: { processedAt: true }
+      })
+    ]);
+    res.json({ ...store, orderCount, firstOrderAt: firstOrder?.processedAt ?? null });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to load sync status' });
+  }
+});
+
+// ── Supplier cost ───────────────────────────────────────────────────────────
+
+const MAX_SELECTION = 5000;
+
+/**
+ * The orders a selection refers to: explicit `ids`, or every order matching
+ * `filters` (the "select all N matching" case, across pages).
+ */
+async function loadSelection(storeId: string, body: any) {
+  const ids: string[] = Array.isArray(body?.ids) ? body.ids.map(String).slice(0, MAX_SELECTION + 1) : [];
+  const where: Prisma.OrderWhereInput = ids.length
+    ? { storeId, id: { in: ids } }
+    : buildWhere(parseFilters(body?.filters || {}, storeId));
+  if (!ids.length && !body?.filters) throw Object.assign(new Error('Pass ids or filters'), { status: 400 });
+
+  const count = await prisma.order.count({ where });
+  if (count > MAX_SELECTION) {
+    throw Object.assign(new Error(`Selection too large (${count} orders) — narrow the date range, max ${MAX_SELECTION}`), { status: 400 });
+  }
+  return prisma.order.findMany({
+    where,
+    orderBy: { processedAt: 'asc' },
+    select: {
+      id: true, orderNumber: true, supplier: true, shippingCompany: true, shippingCountryCode: true,
+      fulfillStatus: true, supplierSettlementId: true, processedAt: true, shippedAt: true, trackingNumber: true,
+      lineItems: { select: COST_LINE_SELECT }
+    }
+  });
+}
+
+router.post('/cost-summary', async (req: Request, res: Response) => {
+  try {
+    const orders = await loadSelection(req.resolved!.storeId, req.body);
+    const summary = summarize(orders as unknown as CostOrder[]);
+    const currency = (await prisma.cogsLine.findFirst({
+      where: { storeId: req.resolved!.storeId }, orderBy: { sortOrder: 'asc' }, select: { currency: true }
+    }))?.currency ?? 'USD';
+    res.json({ ...summary, currency, selected: orders.length });
+  } catch (e: any) {
+    res.status(e?.status || 500).json({ error: e?.message || 'Failed to summarize' });
+  }
+});
+
+router.post('/supplier-statement', async (req: Request, res: Response) => {
+  try {
+    const orders = await loadSelection(req.resolved!.storeId, req.body);
+    const rows = [STATEMENT_HEADER, ...statementRows(orders as any)];
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="supplier-statement-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send('﻿' + serializeRows(rows, 'comma'));
+  } catch (e: any) {
+    res.status(e?.status || 500).json({ error: e?.message || 'Failed to build statement' });
   }
 });
 
@@ -191,7 +352,7 @@ router.delete('/export-presets/:id', requireStoreCapability('fulfill'), async (r
  */
 router.get('/export', async (req: Request, res: Response) => {
   try {
-    const filters = parseFilters(req);
+    const filters = parseFilters(req.query, req.resolved!.storeId);
     const idsParam = String(req.query.ids || '').trim();
     const where = idsParam
       ? { storeId: filters.storeId, id: { in: idsParam.split(',').map(s => s.trim()).filter(Boolean) } }

@@ -19,19 +19,22 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
   const store = await prisma.shopifyStore.findUnique({ where: { id: storeId } });
   if (!store) throw new Error('Store not found');
 
-  // Determine the lower bound. If the caller didn't pass `since`, use the last
-  // synced order's date — this is the incremental cron path. When the caller
-  // passes `since` explicitly (e.g. from the UI date range), respect it so
-  // existing orders within that range get re-synced (so we can pick up refunds
-  // and updated transactions).
-  let since = options.since;
-  if (since === undefined) {
-    const lastOrder = await prisma.order.findFirst({
-      where: { storeId },
-      orderBy: { shopifyCreatedAt: 'desc' }
-    });
-    since = lastOrder?.shopifyCreatedAt ?? lastOrder?.createdAt ?? undefined;
-  }
+  // Two modes:
+  //   • Explicit `since` (backfill, UI range, P&L scheduler): every order
+  //     CREATED in the window is re-pulled.
+  //   • Incremental (no since/until): every order UPDATED since the last
+  //     successful run. This used to be "created after the newest order we
+  //     have", which never revisited older orders (new fulfillments and
+  //     refunds were missed) and never filled a gap left by a failed first
+  //     sync. With no cursor yet we pull everything Shopify will give us (its
+  //     REST API limits plain read_orders to the last 60 days).
+  const incremental = options.since === undefined && options.until === undefined;
+  const since = options.since;
+  const updatedSince = incremental && store.ordersSyncedAt
+    // Small overlap so an order updated during the previous run isn't missed.
+    ? new Date(store.ordersSyncedAt.getTime() - 5 * 60 * 1000)
+    : undefined;
+  const startedAt = new Date();
 
   const result: SyncResult = { ordersCreated: 0, ordersUpdated: 0, transactionsSynced: 0, errors: [] };
   const pullTransactions = options.pullTransactions !== false;
@@ -44,6 +47,7 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
       {
         createdAtMin: since?.toISOString(),
         createdAtMax: options.until?.toISOString(),
+        updatedAtMin: updatedSince?.toISOString(),
         limit: 250,
         page_info: pageInfo,
         // Always include cancelled orders too so refunds/cancellations show up correctly in P&L.
@@ -80,18 +84,23 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
           // /orders/transactions returns fee=0 until settlement, but a prior
           // Balance Transactions sync may have stored the real fee already.
           const summary = summarizeTransactionFees(txs);
-          const aggregate = await prisma.orderTransaction.aggregate({
-            where: {
-              orderId: upserted.orderId,
-              status: 'success',
-              kind: { in: ['sale', 'capture', 'refund'] }
-            },
-            _sum: { fee: true }
-          });
+          // Refund fees come back to the merchant, so they reduce the total —
+          // the same rule syncBalanceTransactions and P&L apply.
+          const [charges, refunds] = await Promise.all([
+            prisma.orderTransaction.aggregate({
+              where: { orderId: upserted.orderId, status: 'success', kind: { in: ['sale', 'capture'] } },
+              _sum: { fee: true }
+            }),
+            prisma.orderTransaction.aggregate({
+              where: { orderId: upserted.orderId, status: 'success', kind: 'refund' },
+              _sum: { fee: true }
+            })
+          ]);
+          const netFee = Math.max(0, Number(charges._sum.fee || 0) - Number(refunds._sum.fee || 0));
           await prisma.order.update({
             where: { id: upserted.orderId },
             data: {
-              paymentFee: new Prisma.Decimal(aggregate._sum.fee || 0),
+              paymentFee: new Prisma.Decimal(netFee.toFixed(2)),
               paymentGateway: summary.primaryGateway || (order.payment_gateway_names?.[0] ?? order.gateway ?? null)
             }
           });
@@ -103,6 +112,12 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
 
     pageInfo = nextPage;
   } while (pageInfo);
+
+  // Only advance the cursor once every page came back — a thrown page leaves
+  // it untouched so the next run covers the same ground again.
+  if (incremental) {
+    await prisma.shopifyStore.update({ where: { id: storeId }, data: { ordersSyncedAt: startedAt } });
+  }
 
   return result;
 }
@@ -178,6 +193,11 @@ async function upsertOrder(
   // ready_for_pickup|confirmed|in_transit|out_for_delivery|delivered|failure
   const shipmentStatus: string | null =
     fulfillments.map(f => f.shipment_status).find(Boolean) ?? null;
+  // Earliest fulfillment = when the parcel actually left.
+  const shippedTimes = fulfillments
+    .map(f => (f.created_at ? new Date(f.created_at).getTime() : NaN))
+    .filter(t => Number.isFinite(t));
+  const shippedFromShopify = shippedTimes.length ? new Date(Math.min(...shippedTimes)) : null;
 
   const data = {
     orderNumber: String(order.order_number ?? order.name ?? order.id),
@@ -211,7 +231,7 @@ async function upsertOrder(
 
   const existing = await prisma.order.findUnique({
     where: { userId_storeId_shopifyOrderId: { userId, storeId, shopifyOrderId: String(order.id) } },
-    select: { id: true, fulfillStatus: true, trackingNumber: true, deliveryStatus: true }
+    select: { id: true, fulfillStatus: true, trackingNumber: true, deliveryStatus: true, shippedAt: true }
   });
 
   const effectiveTracking = trackingNumber ?? existing?.trackingNumber ?? null;
@@ -219,6 +239,7 @@ async function upsertOrder(
     // Shopify is authoritative: latest tracking from the store wins.
     trackingNumber: effectiveTracking,
     deliveryStatus: shipmentStatus ?? existing?.deliveryStatus ?? null,
+    shippedAt: shippedFromShopify ?? existing?.shippedAt ?? null,
     fulfillStatus: fulfillStatusFromShopify(existing?.fulfillStatus ?? 'PENDING', order, effectiveTracking, shipmentStatus)
   };
 
@@ -406,7 +427,8 @@ function pickCogsLine(
 
 /**
  * Snapshot per-unit landed cost onto each OrderLineItem (frozen so historical
- * basecost doesn't drift when prices are edited later).
+ * basecost doesn't drift when prices are edited later). The product / shipping
+ * split is frozen alongside the total: it is what the supplier gets paid.
  *
  * Cost source, in order:
  *   0. Combo (CogsCombo): the basket exactly matches a combo priced on the
@@ -416,7 +438,12 @@ function pickCogsLine(
  *        exact set price (setQty=q)            → unit = cost/q
  *        else single price (setQty=1) × q      → unit = cost(set 1)
  *   2. Fallback: ProductVariant.basecost (legacy flat per-unit cost) — keeps
- *      P&L working exactly as before for stores that haven't filled the matrix.
+ *      P&L working for stores that haven't filled the matrix. It has no split,
+ *      so it is frozen as all-product, zero-shipping.
+ *
+ * Orders already covered by a SupplierSettlement are never re-costed: their
+ * figures are what was paid, and changing them afterwards would make the books
+ * disagree with the payment.
  *
  * Idempotent: safe to call multiple times for the same order.
  */
@@ -427,10 +454,12 @@ export async function recomputeOrderCostSnapshots(_userId: string, storeId: stri
       supplier: true,
       shippingCompany: true,
       shippingCountryCode: true,
+      supplierSettlementId: true,
       lineItems: { select: { id: true, variantId: true, quantity: true } }
     }
   });
   if (!order || !order.lineItems.length) return;
+  if (order.supplierSettlementId) return;
 
   // ProductVariant.variantId is a global @id, so we look up by PK without
   // tenant scoping — variant ownership was already enforced at sync time.
@@ -447,17 +476,33 @@ export async function recomputeOrderCostSnapshots(_userId: string, storeId: stri
       select: { id: true, supplier: true, carrier: true, countryCode: true, sortOrder: true }
     })
   ]);
-  const basecostMap = new Map(variants.map(v => [v.variantId.toString(), v.basecost]));
+  const basecostMap = new Map(variants.map(v => [v.variantId.toString(), Number(v.basecost)]));
 
+  type Split = { total: number; product: number; shipping: number };
   const line = pickCogsLine(lines, order);
-  const priceMap = new Map<string, Prisma.Decimal>();
+  const priceMap = new Map<string, Split>();
   if (line) {
     const prices = await prisma.cogsPrice.findMany({
       where: { lineId: line.id, variantId: { in: variantIds } },
-      select: { variantId: true, setQty: true, cost: true }
+      select: { variantId: true, setQty: true, cost: true, productCost: true, shippingCost: true }
     });
-    for (const p of prices) priceMap.set(`${p.variantId}:${p.setQty}`, p.cost);
+    for (const pr of prices) {
+      priceMap.set(`${pr.variantId}:${pr.setQty}`, {
+        total: Number(pr.cost), product: Number(pr.productCost), shipping: Number(pr.shippingCost)
+      });
+    }
   }
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const write = (id: string, unit: Split) =>
+    prisma.orderLineItem.update({
+      where: { id },
+      data: {
+        unitBasecost: new Prisma.Decimal(round2(unit.total).toFixed(2)),
+        unitProductCost: new Prisma.Decimal(round2(unit.product).toFixed(2)),
+        unitShippingCost: new Prisma.Decimal(round2(unit.shipping).toFixed(2))
+      }
+    });
 
   // Combo first: when the whole basket is exactly a priced combo on this ship
   // line, its cost wins over per-item prices — buying these products together
@@ -467,29 +512,26 @@ export async function recomputeOrderCostSnapshots(_userId: string, storeId: stri
     const combo = signature
       ? await prisma.cogsCombo.findUnique({
           where: { storeId_signature: { storeId, signature } },
-          select: { prices: { where: { lineId: line.id }, select: { cost: true } } }
+          select: { prices: { where: { lineId: line.id }, select: { cost: true, productCost: true, shippingCost: true } } }
         })
       : null;
-    const comboCost = combo?.prices[0]?.cost;
-    if (comboCost !== undefined) {
+    const comboPrice = combo?.prices[0];
+    if (comboPrice) {
+      const total = Number(comboPrice.cost);
+      // Each item keeps the combo's own goods/freight ratio.
+      const productShare = total > 0 ? Number(comboPrice.productCost) / total : 1;
       const units = allocateComboCost(
-        Number(comboCost),
+        total,
         order.lineItems.map(li => {
-          const single = priceMap.get(`${li.variantId}:1`) ?? basecostMap.get(String(li.variantId));
-          return {
-            key: li.id,
-            qty: li.quantity > 0 ? li.quantity : 1,
-            singleUnitPrice: single !== undefined ? Number(single) : undefined
-          };
+          const single = priceMap.get(`${li.variantId}:1`)?.total ?? basecostMap.get(String(li.variantId));
+          return { key: li.id, qty: li.quantity > 0 ? li.quantity : 1, singleUnitPrice: single };
         })
       );
       for (const li of order.lineItems) {
         const unit = units.get(li.id);
         if (unit === undefined) continue;
-        await prisma.orderLineItem.update({
-          where: { id: li.id },
-          data: { unitBasecost: new Prisma.Decimal(unit.toFixed(2)) }
-        });
+        const product = round2(unit * productShare);
+        await write(li.id, { total: unit, product, shipping: round2(unit - product) });
       }
       return;
     }
@@ -500,23 +542,21 @@ export async function recomputeOrderCostSnapshots(_userId: string, storeId: stri
     const qty = li.quantity > 0 ? li.quantity : 1;
     const vid = li.variantId.toString();
 
-    let unit: Prisma.Decimal | undefined;
+    let unit: Split | undefined;
     const exactSet = priceMap.get(`${vid}:${qty}`);
     const single = priceMap.get(`${vid}:1`);
     if (exactSet !== undefined) {
-      unit = new Prisma.Decimal(Number(exactSet) / qty).toDecimalPlaces(2);
+      unit = { total: exactSet.total / qty, product: exactSet.product / qty, shipping: exactSet.shipping / qty };
     } else if (single !== undefined) {
       unit = single;
-    } else {
-      unit = basecostMap.get(vid);
+    } else if (basecostMap.has(vid)) {
+      const b = basecostMap.get(vid)!;
+      // Basecost 0 means "never priced" (variants are auto-created at 0) —
+      // leave the line uncosted so it shows as missing, not as a free item.
+      if (b > 0) unit = { total: b, product: b, shipping: 0 };
     }
 
-    if (unit !== undefined) {
-      await prisma.orderLineItem.update({
-        where: { id: li.id },
-        data: { unitBasecost: unit }
-      });
-    }
+    if (unit !== undefined) await write(li.id, unit);
   }
 }
 
@@ -532,74 +572,125 @@ function sumRefunds(order: any): number {
 }
 
 /**
- * After orders + their transactions have been synced, pull Shopify Payments
- * balance transactions for the same window and update OrderTransaction rows
- * with authoritative fee/net values (REST /orders/transactions returns fee=0
- * until the transaction is settled into a payout).
+ * Pull Shopify Payments balance transactions for a window and store their
+ * fees on the matching orders.
  *
- * Returns the number of OrderTransaction rows updated.
+ * This is the ONLY source of per-order payment fees: Shopify's REST
+ * Transaction resource has no fee field at all, so /orders/{id}/transactions
+ * always yields fee = 0. The balance ledger does carry fee/net, but needs the
+ * read_shopify_payments_payouts scope and a store on Shopify Payments.
+ *
+ * Failures are recorded on the store (feeSyncError) rather than swallowed, so
+ * the UI can tell "fees are 0 because the app lacks permission" apart from
+ * "this order genuinely had no fee".
+ *
+ * Matching: a balance row points at the order transaction it came from. When
+ * that transaction was never pulled (webhook-ingested orders skip it), the row
+ * is stored as a transaction itself, keyed by the same Shopify id, so a later
+ * transaction pull updates it instead of duplicating it — and P&L, which sums
+ * OrderTransaction fees, agrees with the per-order fee column.
  */
 export async function syncBalanceTransactions(
   storeId: string,
   since: Date,
   until: Date
-): Promise<{ updated: number; balanceRows: number; errors: string[] }> {
+): Promise<{ updated: number; created: number; balanceRows: number; errors: string[] }> {
   const store = await prisma.shopifyStore.findUnique({ where: { id: storeId } });
   if (!store) throw new Error('Store not found');
 
-  let balances;
+  let balances: Awaited<ReturnType<typeof fetchBalanceTransactions>>;
   try {
     balances = await fetchBalanceTransactions(store.storeDomain, decryptToken(store.accessToken), since, until);
   } catch (e: any) {
-    // Endpoint returns 404/403 if the store does not use Shopify Payments — that's fine, just no-op.
-    return { updated: 0, balanceRows: 0, errors: [e?.message || String(e)] };
+    const msg = e?.message || String(e);
+    const reason = /\b(401|403)\b/.test(msg)
+      ? 'missing_scope: the Shopify app is not allowed to read Shopify Payments payouts (read_shopify_payments_payouts). Add the scope and reconnect the store.'
+      : /\b404\b/.test(msg)
+        ? 'not_shopify_payments: this store does not use Shopify Payments, so Shopify exposes no processing fees.'
+        : `error: ${msg.slice(0, 300)}`;
+    await prisma.shopifyStore.update({ where: { id: storeId }, data: { feeSyncError: reason, feeSyncAt: new Date() } });
+    console.warn(`[fees] ${store.storeDomain}: ${reason}`);
+    return { updated: 0, created: 0, balanceRows: 0, errors: [reason] };
   }
 
-  let updated = 0;
-  const orderTxIdsAffected = new Set<string>();
+  let updated = 0, created = 0;
+  const affectedOrderIds = new Set<string>();
+  const orderIdByShopifyId = new Map<string, string | null>();
+
   for (const b of balances) {
-    if (!b.source_order_transaction_id) continue;
-    const fee = parseFloat(b.fee || '0') || 0;
-    const amount = parseFloat(b.amount || '0') || 0;
-    const net = parseFloat(b.net || (amount - fee).toString()) || (amount - fee);
+    if (!b.source_order_transaction_id || !b.source_order_id) continue;
+    // Sign lives in `kind` (P&L subtracts refund fees), so store magnitudes.
+    const fee = Math.abs(parseFloat(b.fee || '0') || 0);
+    const amount = Math.abs(parseFloat(b.amount || '0') || 0);
+    const txId = String(b.source_order_transaction_id);
 
-    // Match by shopifyTransactionId. Multiple OrderTransaction rows could have
-    // the same shopifyTransactionId across different stores, so scope by storeId.
     const matched = await prisma.orderTransaction.findMany({
-      where: { storeId, shopifyTransactionId: String(b.source_order_transaction_id) },
-      select: { id: true }
+      where: { storeId, shopifyTransactionId: txId },
+      select: { id: true, orderId: true }
     });
-    for (const m of matched) {
-      await prisma.orderTransaction.update({
-        where: { id: m.id },
-        data: {
-          fee: new Prisma.Decimal(fee),
-          net: new Prisma.Decimal(net)
-        }
-      });
-      orderTxIdsAffected.add(m.id);
-      updated++;
+    if (matched.length) {
+      for (const m of matched) {
+        await prisma.orderTransaction.update({
+          where: { id: m.id },
+          data: { fee: new Prisma.Decimal(fee), net: new Prisma.Decimal(amount - fee) }
+        });
+        affectedOrderIds.add(m.orderId);
+        updated++;
+      }
+      continue;
     }
+
+    const shopifyOrderId = String(b.source_order_id);
+    if (!orderIdByShopifyId.has(shopifyOrderId)) {
+      const o = await prisma.order.findFirst({ where: { storeId, shopifyOrderId }, select: { id: true } });
+      orderIdByShopifyId.set(shopifyOrderId, o?.id ?? null);
+    }
+    const orderId = orderIdByShopifyId.get(shopifyOrderId);
+    if (!orderId) continue; // order not synced yet — a later run picks it up
+
+    const isRefund = /refund/i.test(b.type || '') || parseFloat(b.amount || '0') < 0;
+    await prisma.orderTransaction.upsert({
+      where: { orderId_shopifyTransactionId: { orderId, shopifyTransactionId: txId } },
+      create: {
+        userId: store.userId,
+        storeId,
+        orderId,
+        shopifyTransactionId: txId,
+        kind: isRefund ? 'refund' : 'sale',
+        status: 'success',
+        gateway: 'shopify_payments',
+        amount: new Prisma.Decimal(amount),
+        fee: new Prisma.Decimal(fee),
+        net: new Prisma.Decimal(amount - fee),
+        currency: b.currency,
+        processedAt: b.processed_at ? new Date(b.processed_at) : null
+      },
+      update: { fee: new Prisma.Decimal(fee), net: new Prisma.Decimal(amount - fee) }
+    });
+    affectedOrderIds.add(orderId);
+    created++;
   }
 
-  // Recompute Order.paymentFee aggregate after fee backfill.
-  const orderIdsToRecompute = await prisma.orderTransaction.findMany({
-    where: { id: { in: Array.from(orderTxIdsAffected) } },
-    select: { orderId: true },
-    distinct: ['orderId']
-  });
-  for (const { orderId } of orderIdsToRecompute) {
-    const aggregate = await prisma.orderTransaction.aggregate({
-      where: { orderId, status: 'success', kind: { in: ['sale', 'capture', 'refund'] } },
-      _sum: { fee: true }
-    });
+  for (const orderId of affectedOrderIds) {
+    const [charges, refunds] = await Promise.all([
+      prisma.orderTransaction.aggregate({
+        where: { orderId, status: 'success', kind: { in: ['sale', 'capture'] } },
+        _sum: { fee: true }
+      }),
+      prisma.orderTransaction.aggregate({
+        where: { orderId, status: 'success', kind: 'refund' },
+        _sum: { fee: true }
+      })
+    ]);
+    const net = Number(charges._sum.fee || 0) - Number(refunds._sum.fee || 0);
     await prisma.order.update({
       where: { id: orderId },
-      data: { paymentFee: new Prisma.Decimal(aggregate._sum.fee || 0) }
+      data: { paymentFee: new Prisma.Decimal(Math.max(0, net).toFixed(2)), paymentGateway: 'shopify_payments' }
     });
   }
 
-  return { updated, balanceRows: balances.length, errors: [] };
+  await prisma.shopifyStore.update({ where: { id: storeId }, data: { feeSyncError: null, feeSyncAt: new Date() } });
+  return { updated, created, balanceRows: balances.length, errors: [] };
 }
 
 function extractUtmParameters(order: any) {

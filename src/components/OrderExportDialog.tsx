@@ -44,9 +44,15 @@ interface Props {
   /** Current list filters so the export matches what's on screen. */
   q: string;
   tab: string;
+  /**
+   * The same query params the list request sends (date range, view, supplier
+   * payment filter…). Without them an export from "Today" or "Issues" would
+   * silently contain every order in the store.
+   */
+  filters?: Record<string, string>;
 }
 
-export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
+export const OrderExportDialog = ({ open, onOpenChange, q, tab, filters }: Props) => {
   const { toast } = useToast();
   const [fields, setFields] = useState<FieldDef[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -123,10 +129,12 @@ export const OrderExportDialog = ({ open, onOpenChange, q, tab }: Props) => {
   };
 
   const buildParams = (format: 'csv' | 'tsv') => {
-    const params = new URLSearchParams();
-    if (q) params.set('q', q);
-    if (tab === 'UNPAID') params.set('paymentStatus', 'unpaid');
-    else if (tab !== 'ALL') params.set('fulfillStatus', tab);
+    const params = new URLSearchParams(filters ?? {});
+    if (!filters) {
+      if (q) params.set('q', q);
+      if (tab === 'UNPAID') params.set('paymentStatus', 'unpaid');
+      else if (tab !== 'ALL') params.set('fulfillStatus', tab);
+    }
     params.set('columns', selected.join(','));
     params.set('format', format);
     if (!includeHeader) params.set('header', 'false');

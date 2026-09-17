@@ -155,18 +155,27 @@ model AuditLog {
 }
 
 model ShopifyStore {
-  id                     String   @id @default(uuid())
+  id                     String    @id @default(uuid())
   userId                 String
   storeDomain            String
   accessToken            String
   name                   String?
-  isActive               Boolean  @default(true)
+  isActive               Boolean   @default(true)
   // Default supplier/shipping company used when an order has no fulfillment
   // tracking yet — falls back to this for COGS estimation.
   defaultShippingCompany String?
   defaultSupplier        String?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  // Last Shopify Payments fee sync. feeSyncError is set when the balance API
+  // refuses us (missing read_shopify_payments_payouts scope, store not on
+  // Shopify Payments) so the UI can say WHY fees are 0 instead of guessing.
+  feeSyncError           String?
+  feeSyncAt              DateTime?
+  // Start time of the last successful incremental order sync. Next run asks
+  // Shopify for orders UPDATED since then, so fulfillments / refunds on old
+  // orders are picked up and a failed first sync never leaves a permanent gap.
+  ordersSyncedAt         DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   // Relationships
   user         User           @relation(fields: [userId], references: [id])
@@ -185,9 +194,10 @@ model ShopifyStore {
   operatingCosts    OperatingCost[]
   orderTransactions OrderTransaction[]
 
-  campaignMappings   CampaignStoreMapping[]
-  orderExportPresets OrderExportPreset[]
-  members            StoreMember[]
+  campaignMappings    CampaignStoreMapping[]
+  orderExportPresets  OrderExportPreset[]
+  members             StoreMember[]
+  supplierSettlements SupplierSettlement[]
 
   @@unique([userId, storeDomain])
 }
@@ -266,13 +276,20 @@ model Order {
   // ORDER_FULFILL_TRANSITIONS server-side:
   //   PENDING → PROCESSING|SHIPPED|CANCELLED, PROCESSING → SHIPPED|CANCELLED,
   //   SHIPPED → DELIVERED. Setting a tracking number auto-advances to SHIPPED.
-  fulfillStatus   String  @default("PENDING")
-  trackingNumber  String?
-  deliveryStatus  String? // carrier-reported (e.g. 17Track): InTransit | Delivered | ...
+  fulfillStatus        String              @default("PENDING")
+  trackingNumber       String?
+  deliveryStatus       String? // carrier-reported (e.g. 17Track): InTransit | Delivered | ...
+  // When the parcel left: earliest Shopify fulfillment created_at. Drives the
+  // "shipped long ago but not delivered" view. Null for orders synced before
+  // this column existed until they are re-synced.
+  shippedAt            DateTime?
+  // Set once the supplier has been paid for this order — see SupplierSettlement.
+  supplierSettlementId String?
+  supplierSettlement   SupplierSettlement? @relation(fields: [supplierSettlementId], references: [id], onDelete: SetNull)
   // Full shipping address JSON from Shopify (name, address1/2, city, province,
   // zip, country, phone) — needed to export orders for fulfillment.
-  shippingAddress Json?
-  customerPhone   String?
+  shippingAddress      Json?
+  customerPhone        String?
   // shippingCostSnapshot dropped — basecost on each line item now bakes in
   // supplier shipping; no per-order shipping cost line in P&L.
 
@@ -301,6 +318,8 @@ model Order {
 
   @@unique([userId, storeId, shopifyOrderId])
   @@index([storeId, processedAt])
+  @@index([storeId, supplierSettlementId])
+  @@index([storeId, fulfillStatus, shippedAt])
   @@index([userId, storeId, processedAt])
 }
 
@@ -320,6 +339,11 @@ model OrderLineItem {
   // supplier shipping (baked in). Frozen so historical Basecost doesn't drift
   // if the variant's basecost is later edited.
   unitBasecost      Decimal? @db.Decimal(12, 2)
+  // Frozen split of unitBasecost (product + shipping = unitBasecost), captured
+  // with it so the amount owed to a supplier does not drift when the COGS
+  // matrix is edited later. Null on rows costed before the split existed.
+  unitProductCost   Decimal? @db.Decimal(12, 2)
+  unitShippingCost  Decimal? @db.Decimal(12, 2)
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -1069,4 +1093,37 @@ model AdLaunchItem {
   history AdLaunchHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
 
   @@index([historyId])
+}
+
+// One payment to a supplier covering a set of orders.
+//
+// Totals are snapshotted at settlement time from the orders' frozen line-item
+// costs, so the record stays true to what was actually paid even if costs are
+// recomputed later. An order belongs to at most one live settlement
+// (Order.supplierSettlementId); voiding a settlement releases its orders.
+model SupplierSettlement {
+  id           String    @id @default(uuid())
+  userId       String // store owner (tenant)
+  storeId      String
+  supplier     String
+  status       String    @default("PAID") // PAID | VOID
+  orderCount   Int
+  unitCount    Int
+  productCost  Decimal   @db.Decimal(12, 2)
+  shippingCost Decimal   @db.Decimal(12, 2)
+  totalCost    Decimal   @db.Decimal(12, 2)
+  currency     String    @default("USD")
+  paidAt       DateTime
+  reference    String? // bank transfer / invoice number
+  note         String?
+  createdBy    String // actor who recorded it (may be a granted member)
+  createdAt    DateTime  @default(now())
+  voidedAt     DateTime?
+  voidedBy     String?
+
+  store  ShopifyStore @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@index([storeId, paidAt])
+  @@index([storeId, supplier])
 }

@@ -993,6 +993,9 @@ export const OrdersTable = ({
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div className="flex items-center space-x-4">
+          {/* Own range controls only when used standalone — on the dashboard
+              the shared picker above the tabs owns the range. */}
+          {!globalDateRange && (<>
           <Select
             value={datePreset}
             onValueChange={(value: DatePreset) => handleDatePresetChange(value)}
@@ -1061,6 +1064,7 @@ export const OrdersTable = ({
               </Popover>
             </div>
           )}
+          </>)}
 
           <Select
             value={periodType}

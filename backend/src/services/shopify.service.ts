@@ -147,6 +147,8 @@ export async function fetchShopifyOrders(
     page_info?: string;
     createdAtMin?: string;
     createdAtMax?: string;
+    /** Orders changed since this instant — incremental sync. */
+    updatedAtMin?: string;
     status?: string;
   } = {}
 ): Promise<{ orders: ShopifyOrder[]; pageInfo?: string }> {
@@ -171,6 +173,9 @@ export async function fetchShopifyOrders(
       }
       if (params.createdAtMax) {
         queryParams.append('created_at_max', params.createdAtMax);
+      }
+      if (params.updatedAtMin) {
+        queryParams.append('updated_at_min', params.updatedAtMin);
       }
 
       // Only add status if it's a specific status (not 'any' or undefined)
@@ -309,8 +314,17 @@ export interface ShopifyBalanceTransaction {
 
 /**
  * Pull Shopify Payments balance transactions for a date window.
- * `fee` and `net` here are authoritative — populated even when /orders/transactions
- * still has fee=0 (unsettled). Use this to retroactively fill in fees.
+ * `fee` and `net` here are authoritative; the REST Transaction resource has
+ * no fee field at all.
+ *
+ * Requires the read_shopify_payments_payouts scope (401/403 otherwise) and a
+ * store on Shopify Payments (404 otherwise) — callers surface those.
+ *
+ * The endpoint has NO date filter (it accepts payout_id, since_id, last_id,
+ * test), and returns newest first. So we page until a page reaches past
+ * `since` and stop there, then keep only rows inside the window. The old code
+ * sent processed_at_min/max, which Shopify silently ignored — every run
+ * downloaded the store's entire payments history.
  */
 export async function fetchBalanceTransactions(
   storeDomain: string,
@@ -321,12 +335,9 @@ export async function fetchBalanceTransactions(
   const formatted = formatStoreDomain(storeDomain);
   const all: ShopifyBalanceTransaction[] = [];
   // The endpoint paginates with page_info via Link header, like other REST endpoints.
-  let url: string | null = `https://${formatted}/admin/api/${SHOPIFY_API_VERSION}/shopify_payments/balance/transactions.json?` +
-    new URLSearchParams({
-      processed_at_min: since.toISOString(),
-      processed_at_max: until.toISOString(),
-      limit: '250'
-    }).toString();
+  let url: string | null = `https://${formatted}/admin/api/${SHOPIFY_API_VERSION}/shopify_payments/balance/transactions.json?limit=250`;
+  const sinceMs = since.getTime();
+  const untilMs = until.getTime();
 
   while (url !== null) {
     const res: Response = await fetch(url, {
@@ -337,7 +348,15 @@ export async function fetchBalanceTransactions(
       throw new Error(`Balance transactions API ${res.status}: ${text}`);
     }
     const body = await res.json() as { transactions?: ShopifyBalanceTransaction[] };
-    if (body.transactions?.length) all.push(...body.transactions);
+    const page = body.transactions ?? [];
+    let reachedPastWindow = false;
+    for (const t of page) {
+      const at = t.processed_at ? new Date(t.processed_at).getTime() : NaN;
+      if (Number.isFinite(at) && at < sinceMs) { reachedPastWindow = true; continue; }
+      if (Number.isFinite(at) && at > untilMs) continue;
+      all.push(t);
+    }
+    if (reachedPastWindow || page.length === 0) break;
 
     const link: string | null = res.headers.get('Link') || res.headers.get('link');
     let next: string | null = null;
