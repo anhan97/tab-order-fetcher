@@ -3,6 +3,7 @@ import { fetchShopifyOrders, fetchOrderTransactions, summarizeTransactionFees, f
 import { resolveShippingCompanyForOrder } from './shipping-company.service';
 import { decryptToken } from '../lib/token-crypto';
 import { orderSignature, allocateComboCost } from '../lib/cogs-combo';
+import { notifyNewOrder } from './telegram.service';
 
 const prisma = new PrismaClient();
 const THROTTLE_MS = parseInt(process.env.SHOPIFY_THROTTLE_MS || '500', 10);
@@ -70,6 +71,9 @@ export async function syncOrders(storeId: string, options: { since?: Date; until
         // After line items are persisted, recompute snapshots using the Pricebook
         // for (country, supplier). Falls back gracefully when no pricebook found.
         await recomputeOrderCostSnapshots(store.userId, storeId, upserted.orderId);
+
+        // Safety net for a missed webhook; the claim inside keeps it to one alert.
+        if (upserted.created) await notifyNewOrder(storeId, upserted.orderId, order);
 
         if (pullTransactions) {
           // Shopify REST limits non-Plus stores to 2 calls/sec. Sleep between
@@ -140,6 +144,8 @@ export async function ingestOrderPayload(storeId: string, order: any): Promise<{
     await persistLineItems(store.userId, storeId, upserted.orderId, order.line_items);
   }
   await recomputeOrderCostSnapshots(store.userId, storeId, upserted.orderId);
+  // Not awaited: Shopify times webhooks out, Telegram shouldn't hold them up.
+  if (upserted.created) void notifyNewOrder(storeId, upserted.orderId, order);
   return upserted;
 }
 

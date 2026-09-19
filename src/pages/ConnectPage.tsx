@@ -3,7 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ShopifyConnection } from '@/components/ShopifyConnection';
 import { ShopifyOAuthConnect } from '@/components/ShopifyOAuthConnect';
 import { Button } from '@/components/ui/button';
-import { Store, Trash2, CheckCircle2 } from 'lucide-react';
+import { Store, Trash2, CheckCircle2, Bell } from 'lucide-react';
+import { TelegramAlertsDialog } from '@/components/TelegramAlertsDialog';
 import { useAuth } from '@/context/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
@@ -14,6 +15,7 @@ export const ConnectPage = () => {
     const { toast } = useToast();
     const [searchParams, setSearchParams] = useSearchParams();
     const [busy, setBusy] = useState<string | null>(null);
+    const [alertsFor, setAlertsFor] = useState<{ storeDomain: string; name: string | null } | null>(null);
 
     // Landing back from the Shopify OAuth callback:
     //   ?status=connected&shop=…  → refresh list, activate the new store
@@ -119,6 +121,17 @@ export const ConnectPage = () => {
                                                     Switch to
                                                 </Button>
                                             )}
+                                            {(!s.capabilities || s.capabilities.includes('manage')) && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 text-slate-500 hover:text-teal-700"
+                                                    onClick={() => setAlertsFor({ storeDomain: s.storeDomain, name: s.name })}
+                                                    title="Telegram order alerts"
+                                                >
+                                                    <Bell className="h-4 w-4" />
+                                                </Button>
+                                            )}
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
@@ -137,6 +150,14 @@ export const ConnectPage = () => {
                     )}
                 </CardContent>
             </Card>
+
+            {alertsFor && (
+                <TelegramAlertsDialog
+                    store={alertsFor}
+                    open={!!alertsFor}
+                    onOpenChange={o => { if (!o) setAlertsFor(null); }}
+                />
+            )}
 
             {/* Add / connect another store */}
             <Card>

@@ -26,6 +26,7 @@ import { resolveStore } from '../middleware/resolve-store';
 import { requireStoreCapability } from '../middleware/resolve-store';
 import { decryptToken } from '../lib/token-crypto';
 import { audit } from '../lib/audit';
+import { scheduleStoreCostRecompute } from '../services/cost-recompute.service';
 import {
   normalizeComboItems, comboSignature, validateCombo, parseMoney, type ComboItem
 } from '../lib/cogs-combo';
@@ -34,6 +35,18 @@ const router = Router();
 const prisma = new PrismaClient();
 
 router.use(requireAuth, requireActive, resolveStore);
+
+// Any successful price / line / combo change re-costs the store's recent
+// orders in the background, so Orders, Fulfillment and P&L pick it up
+// without anyone pressing "Apply to P&L".
+router.use((req: Request, res: Response, next) => {
+  if (req.method !== 'GET') {
+    res.on('finish', () => {
+      if (res.statusCode < 300 && req.resolved) scheduleStoreCostRecompute(req.resolved.storeId);
+    });
+  }
+  next();
+});
 
 /**
  * Lazily backfill ProductVariant.imageUrl from the Shopify Products API.

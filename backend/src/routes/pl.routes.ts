@@ -12,6 +12,7 @@ import {
   finalizeYesterday
 } from '../services/daily-pl.service';
 import { syncOrders, syncBalanceTransactions, recomputeOrderCostSnapshots } from '../services/order-sync.service';
+import { scheduleStoreCostRecompute } from '../services/cost-recompute.service';
 import { backfillShippingCompaniesFromTracking } from '../services/carrier-backfill.service';
 import { seedDefaultPricebooks } from '../services/pricebook-seed.service';
 import { aggregateByPeriod, compareTwoPeriods, PeriodKind } from '../services/period-aggregation.service';
@@ -43,9 +44,11 @@ router.get('/whoami', (req, res) => {
   res.json(req.resolved);
 });
 
-// GET /api/pl/order-fees?from=...&to=... → { fees: Record<shopifyOrderId, paymentFee> }
-// Used by the Orders page to enrich Shopify-sourced rows with the payment-fee
-// number we computed from Shopify Payments balance transactions.
+// GET /api/pl/order-fees?from=...&to=... → { fees: Record<shopifyOrderId, {...}> }
+// Used by the Orders page to enrich Shopify-sourced rows with what only our DB
+// knows: the payment fee (Shopify Payments balance transactions) and the COGS
+// frozen on the line items — the same cost Daily P&L and Fulfillment use.
+// cogs is null when no line has a cost yet; missingCost flags a partial one.
 router.get('/order-fees', async (req, res) => {
   try {
     const { storeId } = req.resolved!;
@@ -53,13 +56,28 @@ router.get('/order-fees', async (req, res) => {
     const from = parseDate(req.query.from, new Date(to.getTime() - 90 * 86400000));
     const orders = await prisma.order.findMany({
       where: { storeId, processedAt: { gte: from, lt: to } },
-      select: { shopifyOrderId: true, paymentFee: true, paymentGateway: true }
+      select: {
+        shopifyOrderId: true, paymentFee: true, paymentGateway: true,
+        lineItems: { select: { quantity: true, variantId: true, unitBasecost: true } }
+      }
     });
-    const fees: Record<string, { fee: number; gateway: string | null }> = {};
+    const fees: Record<string, { fee: number; gateway: string | null; cogs: number | null; missingCost: boolean }> = {};
     for (const o of orders) {
+      let cogs: number | null = null;
+      let missingCost = false;
+      for (const li of o.lineItems) {
+        if (li.unitBasecost === null) {
+          // Custom items (no variant) have no cost to look up — not "missing".
+          if (li.variantId !== null) missingCost = true;
+          continue;
+        }
+        cogs = (cogs ?? 0) + Number(li.unitBasecost) * (li.quantity || 0);
+      }
       fees[o.shopifyOrderId] = {
         fee: o.paymentFee ? Number(o.paymentFee) : 0,
-        gateway: o.paymentGateway
+        gateway: o.paymentGateway,
+        cogs: cogs === null ? null : Math.round(cogs * 100) / 100,
+        missingCost
       };
     }
     res.json({ fees, count: orders.length });
@@ -535,6 +553,7 @@ router.post('/import-cost-csv', requireStoreCapability('costs'), async (req, res
       return res.status(400).json({ error: 'csv (string) is required in body' });
     }
     const result = await importCostCsv(userId, storeId, csv, { supplier });
+    scheduleStoreCostRecompute(storeId);
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Internal error' });

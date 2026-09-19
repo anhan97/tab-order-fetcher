@@ -1,5 +1,6 @@
 import express from 'express';
 import { COGSService } from '../services/cogs.service';
+import { scheduleStoreCostRecompute } from '../services/cost-recompute.service';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 import { resolveStore, requireStoreCapability } from '../middleware/resolve-store';
 
@@ -42,6 +43,7 @@ router.post('/configs', resolveStore, requireStoreCapability('costs'), async (re
     const { userId, storeId } = req.resolved!;
 
     const config = await COGSService.createCOGSConfig(userId, storeId, req.body);
+    scheduleStoreCostRecompute(storeId);
     res.status(201).json({ config });
   } catch (error: any) {
     console.error('Failed to create COGS config:', error);
@@ -118,6 +120,7 @@ router.post('/configs/bulk', resolveStore, requireStoreCapability('costs'), asyn
 
     console.log('Bulk create request:', { userId, storeId, configCount: configs.length });
     const result = await COGSService.bulkCreateCOGSConfigs(userId, storeId, configs);
+    scheduleStoreCostRecompute(storeId);
     res.status(201).json(result);
   } catch (error: any) {
     console.error('Failed to bulk create COGS configs:', error);

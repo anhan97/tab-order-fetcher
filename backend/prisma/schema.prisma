@@ -174,6 +174,13 @@ model ShopifyStore {
   // Shopify for orders UPDATED since then, so fulfillments / refunds on old
   // orders are picked up and a failed first sync never leaves a permanent gap.
   ordersSyncedAt         DateTime?
+  // New-order alerts to Telegram. The bot token is optional (encrypted) —
+  // without one the app-wide TELEGRAM_BOT_TOKEN is used. telegramError holds
+  // the last delivery failure (chat not found, bot kicked…) for the UI.
+  telegramEnabled        Boolean   @default(false)
+  telegramChatId         String?
+  telegramBotToken       String?
+  telegramError          String?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -285,6 +292,9 @@ model Order {
   shippedAt            DateTime?
   // Set once the supplier has been paid for this order — see SupplierSettlement.
   supplierSettlementId String?
+  // Set when the new-order Telegram alert was sent (claimed before sending),
+  // so a webhook and a sync racing on the same order can't both announce it.
+  telegramNotifiedAt   DateTime?
   supplierSettlement   SupplierSettlement? @relation(fields: [supplierSettlementId], references: [id], onDelete: SetNull)
   // Full shipping address JSON from Shopify (name, address1/2, city, province,
   // zip, country, phone) — needed to export orders for fulfillment.

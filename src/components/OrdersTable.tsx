@@ -105,6 +105,11 @@ export const OrdersTable = ({
   // Map of shopifyOrderId → payment fee (from Shopify Payments balance API).
   // Keyed by string because Shopify order IDs are very large numbers.
   const [orderFees, setOrderFees] = useState<Record<string, number>>({});
+  // shopifyOrderId → COGS frozen on the order's line items in our DB — the
+  // same number Daily P&L and Fulfillment use, so all three agree. Preferred
+  // over the legacy browser-side cogsConfig, which only existed in whichever
+  // browser someone had once set it up in (hence "works for some stores").
+  const [orderCogs, setOrderCogs] = useState<Record<string, { cogs: number | null; missing: boolean }>>({});
   const [statusFilter, setStatusFilter] = useState<string>('any');
   // Default to today — matches dashboards/P&L. Old "30 days" default surfaced
   // a 30-day total ad spend that confused users on first load.
@@ -163,7 +168,9 @@ export const OrdersTable = ({
   // Pull payment fees from our DB whenever the date range changes. Failure is
   // non-fatal — Fees column simply renders $0 for orders we don't have data on.
   useEffect(() => {
-    if (!shopifyConfig?.storeUrl || !shopifyConfig?.accessToken) return;
+    // Members of a store have no Shopify token client-side — the request is
+    // authorized by the session (storeHeaders), so only the domain is needed.
+    if (!shopifyConfig?.storeUrl) return;
     const ctrl = new AbortController();
     (async () => {
       try {
@@ -178,10 +185,13 @@ export const OrdersTable = ({
         if (!res.ok) return;
         const data = await res.json();
         const map: Record<string, number> = {};
+        const cogsMap: Record<string, { cogs: number | null; missing: boolean }> = {};
         for (const [orderId, info] of Object.entries(data.fees || {})) {
           map[orderId] = (info as any).fee || 0;
+          cogsMap[orderId] = { cogs: (info as any).cogs ?? null, missing: !!(info as any).missingCost };
         }
         setOrderFees(map);
+        setOrderCogs(cogsMap);
       } catch (e) {
         if ((e as any)?.name !== 'AbortError') console.warn('Failed to load order fees:', e);
       }
@@ -413,9 +423,23 @@ export const OrdersTable = ({
     const totalRevenue = orders.reduce((sum, order) => sum + order.totalPrice, 0);
     let totalCogs = 0;
 
-    if (cogsConfig && orders.length > 0) {
+    // DB cost first (once per order id); the legacy config only fills in
+    // orders the DB has no cost for yet.
+    const counted = new Set<string>();
+    const legacyOrders: Order[] = [];
+    for (const order of orders) {
+      const db = orderCogs[String(order.id)];
+      if (db && db.cogs !== null) {
+        if (!counted.has(String(order.id))) totalCogs += db.cogs;
+        counted.add(String(order.id));
+      } else {
+        legacyOrders.push(order);
+      }
+    }
+
+    if (cogsConfig && legacyOrders.length > 0) {
       // Calculate COGS directly in frontend - much faster than API calls
-      for (const order of orders) {
+      for (const order of legacyOrders) {
         const orderLines = order.lineItems.map(item => ({
           variant_id: parseInt(item.variantId),
           quantity: item.quantity
@@ -774,7 +798,7 @@ export const OrdersTable = ({
 
     calculateAllMetrics();
     calculateAllMetrics();
-  }, [orders, dateRange, cogsConfig, selectedShippingProvider, shippingCompanies]);
+  }, [orders, dateRange, cogsConfig, selectedShippingProvider, shippingCompanies, orderCogs]);
 
   // Calculate individual order costs using bulk API
   useEffect(() => {
@@ -1466,13 +1490,17 @@ export const OrdersTable = ({
                   .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                   .map((order) => {
                     const daysSinceOrder = getDaysSinceOrder(order.orderDate);
-                    const costs = orderCosts.get(order.id) || {
-                      cogs: 0,
-                      handlingFee: 0,
-                      shippingCost: 0,
-                      totalCost: 0,
-                      netProfit: 0,
-                      netProfitMargin: 0
+                    const legacy = orderCosts.get(order.id);
+                    const db = orderCogs[String(order.id)];
+                    const fee = orderFees[String(order.id)] || 0;
+                    const cogs = db && db.cogs !== null ? db.cogs : (legacy?.cogs ?? null);
+                    const shipping = legacy?.shippingCost ?? order.shippingCost ?? 0;
+                    const netProfit = order.totalPrice - (cogs ?? 0) - shipping - fee;
+                    const costs = {
+                      cogs,
+                      missing: !!db?.missing,
+                      netProfit,
+                      netProfitMargin: order.totalPrice > 0 ? (netProfit / order.totalPrice) * 100 : 0
                     };
                     return (
                       <TableRow key={order.id} className="group hover:bg-slate-50">
@@ -1512,7 +1540,13 @@ export const OrdersTable = ({
                         <TableCell className="text-purple-700">
                           {formatCurrency(orderFees[String(order.id)] || 0)}
                         </TableCell>
-                        <TableCell>{formatCurrency(costs.cogs)}</TableCell>
+                        <TableCell>
+                          {costs.cogs === null
+                            ? <span className="text-xs text-amber-600" title="No COGS price for this order yet — set it on the COGS page">No cost</span>
+                            : <span title={costs.missing ? 'Some items in this order have no COGS price yet' : undefined}>
+                                {formatCurrency(costs.cogs)}{costs.missing && <span className="text-amber-600"> *</span>}
+                              </span>}
+                        </TableCell>
                         <TableCell>
                           <div>
                             <p className={costs.netProfit >= 0 ? "text-green-600" : "text-red-600"}>
