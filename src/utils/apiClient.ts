@@ -131,7 +131,14 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     }
   }
   if (!res.ok) {
-    const msg = (body && typeof body === 'object' && body.error) || `${res.status} ${res.statusText}`;
+    // Take the most specific thing the server said. Some routes answer with a
+    // generic `error` plus the real reason in `details`; showing only the
+    // former turned every failure into "Failed to update order tracking".
+    const obj = body && typeof body === 'object' ? body : null;
+    const parts = [obj?.error, obj?.details, obj?.message]
+      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    const unique = parts.filter((v, i) => parts.findIndex(p => p === v || v.includes(p)) === i);
+    const msg = unique.join(' — ') || `${res.status} ${res.statusText}`;
     throw new ApiError(msg, res.status, body);
   }
   return body as T;

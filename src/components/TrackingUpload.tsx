@@ -1,5 +1,5 @@
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,6 +39,21 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
   const [useBatchMode, setUseBatchMode] = useState(true);
   const [notifyCustomer, setNotifyCustomer] = useState(true);
   const [shippingCompanies, setShippingCompanies] = useState<Array<{ name: string; tracking_prefixes?: string }>>([]);
+  // Writing tracking to Shopify needs fulfillment-order scopes. A store
+  // connected before we asked for them fails on EVERY order, with Shopify
+  // reporting nothing more than an empty fulfillment-order list — so check up
+  // front and say so, instead of letting the upload discover it row by row.
+  const [permissionWarning, setPermissionWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!shopifyConfig?.storeUrl) return;
+    let cancelled = false;
+    apiFetch<{ canPushTracking: boolean; message: string | null }>('/api/shopify/stores/permissions')
+      .then(r => { if (!cancelled) setPermissionWarning(r.canPushTracking ? null : r.message); })
+      .catch(() => { /* unknown — the upload itself will report any problem */ });
+    return () => { cancelled = true; };
+  }, [shopifyConfig?.storeUrl]);
+
   const { toast } = useToast();
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -261,6 +276,12 @@ export const TrackingUpload = ({ shopifyConfig }: TrackingUploadProps) => {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {permissionWarning && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{permissionWarning}</AlertDescription>
+            </Alert>
+          )}
           <Alert>
             <FileText className="h-4 w-4" />
             <AlertDescription>

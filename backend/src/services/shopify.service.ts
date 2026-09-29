@@ -1,3 +1,5 @@
+import { missingFulfillmentScopes, missingScopeMessage } from '../lib/shopify-scopes';
+
 interface ShopInfo {
   name: string;
   email: string;
@@ -87,6 +89,37 @@ export interface ShopifyTransaction {
 
 interface ShopifyOrdersResponse {
   orders: ShopifyOrder[];
+}
+
+/**
+ * Scopes this access token actually holds. Empty array when Shopify won't
+ * tell us (network error, or a token shape that has no scope endpoint) — the
+ * callers treat that as "unknown", never as "missing".
+ */
+export async function fetchGrantedScopes(storeDomain: string, accessToken: string): Promise<string[]> {
+  try {
+    const res = await fetch(`https://${formatStoreDomain(storeDomain)}/admin/oauth/access_scopes.json`, {
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken }
+    });
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    return Array.isArray(data?.access_scopes)
+      ? data.access_scopes.map((s: any) => String(s?.handle || '')).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Turn a fulfillment failure into something the merchant can act on. Shopify
+ * hides a missing fulfillment-order scope as an empty list or a 403, so ask
+ * the token what it may do before blaming the order.
+ */
+async function fulfillmentPermissionError(storeDomain: string, accessToken: string, fallback: string): Promise<Error> {
+  const missing = missingFulfillmentScopes(await fetchGrantedScopes(storeDomain, accessToken));
+  const message = missing.length ? missingScopeMessage(missing, formatStoreDomain(storeDomain)) : fallback;
+  return Object.assign(new Error(message), { status: missing.length ? 403 : 502, missingScopes: missing });
 }
 
 function formatStoreDomain(domain: string): string {
@@ -685,14 +718,23 @@ export async function updateOrderTracking(
     if (!fulfillmentOrdersResponse.ok) {
       const errorText = await fulfillmentOrdersResponse.text();
       console.error('Failed to fetch fulfillment orders:', errorText);
-      throw new Error(`Failed to fetch fulfillment orders: ${fulfillmentOrdersResponse.status} ${fulfillmentOrdersResponse.statusText}`);
+      const detail = `Failed to fetch fulfillment orders: ${fulfillmentOrdersResponse.status} ${fulfillmentOrdersResponse.statusText} - ${errorText.slice(0, 300)}`;
+      if (fulfillmentOrdersResponse.status === 401 || fulfillmentOrdersResponse.status === 403) {
+        throw await fulfillmentPermissionError(storeDomain, accessToken, detail);
+      }
+      throw new Error(detail);
     }
 
     const fulfillmentOrdersData = await fulfillmentOrdersResponse.json();
     const fulfillmentOrders = fulfillmentOrdersData.fulfillment_orders;
 
     if (!fulfillmentOrders || fulfillmentOrders.length === 0) {
-      throw new Error('No fulfillment orders found for this order');
+      // Shopify returns only the fulfillment orders the token is allowed to
+      // see, so "none" usually means "no permission", not "nothing to ship".
+      throw await fulfillmentPermissionError(
+        storeDomain, accessToken,
+        `Shopify returned no fulfillment orders for order ${orderNumber}. It may already be fulfilled, cancelled, or handled by a fulfillment service this app cannot access.`
+      );
     }
 
     console.log('Fulfillment orders found:', fulfillmentOrders.length);
@@ -771,7 +813,11 @@ export async function updateOrderTracking(
           statusText: fulfillmentResponse.statusText,
           body: errorText
         });
-        throw new Error(`Failed to create fulfillment for location ${locationId}: ${fulfillmentResponse.status} ${fulfillmentResponse.statusText} - ${errorText}`);
+        const detail = `Failed to create fulfillment for location ${locationId}: ${fulfillmentResponse.status} ${fulfillmentResponse.statusText} - ${errorText.slice(0, 300)}`;
+        if (fulfillmentResponse.status === 401 || fulfillmentResponse.status === 403) {
+          throw await fulfillmentPermissionError(storeDomain, accessToken, detail);
+        }
+        throw new Error(detail);
       }
 
       const fulfillmentResult: any = await fulfillmentResponse.json();

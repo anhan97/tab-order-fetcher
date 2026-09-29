@@ -7,7 +7,8 @@ import { can } from '../lib/store-access';
 import { ShopifyController } from '../controllers/shopify.controller';
 import { syncOrders } from '../services/order-sync.service';
 import { AuthenticatedRequest } from '../types/express';
-import { verifyShopifyCredentials, fetchShopifyOrders, updateOrderTracking } from '../services/shopify.service';
+import { verifyShopifyCredentials, fetchShopifyOrders, updateOrderTracking, fetchGrantedScopes } from '../services/shopify.service';
+import { missingFulfillmentScopes, missingScopeMessage } from '../lib/shopify-scopes';
 
 const router = Router();
 
@@ -162,6 +163,26 @@ router.post('/stores/:id/sync', authenticate, async (req, res) => {
   }
 });
 
+// What this store's Shopify token is actually allowed to do. The Tracking page
+// asks before an upload, so a missing fulfillment scope is visible up front
+// instead of as a failure on every order.
+router.get('/stores/permissions', requireStoreAccess, async (req, res) => {
+  try {
+    const { storeDomain, accessToken } = req.storeAccess!;
+    const scopes = await fetchGrantedScopes(storeDomain, accessToken);
+    const missing = missingFulfillmentScopes(scopes);
+    res.json({
+      scopes,
+      missing,
+      // Unknown scope list (empty) is not a failure — don't cry wolf.
+      canPushTracking: missing.length === 0,
+      message: missing.length ? missingScopeMessage(missing, storeDomain) : null
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to read store permissions' });
+  }
+});
+
 // Update order tracking
 router.put('/orders/tracking', requireStoreAccess, requireFulfill, async (req, res) => {
   try {
@@ -202,9 +223,13 @@ router.put('/orders/tracking', requireStoreAccess, requireFulfill, async (req, r
     });
   } catch (error: any) {
     console.error('Failed to update order tracking:', error);
-    res.status(500).json({ 
-      error: 'Failed to update order tracking',
-      details: error.message
+    // The reason lives in error.message (missing scope, already fulfilled,
+    // Shopify's own error text). Send it as `error` too — clients show that
+    // field, and a bare "Failed to update order tracking" tells nobody why.
+    res.status(error?.status || 500).json({
+      error: error?.message || 'Failed to update order tracking',
+      details: error?.message,
+      missingScopes: error?.missingScopes
     });
   }
 });
