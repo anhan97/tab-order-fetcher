@@ -19,6 +19,8 @@ import { ContentAnalyticsPage } from "@/pages/ContentAnalyticsPage";
 // ProfitPage retired — /profit now redirects to /orders (Daily P&L tab).
 import { AdminPage } from "@/pages/AdminPage";
 import { FulfillmentPage } from "@/pages/FulfillmentPage";
+import { CreativesPage } from "@/features/creatives/pages/CreativesPage";
+import { AdsLauncherPage } from "@/features/ads-launcher/pages/AdsLauncherPage";
 import { PendingApprovalPage } from "@/pages/PendingApprovalPage";
 import { PrivacyPolicyPage } from "@/pages/PrivacyPolicyPage";
 import { TermsOfServicePage } from "@/pages/TermsOfServicePage";
@@ -115,6 +117,18 @@ const AppRoutes = () => {
         <Route path="/facebook" element={
           <ProtectedRoute>
             <FacebookPage />
+          </ProtectedRoute>
+        } />
+
+        <Route path="/creatives" element={
+          <ProtectedRoute>
+            <CreativesPage />
+          </ProtectedRoute>
+        } />
+
+        <Route path="/ads-launcher" element={
+          <ProtectedRoute>
+            <AdsLauncherPage />
           </ProtectedRoute>
         } />
 

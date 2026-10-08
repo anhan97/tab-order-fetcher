@@ -57,6 +57,19 @@ FRONTEND_URL="http://localhost:8080"
 JWT_SECRET="your-secret-key-change-this-in-production"
 ```
 
+### Ads Launcher
+```env
+# Where creative files are stored (default: backend/data/media). Persist it.
+MEDIA_DIR="/app/data/media"
+# Public https origin that reaches this backend. When set, Meta pulls videos
+# by URL; otherwise the backend uploads the video bytes itself.
+PUBLIC_ASSET_BASE_URL="https://app.example.com"
+# Demo ad account (fake Meta writer) is on outside production; 1 forces it on.
+ADS_LAUNCHER_DEMO=1
+# Time zone for the date in generated creative names (default: server time).
+APP_TIMEZONE="Asia/Ho_Chi_Minh"
+```
+
 ### API Versions
 ```env
 SHOPIFY_API_VERSION="2025-10"

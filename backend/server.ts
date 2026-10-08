@@ -9,6 +9,10 @@ import comprehensiveCogsRoutes from './src/routes/comprehensive-cogs.routes';
 import facebookRoutes from './src/routes/facebook.routes';
 import plRoutes from './src/routes/pl.routes';
 import adsLaunchRoutes from './src/routes/ads-launch.routes';
+import adsLauncherRoutes from './src/routes/ads-launcher.routes';
+import launchPresetsRoutes from './src/routes/launch-presets.routes';
+import creativesRoutes from './src/routes/creatives.routes';
+import { creativesDir, MEDIA_ROUTE } from './src/ads-launcher/media-storage';
 import authRoutes from './src/routes/auth.routes';
 import adminRoutes from './src/routes/admin.routes';
 import ordersRoutes from './src/routes/orders.routes';
@@ -43,6 +47,10 @@ app.use(cors({
   credentials: true
 }));
 
+// Launch requests carry up to 200 ads with copy — more than the 100 KB
+// default. Parsed here first; the global parser below then skips them.
+app.use('/api/ads-launcher', express.json({ limit: '5mb' }));
+
 // Body parser middleware. `verify` captures the raw body — required to
 // check Shopify webhook HMAC signatures (they sign the exact bytes).
 app.use(express.json({
@@ -65,6 +73,19 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/facebook', facebookRoutes);
 app.use('/api/pl', plRoutes);
 app.use('/api/ads', adsLaunchRoutes);
+app.use('/api/ads-launcher', adsLauncherRoutes);
+app.use('/api/launch-presets', launchPresetsRoutes);
+app.use('/api/creatives', creativesRoutes);
+
+// Creative media (unguessable uuid file names). Public on purpose: <img>/<video>
+// tags can't send a Bearer token, and Meta pulls videos by URL (§4.3).
+app.use(`${MEDIA_ROUTE}/creatives`, express.static(creativesDir(), {
+  index: false,
+  dotfiles: 'deny',
+  fallthrough: false,
+  immutable: true,
+  maxAge: '30d'
+}));
 
 // Test endpoint
 app.get('/api/test', (req, res) => {

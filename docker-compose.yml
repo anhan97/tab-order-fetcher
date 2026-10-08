@@ -38,9 +38,13 @@ services:
       # DNS nội bộ `db` — đè lên DATABASE_URL trong .env.docker (nếu có).
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-tab_order_fetcher}
       PORT: "3001"
+      # Creative library files (Ads Launcher). Persisted in the `media` volume.
+      MEDIA_DIR: /app/data/media
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - media:/app/data/media
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     healthcheck:
@@ -64,3 +68,4 @@ services:
 
 volumes:
   pgdata:
+  media:

@@ -60,6 +60,8 @@ model User {
   // Auto-launch ads (campaign builder)
   adLaunchTemplates AdLaunchTemplate[]
   adLaunchHistory   AdLaunchHistory[]
+  // Ads Launcher: presets are always private to the user who made them.
+  launchPresets     LaunchPreset[]
 
   // Saved fulfillment export column layouts (creator side of the relation).
   orderExportPresets OrderExportPreset[]
@@ -205,6 +207,7 @@ model ShopifyStore {
   orderExportPresets  OrderExportPreset[]
   members             StoreMember[]
   supplierSettlements SupplierSettlement[]
+  adCreatives         AdCreative[]
 
   @@unique([userId, storeDomain])
 }
@@ -1136,4 +1139,167 @@ model SupplierSettlement {
 
   @@index([storeId, paidAt])
   @@index([storeId, supplier])
+}
+
+// ─── Ads Launcher ────────────────────────────────────────────────────────────
+// Spec: docs/2026-10-07-dac-ta-ads-launcher.md. Tenant = the store owner
+// (ownerId) + store, same as every other store-scoped table here.
+
+// One image or video in the creative library, tied to one Shopify product and
+// one angle. `name` is generated (`<creator> | <angle> | <code> - dd/MM/yyyy`),
+// never typed. Media lives on disk under MEDIA_DIR; paths are relative to it.
+model AdCreative {
+  id              String    @id @default(uuid())
+  ownerId         String
+  storeId         String
+  productId       String    @db.VarChar(40) // Shopify product id
+  productTitle    String
+  productHandle   String?
+  productCode     String    @db.VarChar(64) // snapshot at creation
+  productImageUrl String?
+  createdBy       String // actor (may be a store member, not the owner)
+  creatorName     String
+  name            String    @db.VarChar(500)
+  angle           String    @db.VarChar(255)
+  primaryText     String?
+  headline        String?   @db.VarChar(255)
+  description     String?   @db.VarChar(255)
+  status          String    @default("active") @db.VarChar(20) // active | archived
+  mediaType       String    @db.VarChar(10) // image | video
+  mediaPath       String
+  posterPath      String? // JPEG: image thumbnail / video poster
+  mediaMime       String    @db.VarChar(100)
+  mediaSize       Int
+  width           Int?
+  height          Int?
+  originalName    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  store ShopifyStore @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  ads   MetaAd[]
+
+  @@index([storeId, productId, deletedAt])
+  @@index([storeId, createdBy, deletedAt])
+  @@index([storeId, createdAt(sort: Desc)])
+}
+
+// Saved structure + settings. Never holds ad account / pixel / page / landing.
+model LaunchPreset {
+  id          String    @id @default(uuid())
+  userId      String
+  name        String    @db.VarChar(80)
+  description String    @default("")
+  config      Json // LaunchPresetConfig — re-parsed on every read and write
+  starterKey  String?   @db.VarChar(64)
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, starterKey])
+  @@index([userId])
+}
+
+// Mirrors of the Meta nodes the launcher created (or launched into). Keyed
+// (ownerId, externalId) so a re-launch or a later sync upserts, never dupes.
+model MetaCampaign {
+  id          String    @id @default(uuid())
+  ownerId     String
+  storeId     String?
+  adAccountId String // digits, no act_
+  externalId  String
+  name        String
+  status      String
+  objective   String?
+  dailyBudget String? // minor units, as Meta stores it
+  bidStrategy String?
+  raw         Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  adsets MetaAdSet[]
+
+  @@unique([ownerId, externalId])
+  @@index([ownerId, adAccountId])
+}
+
+model MetaAdSet {
+  id               String    @id @default(uuid())
+  ownerId          String
+  campaignId       String
+  adAccountId      String
+  externalId       String
+  name             String
+  status           String
+  dailyBudget      String?
+  bidStrategy      String?
+  optimizationGoal String?
+  targeting        Json?
+  raw              Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  campaign MetaCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      MetaAd[]
+
+  @@unique([ownerId, externalId])
+  @@index([campaignId])
+}
+
+// The only link between an ad and a library creative (creativeId) — and the
+// post it runs (postId = effective_object_story_id), reused by "Launch post".
+model MetaAd {
+  id               String    @id @default(uuid())
+  ownerId          String
+  storeId          String?
+  adsetId          String
+  adAccountId      String
+  externalId       String
+  name             String
+  status           String
+  creativeId       String?
+  postId           String?   @db.VarChar(100)
+  postCheckedAt    DateTime?
+  metaCreativeId   String?
+  pageId           String?
+  link             String?
+  displayLink      String?
+  urlTags          String?
+  title            String?
+  body             String?
+  thumbnailUrl     String?
+  imageUrl         String?
+  callToActionType String?
+  creativeData     Json?
+  launchId         String?
+  launchedBy       String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  adset    MetaAdSet   @relation(fields: [adsetId], references: [id], onDelete: Cascade)
+  creative AdCreative? @relation(fields: [creativeId], references: [id], onDelete: SetNull)
+
+  @@unique([ownerId, externalId])
+  @@index([creativeId])
+  @@index([ownerId, postId])
+  @@index([adsetId])
+}
+
+// Idempotency for POST /api/ads-launcher/launch (the spec keeps this in Redis;
+// this app has no Redis). key = <ownerId>:<requestId>. Rows expire after 24h.
+model AdLaunchRequest {
+  key       String   @id
+  status    String // running | done
+  result    Json?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
 }

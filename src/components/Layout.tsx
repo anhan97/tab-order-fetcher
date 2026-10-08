@@ -30,7 +30,9 @@ import {
     User as UserIcon,
     LogOut as SignOutIcon,
     ShieldCheck,
-    PackageOpen
+    PackageOpen,
+    Images,
+    Rocket
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -42,6 +44,8 @@ const PAGE_SUBTITLES: Record<string, string> = {
     'P&L': 'Daily / period profit, costs, and operating expenses',
     COGS: 'Per-variant baseCost, supplier overrides, shipping tiers',
     Facebook: 'Ad accounts portfolio, campaigns, ad sets, ads',
+    Creatives: 'Creative library and the posts your ads run',
+    'Ads Launcher': 'Pick creatives, pick a structure, launch to Meta',
     Content: 'Content performance & engagement breakdown',
     Admin: 'Users, FB apps, and system-wide health'
 };
@@ -90,6 +94,8 @@ export const Layout = () => {
         { path: '/connect',     label: 'Stores',      icon: StoreIcon,       roles: ['admin', 'user', 'cs', 'finance'] },
         { path: '/cogs',     label: 'COGS',      icon: DollarSign,      roles: ['admin', 'user', 'finance'] },
         { path: '/facebook', label: 'Facebook',  icon: BarChart3,       roles: ['admin', 'user'] },
+        { path: '/creatives', label: 'Creatives', icon: Images,         roles: ['admin', 'user'] },
+        { path: '/ads-launcher', label: 'Ads Launcher', icon: Rocket,   roles: ['admin', 'user'] },
         { path: '/content',  label: 'Content',   icon: PieChartIcon,    roles: ['admin', 'user'] },
         { path: '/admin',    label: 'Admin',     icon: ShieldCheck,     roles: ['admin'] }
     ];

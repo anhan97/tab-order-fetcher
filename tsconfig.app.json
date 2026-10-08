@@ -23,7 +23,8 @@
 
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@contract/ads-launcher": ["./backend/src/ads-launcher/contract.ts"]
     }
   },
   "include": ["src"]
