@@ -14,6 +14,8 @@ import { snapshotAccountDay, queryHistoricalSnapshots } from '../services/fb-sna
 import { getSchedulerStatus } from '../jobs/fb-adlux-scheduler';
 import { resolveStore, requireStoreOwner, requireStoreCapability } from '../middleware/resolve-store';
 import { requireRole } from '../middleware/require-role';
+// requireRole reads req.userId, which only requireAuth sets — resolveStore does not.
+import { requireAuth } from '../middleware/require-auth';
 import { getConfig as getAdluxConfig, setConfig as setAdluxConfig, maskSecret } from '../services/adlux-config.service';
 import {
   listCampaignsForUser, setMapping, bulkAssignByPattern, getStoreAdSpend,
@@ -592,7 +594,7 @@ router.get('/my-app', resolveStore, async (req, res) => {
  * sprawl. Non-admins use whichever app the admin has provisioned for
  * their userId.
  */
-router.put('/my-app', resolveStore, requireRole(['admin']), async (req, res) => {
+router.put('/my-app', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { fbAppId, fbAppSecret, fbBmId, appName } = req.body || {};
   // Light validation only — FB rejects bad creds at exchange time, which gives
@@ -617,7 +619,7 @@ router.put('/my-app', resolveStore, requireRole(['admin']), async (req, res) => 
 });
 
 /** DELETE own app. Admin-only — same rationale as PUT /my-app. */
-router.delete('/my-app', resolveStore, requireRole(['admin']), async (req, res) => {
+router.delete('/my-app', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     await userFbApp.deleteForUser(req.resolved.actorId);
@@ -644,7 +646,7 @@ router.get('/my-apps', resolveStore, async (req, res) => {
 });
 
 /** POST /my-apps — register a new FB app (or update one if fbAppId matches). Admin-only. */
-router.post('/my-apps', resolveStore, requireRole(['admin']), async (req, res) => {
+router.post('/my-apps', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { fbAppId, fbAppSecret, fbBmId, appName, makeDefault } = req.body || {};
   if (typeof fbAppId !== 'string' || !/^\d{8,20}$/.test(fbAppId.trim())) {
@@ -668,7 +670,7 @@ router.post('/my-apps', resolveStore, requireRole(['admin']), async (req, res) =
 });
 
 /** PUT /my-apps/:fbAppId — update one app's secret / name / BM. Admin-only. */
-router.put('/my-apps/:fbAppId', resolveStore, requireRole(['admin']), async (req, res) => {
+router.put('/my-apps/:fbAppId', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
@@ -688,7 +690,7 @@ router.put('/my-apps/:fbAppId', resolveStore, requireRole(['admin']), async (req
 });
 
 /** PUT /my-apps/:fbAppId/default — promote this app to the user's default. Admin-only. */
-router.put('/my-apps/:fbAppId/default', resolveStore, requireRole(['admin']), async (req, res) => {
+router.put('/my-apps/:fbAppId/default', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
@@ -702,7 +704,7 @@ router.put('/my-apps/:fbAppId/default', resolveStore, requireRole(['admin']), as
 });
 
 /** DELETE /my-apps/:fbAppId — drop one app + its connection. Admin-only. */
-router.delete('/my-apps/:fbAppId', resolveStore, requireRole(['admin']), async (req, res) => {
+router.delete('/my-apps/:fbAppId', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
@@ -720,7 +722,7 @@ router.delete('/my-apps/:fbAppId', resolveStore, requireRole(['admin']), async (
 // resolveForUser falls back to this pivot when a user has no own row.
 
 /** GET /my-apps/:fbAppId/users — list users assigned to one admin-owned app. */
-router.get('/my-apps/:fbAppId/users', resolveStore, requireRole(['admin']), async (req, res) => {
+router.get('/my-apps/:fbAppId/users', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
@@ -739,7 +741,7 @@ router.get('/my-apps/:fbAppId/users', resolveStore, requireRole(['admin']), asyn
  * Set-semantics reconciliation: the provided array becomes the new full
  * assignee set. Anything missing gets revoked; anything new gets added.
  */
-router.put('/my-apps/:fbAppId/users', resolveStore, requireRole(['admin']), async (req, res) => {
+router.put('/my-apps/:fbAppId/users', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
@@ -757,7 +759,7 @@ router.put('/my-apps/:fbAppId/users', resolveStore, requireRole(['admin']), asyn
 });
 
 /** DELETE /my-apps/:fbAppId/users/:userId — revoke one user. */
-router.delete('/my-apps/:fbAppId/users/:userId', resolveStore, requireRole(['admin']), async (req, res) => {
+router.delete('/my-apps/:fbAppId/users/:userId', requireAuth, resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const fbAppId = String(req.params.fbAppId || '').trim();
   const targetUserId = String(req.params.userId || '').trim();
