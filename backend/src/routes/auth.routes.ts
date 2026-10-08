@@ -27,6 +27,7 @@ import {
 } from '../middleware/validation.middleware';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 import { encryptToken, decryptToken } from '../lib/token-crypto';
+import { listAccessibleStores, capabilitiesFor } from '../lib/store-access';
 
 const router = Router();
 const authController = new AuthController();
@@ -65,25 +66,30 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
 
 router.get('/stores', requireAuth, requireActive, async (req: Request, res: Response) => {
   try {
-    // Return accessToken too — caller is the owner, and the existing
-    // client-side Shopify calls (OrdersTable, CSV export, etc) need it
-    // until the rest of the app moves fully to backend-proxied requests.
-    // Tokens are AES-encrypted at rest; decrypt for the owner.
-    const stores = await prisma.shopifyStore.findMany({
-      where: { userId: req.userId!, isActive: true },
-      orderBy: { createdAt: 'asc' },
-      select: {
-        id: true,
-        storeDomain: true,
-        accessToken: true,
-        name: true,
-        defaultShippingCompany: true,
-        defaultSupplier: true,
-        createdAt: true,
-        updatedAt: true
-      }
+    // Stores this user OWNS plus the ones an admin granted them, each
+    // tagged with the resulting access level + capability list so the UI can
+    // grey out what they cannot do.
+    //
+    // accessToken is returned ONLY to the owner. The raw Admin API token
+    // bypasses every capability check in the app, so handing it to a 'viewer'
+    // would make the whole grant model decorative. Members don't need it:
+    // /api/shopify/* resolves the owner's token server-side.
+    const rows = await listAccessibleStores(req.userId!);
+    res.json({
+      stores: rows.map(s => ({
+        id: s.id,
+        storeDomain: s.storeDomain,
+        name: s.name,
+        defaultShippingCompany: s.defaultShippingCompany,
+        defaultSupplier: s.defaultSupplier,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        accessToken: s.access === 'owner' ? decryptToken(s.accessToken) : '',
+        access: s.access,
+        isOwner: s.access === 'owner',
+        capabilities: capabilitiesFor(s.access)
+      }))
     });
-    res.json({ stores: stores.map(s => ({ ...s, accessToken: decryptToken(s.accessToken) })) });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to list stores' });
   }

@@ -1,3 +1,5 @@
+import { missingFulfillmentScopes, missingScopeMessage } from '../lib/shopify-scopes';
+
 interface ShopInfo {
   name: string;
   email: string;
@@ -89,6 +91,37 @@ interface ShopifyOrdersResponse {
   orders: ShopifyOrder[];
 }
 
+/**
+ * Scopes this access token actually holds. Empty array when Shopify won't
+ * tell us (network error, or a token shape that has no scope endpoint) — the
+ * callers treat that as "unknown", never as "missing".
+ */
+export async function fetchGrantedScopes(storeDomain: string, accessToken: string): Promise<string[]> {
+  try {
+    const res = await fetch(`https://${formatStoreDomain(storeDomain)}/admin/oauth/access_scopes.json`, {
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken }
+    });
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    return Array.isArray(data?.access_scopes)
+      ? data.access_scopes.map((s: any) => String(s?.handle || '')).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Turn a fulfillment failure into something the merchant can act on. Shopify
+ * hides a missing fulfillment-order scope as an empty list or a 403, so ask
+ * the token what it may do before blaming the order.
+ */
+async function fulfillmentPermissionError(storeDomain: string, accessToken: string, fallback: string): Promise<Error> {
+  const missing = missingFulfillmentScopes(await fetchGrantedScopes(storeDomain, accessToken));
+  const message = missing.length ? missingScopeMessage(missing, formatStoreDomain(storeDomain)) : fallback;
+  return Object.assign(new Error(message), { status: missing.length ? 403 : 502, missingScopes: missing });
+}
+
 function formatStoreDomain(domain: string): string {
   // Remove protocol if present
   domain = domain.replace(/^https?:\/\//, '');
@@ -147,6 +180,8 @@ export async function fetchShopifyOrders(
     page_info?: string;
     createdAtMin?: string;
     createdAtMax?: string;
+    /** Orders changed since this instant — incremental sync. */
+    updatedAtMin?: string;
     status?: string;
   } = {}
 ): Promise<{ orders: ShopifyOrder[]; pageInfo?: string }> {
@@ -171,6 +206,9 @@ export async function fetchShopifyOrders(
       }
       if (params.createdAtMax) {
         queryParams.append('created_at_max', params.createdAtMax);
+      }
+      if (params.updatedAtMin) {
+        queryParams.append('updated_at_min', params.updatedAtMin);
       }
 
       // Only add status if it's a specific status (not 'any' or undefined)
@@ -309,8 +347,17 @@ export interface ShopifyBalanceTransaction {
 
 /**
  * Pull Shopify Payments balance transactions for a date window.
- * `fee` and `net` here are authoritative — populated even when /orders/transactions
- * still has fee=0 (unsettled). Use this to retroactively fill in fees.
+ * `fee` and `net` here are authoritative; the REST Transaction resource has
+ * no fee field at all.
+ *
+ * Requires the read_shopify_payments_payouts scope (401/403 otherwise) and a
+ * store on Shopify Payments (404 otherwise) — callers surface those.
+ *
+ * The endpoint has NO date filter (it accepts payout_id, since_id, last_id,
+ * test), and returns newest first. So we page until a page reaches past
+ * `since` and stop there, then keep only rows inside the window. The old code
+ * sent processed_at_min/max, which Shopify silently ignored — every run
+ * downloaded the store's entire payments history.
  */
 export async function fetchBalanceTransactions(
   storeDomain: string,
@@ -321,12 +368,9 @@ export async function fetchBalanceTransactions(
   const formatted = formatStoreDomain(storeDomain);
   const all: ShopifyBalanceTransaction[] = [];
   // The endpoint paginates with page_info via Link header, like other REST endpoints.
-  let url: string | null = `https://${formatted}/admin/api/${SHOPIFY_API_VERSION}/shopify_payments/balance/transactions.json?` +
-    new URLSearchParams({
-      processed_at_min: since.toISOString(),
-      processed_at_max: until.toISOString(),
-      limit: '250'
-    }).toString();
+  let url: string | null = `https://${formatted}/admin/api/${SHOPIFY_API_VERSION}/shopify_payments/balance/transactions.json?limit=250`;
+  const sinceMs = since.getTime();
+  const untilMs = until.getTime();
 
   while (url !== null) {
     const res: Response = await fetch(url, {
@@ -337,7 +381,15 @@ export async function fetchBalanceTransactions(
       throw new Error(`Balance transactions API ${res.status}: ${text}`);
     }
     const body = await res.json() as { transactions?: ShopifyBalanceTransaction[] };
-    if (body.transactions?.length) all.push(...body.transactions);
+    const page = body.transactions ?? [];
+    let reachedPastWindow = false;
+    for (const t of page) {
+      const at = t.processed_at ? new Date(t.processed_at).getTime() : NaN;
+      if (Number.isFinite(at) && at < sinceMs) { reachedPastWindow = true; continue; }
+      if (Number.isFinite(at) && at > untilMs) continue;
+      all.push(t);
+    }
+    if (reachedPastWindow || page.length === 0) break;
 
     const link: string | null = res.headers.get('Link') || res.headers.get('link');
     let next: string | null = null;
@@ -666,14 +718,23 @@ export async function updateOrderTracking(
     if (!fulfillmentOrdersResponse.ok) {
       const errorText = await fulfillmentOrdersResponse.text();
       console.error('Failed to fetch fulfillment orders:', errorText);
-      throw new Error(`Failed to fetch fulfillment orders: ${fulfillmentOrdersResponse.status} ${fulfillmentOrdersResponse.statusText}`);
+      const detail = `Failed to fetch fulfillment orders: ${fulfillmentOrdersResponse.status} ${fulfillmentOrdersResponse.statusText} - ${errorText.slice(0, 300)}`;
+      if (fulfillmentOrdersResponse.status === 401 || fulfillmentOrdersResponse.status === 403) {
+        throw await fulfillmentPermissionError(storeDomain, accessToken, detail);
+      }
+      throw new Error(detail);
     }
 
     const fulfillmentOrdersData = await fulfillmentOrdersResponse.json();
     const fulfillmentOrders = fulfillmentOrdersData.fulfillment_orders;
 
     if (!fulfillmentOrders || fulfillmentOrders.length === 0) {
-      throw new Error('No fulfillment orders found for this order');
+      // Shopify returns only the fulfillment orders the token is allowed to
+      // see, so "none" usually means "no permission", not "nothing to ship".
+      throw await fulfillmentPermissionError(
+        storeDomain, accessToken,
+        `Shopify returned no fulfillment orders for order ${orderNumber}. It may already be fulfilled, cancelled, or handled by a fulfillment service this app cannot access.`
+      );
     }
 
     console.log('Fulfillment orders found:', fulfillmentOrders.length);
@@ -752,7 +813,11 @@ export async function updateOrderTracking(
           statusText: fulfillmentResponse.statusText,
           body: errorText
         });
-        throw new Error(`Failed to create fulfillment for location ${locationId}: ${fulfillmentResponse.status} ${fulfillmentResponse.statusText} - ${errorText}`);
+        const detail = `Failed to create fulfillment for location ${locationId}: ${fulfillmentResponse.status} ${fulfillmentResponse.statusText} - ${errorText.slice(0, 300)}`;
+        if (fulfillmentResponse.status === 401 || fulfillmentResponse.status === 403) {
+          throw await fulfillmentPermissionError(storeDomain, accessToken, detail);
+        }
+        throw new Error(detail);
       }
 
       const fulfillmentResult: any = await fulfillmentResponse.json();

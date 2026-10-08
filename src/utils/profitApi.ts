@@ -1,3 +1,4 @@
+import { storeHeaders } from '@/utils/apiClient';
 // PLSnapshot is a UNION of:
 //   - DB snapshot rows (historical days, isFinalized=true) — fields arrive as
 //     decimal strings from Prisma serialisation.
@@ -74,12 +75,10 @@ export class ProfitApiClient {
   }
 
   private headers() {
-    return {
-      'Content-Type': 'application/json',
-      'X-Shopify-Store-Domain': this.storeUrl,
-      'X-Shopify-Access-Token': this.accessToken,
-      ...(this.timezone ? { 'X-Tz': this.timezone } : {})
-    };
+    return storeHeaders(
+      { storeUrl: this.storeUrl, accessToken: this.accessToken },
+      this.timezone ? { 'X-Tz': this.timezone } : {}
+    );
   }
 
   private async req<T = any>(path: string, init: RequestInit = {}): Promise<T> {

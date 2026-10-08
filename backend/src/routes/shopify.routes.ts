@@ -3,12 +3,31 @@ import { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.middleware';
 import { validateShopifyStore } from '../middleware/validation.middleware';
 import { requireStoreAccess } from '../middleware/store-access';
+import { can } from '../lib/store-access';
 import { ShopifyController } from '../controllers/shopify.controller';
 import { syncOrders } from '../services/order-sync.service';
 import { AuthenticatedRequest } from '../types/express';
-import { verifyShopifyCredentials, fetchShopifyOrders, updateOrderTracking } from '../services/shopify.service';
+import { verifyShopifyCredentials, fetchShopifyOrders, updateOrderTracking, fetchGrantedScopes } from '../services/shopify.service';
+import { missingFulfillmentScopes, missingScopeMessage } from '../lib/shopify-scopes';
 
 const router = Router();
+
+/**
+ * Fulfillment gate for the Shopify proxy. requireStoreAccess resolves the
+ * caller's level (owner for the legacy token paths, the granted role for a
+ * StoreMember); writing tracking back to Shopify needs 'fulfill'.
+ */
+function requireFulfill(req: any, res: any, next: any) {
+  if (!can(req.storeAccess?.level, 'fulfill')) {
+    return res.status(403).json({
+      error: 'Your access to this store does not allow "fulfill"',
+      code: 'store_capability_denied',
+      requires: 'fulfill',
+      access: req.storeAccess?.level ?? null
+    });
+  }
+  next();
+}
 const prisma = new PrismaClient();
 const shopifyController = new ShopifyController();
 
@@ -144,8 +163,28 @@ router.post('/stores/:id/sync', authenticate, async (req, res) => {
   }
 });
 
+// What this store's Shopify token is actually allowed to do. The Tracking page
+// asks before an upload, so a missing fulfillment scope is visible up front
+// instead of as a failure on every order.
+router.get('/stores/permissions', requireStoreAccess, async (req, res) => {
+  try {
+    const { storeDomain, accessToken } = req.storeAccess!;
+    const scopes = await fetchGrantedScopes(storeDomain, accessToken);
+    const missing = missingFulfillmentScopes(scopes);
+    res.json({
+      scopes,
+      missing,
+      // Unknown scope list (empty) is not a failure — don't cry wolf.
+      canPushTracking: missing.length === 0,
+      message: missing.length ? missingScopeMessage(missing, storeDomain) : null
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to read store permissions' });
+  }
+});
+
 // Update order tracking
-router.put('/orders/tracking', requireStoreAccess, async (req, res) => {
+router.put('/orders/tracking', requireStoreAccess, requireFulfill, async (req, res) => {
   try {
     const { storeDomain, accessToken } = req.storeAccess!;
 
@@ -184,15 +223,19 @@ router.put('/orders/tracking', requireStoreAccess, async (req, res) => {
     });
   } catch (error: any) {
     console.error('Failed to update order tracking:', error);
-    res.status(500).json({ 
-      error: 'Failed to update order tracking',
-      details: error.message
+    // The reason lives in error.message (missing scope, already fulfilled,
+    // Shopify's own error text). Send it as `error` too — clients show that
+    // field, and a bare "Failed to update order tracking" tells nobody why.
+    res.status(error?.status || 500).json({
+      error: error?.message || 'Failed to update order tracking',
+      details: error?.message,
+      missingScopes: error?.missingScopes
     });
   }
 });
 
 // Batch tracking update endpoint for faster processing
-router.put('/orders/tracking/batch', requireStoreAccess, async (req, res) => {
+router.put('/orders/tracking/batch', requireStoreAccess, requireFulfill, async (req, res) => {
   try {
     const { storeDomain, accessToken } = req.storeAccess!;
 

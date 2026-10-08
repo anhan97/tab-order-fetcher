@@ -15,6 +15,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@contract/ads-launcher': path.resolve(__dirname, './backend/src/ads-launcher/contract.ts'),
     },
+    dedupe: ['zod'],
   },
 }); 

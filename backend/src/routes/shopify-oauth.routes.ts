@@ -27,17 +27,28 @@ import { encryptToken, decryptToken } from '../lib/token-crypto';
 import { audit } from '../lib/audit';
 import { registerShopifyWebhooks } from '../services/shopify-webhooks.service';
 import { syncOrders } from '../services/order-sync.service';
+import { TRACKING_SCOPES } from '../lib/shopify-scopes';
 
 const router = Router();
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
 
+// read_shopify_payments_payouts: the ONLY way to get per-order payment fees.
+// Shopify's Transaction resource has no fee field; fees live in the Shopify
+// Payments balance ledger, which answers 403 without this scope. Stores
+// connected before it was added must reconnect to grant it.
+//
 // read_customers on top of read_orders: needed to read the customer object +
 // full shipping address on orders. NOTE: the scope alone is NOT enough —
 // Shopify also requires "Protected customer data access" to be approved for
 // the app (Partner Dashboard → API access), otherwise name/address/phone/
 // email come back redacted even with the scope granted.
-const SCOPES = process.env.SHOPIFY_SCOPES || 'read_orders,write_orders,read_products,read_customers';
+// write_*_fulfillment_orders is what lets us push tracking to Shopify. Without
+// it Shopify silently returns NO fulfillment orders for an order, so uploading
+// tracking fails for every order on the store.
+const SCOPES = process.env.SHOPIFY_SCOPES
+  || ['read_orders', 'write_orders', 'read_products', 'read_customers', 'read_shopify_payments_payouts',
+      ...TRACKING_SCOPES].join(',');
 
 type ResolvedApp = { clientId: string; clientSecret: string; source: 'user' | 'db' | 'env' };
 

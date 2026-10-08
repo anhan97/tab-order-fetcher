@@ -2,6 +2,7 @@
 import { Order } from '@/types/order';
 import { format } from 'date-fns';
 import config from '@/config/app';
+import { apiFetch } from '@/utils/apiClient';
 
 export interface ShopifyConfig {
   storeUrl: string;
@@ -48,9 +49,12 @@ export class ShopifyApiClient {
     // Determine the correct API base URL based on current environment
     this.baseUrl = this.getApiBaseUrl();
 
-    // Save to localStorage
-    localStorage.setItem('shopify_store_url', this.config.storeUrl);
-    localStorage.setItem('shopify_access_token', this.config.accessToken);
+    // NOTE: constructing a client deliberately persists NOTHING. It used to
+    // write storeUrl + accessToken into localStorage, which meant every
+    // orders fetch quietly cached the signed-in merchant's Shopify token in
+    // the browser — and logout never cleared it, so the next account to log
+    // in on that machine booted with the previous merchant's store. The
+    // active store now lives solely in AuthContext (backend-owned).
   }
 
   private getApiBaseUrl(): string {
@@ -60,58 +64,51 @@ export class ShopifyApiClient {
     return '/api/shopify';
   }
 
-  static fromLocalStorage(): ShopifyApiClient | null {
-    const storeUrl = localStorage.getItem('shopify_store_url');
-    const accessToken = localStorage.getItem('shopify_access_token');
-
-    if (storeUrl && accessToken) {
-      return new ShopifyApiClient({ storeUrl, accessToken });
-    }
-
-    return null;
-  }
-
+  /**
+   * Purge the retired `shopify_store_url` / `shopify_access_token` pair.
+   * Nothing writes them any more; this only evicts values left behind by
+   * older builds. Safe to call on every boot and on logout.
+   */
   static clearLocalStorage(): void {
     localStorage.removeItem('shopify_store_url');
     localStorage.removeItem('shopify_access_token');
   }
 
-  private getHeaders() {
-    return {
-      'Content-Type': 'application/json',
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
       'Accept': 'application/json',
-      'X-Shopify-Store-Domain': this.config.storeUrl,
-      'X-Shopify-Access-Token': this.config.accessToken
+      // Target this client's store explicitly. apiFetch would otherwise fill
+      // it in from the active-store localStorage key, which can lag behind.
+      'X-Shopify-Store-Domain': this.config.storeUrl
     };
+    // Only set when we actually hold a token, i.e. for a store we OWN.
+    // Sending an EMPTY one is worse than sending none: requireStoreAccess
+    // reads it as "legacy header auth attempted" and 401s. Members have no
+    // token by design — the Bearer JWT that apiFetch attaches is their proof,
+    // and the backend resolves the owner's token server-side.
+    if (this.config.accessToken) {
+      headers['X-Shopify-Access-Token'] = this.config.accessToken;
+    }
+    return headers;
   }
 
+  /**
+   * Goes through apiFetch rather than bare fetch, which buys two things this
+   * client never had: the `Authorization: Bearer` header, and the single-flight
+   * refresh-and-retry on 401.
+   *
+   * It used to authenticate purely by echoing the store's Admin API token in
+   * `X-Shopify-Access-Token`, so a user who holds no token — anyone working on
+   * a store granted to them rather than owned — got a flat 401 on every call.
+   */
   private async makeRequest(endpoint: string, options: RequestInit = {}) {
-    const url = `${this.baseUrl}${endpoint}`;
-    console.log('Making request to backend:', url);
-    console.log('Request headers:', {
-      ...this.getHeaders(),
-      'X-Shopify-Access-Token': '***hidden***' // Hide sensitive data in logs
-    });
-
-    const response = await fetch(url, {
+    return apiFetch<any>(`${this.baseUrl}${endpoint}`, {
       ...options,
       headers: {
         ...this.getHeaders(),
-        ...options.headers,
-      },
+        ...(options.headers as Record<string, string> | undefined)
+      }
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('API Error Response:', {
-        status: response.status,
-        statusText: response.statusText,
-        body: errorText
-      });
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
-    }
-
-    return await response.json();
   }
 
   async testConnection(): Promise<boolean> {
@@ -162,18 +159,11 @@ export class ShopifyApiClient {
         const params = Object.fromEntries(queryParams.entries());
         console.log('Sending parameters to API:', params);
 
-        const response = await fetch(
-          `${this.baseUrl}/stores/orders?${queryParams.toString()}`,
-          {
-            headers: this.getHeaders()
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
+        // Through makeRequest (apiFetch) rather than bare fetch: this was the
+        // one method that built its own request, so it kept sending no Bearer
+        // token long after the rest of the client had one — and it is the call
+        // the dashboard makes on every page load.
+        const data = await this.makeRequest(`/stores/orders?${queryParams.toString()}`);
         const { orders, pageInfo: nextPageInfo } = data;
 
         if (!orders || orders.length === 0) {

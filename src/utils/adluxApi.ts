@@ -1,3 +1,4 @@
+import { storeHeaders } from '@/utils/apiClient';
 /**
  * Frontend client for Adlux multi-tenant FB endpoints.
  *
@@ -49,11 +50,7 @@ interface ShopifyAuth {
 }
 
 function authHeaders(auth: ShopifyAuth): Record<string, string> {
-  return {
-    'Content-Type': 'application/json',
-    'X-Shopify-Store-Domain': auth.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-    'X-Shopify-Access-Token': auth.accessToken
-  };
+  return storeHeaders(auth);
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {

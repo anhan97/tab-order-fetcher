@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/context/AppContext';
 import { CheckCircle2, AlertTriangle, AlertOctagon, ExternalLink, RefreshCw, Loader2, Stethoscope } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { storeHeaders } from '@/utils/apiClient';
 
 type DiagnosisKind =
   | 'ok'
@@ -62,11 +63,8 @@ export const FacebookDiagnostics = () => {
   const [error, setError] = useState<string | null>(null);
 
   const headers = () => {
-    if (!shopifyConfig) return {};
-    return {
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    } as Record<string, string>;
+    if (!shopifyConfig) return {} as Record<string, string>;
+    return storeHeaders(shopifyConfig);
   };
 
   const run = async () => {
@@ -99,7 +97,7 @@ export const FacebookDiagnostics = () => {
             Account diagnostics
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Per-account check answering "tại sao account này load được, account kia không". Calls Facebook directly using your stored token — read-only, safe to re-run.
+            Per-account check answering "why does this account load and that one not". Calls Facebook directly using your stored token — read-only, safe to re-run.
           </p>
         </div>
         <Button onClick={run} disabled={loading} variant="outline" size="sm">

@@ -1,12 +1,18 @@
 import '@testing-library/jest-dom';
 import { vi } from 'vitest';
 
-// Mock localStorage
+// In-memory localStorage. This used to be four bare `vi.fn()` stubs that
+// stored nothing and always returned undefined, so any test asserting on
+// persisted state silently passed against a black hole. Backed by a real Map
+// so reads observe writes; still spies, so `toHaveBeenCalledWith` works.
+const store = new Map<string, string>();
 const localStorageMock = {
-  getItem: vi.fn(),
-  setItem: vi.fn(),
-  removeItem: vi.fn(),
-  clear: vi.fn(),
+  getItem: vi.fn((k: string) => (store.has(k) ? store.get(k)! : null)),
+  setItem: vi.fn((k: string, v: string) => { store.set(k, String(v)); }),
+  removeItem: vi.fn((k: string) => { store.delete(k); }),
+  clear: vi.fn(() => { store.clear(); }),
+  key: vi.fn((i: number) => Array.from(store.keys())[i] ?? null),
+  get length() { return store.size; },
 };
 
 global.localStorage = localStorageMock as any;

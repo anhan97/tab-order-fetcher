@@ -5,6 +5,7 @@ import { LineChart, PieChart, Line, Pie, Cell, XAxis, YAxis, CartesianGrid, Tool
 import { format, subDays, startOfWeek, startOfMonth } from 'date-fns';
 import { Order, COGSConfig } from '@/types/order';
 import { useAppContext } from '@/context/AppContext';
+import { storeHeaders } from '@/utils/apiClient';
 
 interface EnhancedAnalyticsProps {
   orders: Order[];
@@ -60,11 +61,7 @@ export const EnhancedAnalytics = ({ orders, cogsConfigs, facebookConfigs, global
   // ranges aggregate from DailyPLSnapshot (historical) + today live.
   useEffect(() => {
     if (!shopifyConfig) return;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    };
+    const headers = storeHeaders(shopifyConfig);
     let cancelled = false;
 
     const fetchSpend = async () => {

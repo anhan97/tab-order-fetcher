@@ -1,6 +1,7 @@
 import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { Logo } from '@/components/Logo';
 import { Button } from '@/components/ui/button';
 import { TimezoneSelect } from '@/components/ui/timezone-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -29,18 +30,22 @@ import {
     User as UserIcon,
     LogOut as SignOutIcon,
     ShieldCheck,
-    PackageOpen
+    PackageOpen,
+    Images,
+    Rocket
 } from 'lucide-react';
 import { useState } from 'react';
 
 const PAGE_SUBTITLES: Record<string, string> = {
     Dashboard: 'KPIs, daily breakdown, and order list',
-    Fulfillment: 'Vòng đời đơn hàng, tracking, export đi fulfill',
+    Fulfillment: 'Order lifecycle, tracking, and fulfilment exports',
     Tracking: 'Bulk-upload tracking numbers to Shopify',
     Analytics: 'Cross-channel ROAS & ad performance',
     'P&L': 'Daily / period profit, costs, and operating expenses',
     COGS: 'Per-variant baseCost, supplier overrides, shipping tiers',
     Facebook: 'Ad accounts portfolio, campaigns, ad sets, ads',
+    Creatives: 'Creative library and the posts your ads run',
+    'Ads Launcher': 'Pick creatives, pick a structure, launch to Meta',
     Content: 'Content performance & engagement breakdown',
     Admin: 'Users, FB apps, and system-wide health'
 };
@@ -89,6 +94,8 @@ export const Layout = () => {
         { path: '/connect',     label: 'Stores',      icon: StoreIcon,       roles: ['admin', 'user', 'cs', 'finance'] },
         { path: '/cogs',     label: 'COGS',      icon: DollarSign,      roles: ['admin', 'user', 'finance'] },
         { path: '/facebook', label: 'Facebook',  icon: BarChart3,       roles: ['admin', 'user'] },
+        { path: '/creatives', label: 'Creatives', icon: Images,         roles: ['admin', 'user'] },
+        { path: '/ads-launcher', label: 'Ads Launcher', icon: Rocket,   roles: ['admin', 'user'] },
         { path: '/content',  label: 'Content',   icon: PieChartIcon,    roles: ['admin', 'user'] },
         { path: '/admin',    label: 'Admin',     icon: ShieldCheck,     roles: ['admin'] }
     ];
@@ -107,9 +114,7 @@ export const Layout = () => {
                 isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
             )}>
                 <div className="h-16 flex items-center px-6 border-b border-slate-200/80 shrink-0">
-                    <div className="p-2 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-xl mr-3 shadow-sm shadow-teal-500/30">
-                        <ShoppingBag className="h-5 w-5 text-white" />
-                    </div>
+                    <Logo size={36} className="mr-3 rounded-xl shadow-sm shadow-teal-500/30" />
                     <div className="flex flex-col">
                         <span className="font-bold text-base text-slate-900 leading-tight">Order Manager</span>
                         <span className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">Profit Suite</span>
@@ -166,8 +171,16 @@ export const Layout = () => {
                                     <SelectContent>
                                         {stores.map(s => (
                                             <SelectItem key={s.id} value={s.storeDomain}>
-                                                <div className="truncate max-w-[180px]">
-                                                    {s.name || s.storeDomain}
+                                                <div className="flex items-center gap-2 max-w-[220px]">
+                                                    <span className="truncate">{s.name || s.storeDomain}</span>
+                                                    {/* Owned stores carry no badge — the badge marks the
+                                                        ones an admin delegated, and what you may do there. */}
+                                                    {s.access && s.access !== 'owner' && (
+                                                        <span className="shrink-0 text-[9px] uppercase tracking-wide font-semibold
+                                                                         rounded px-1.5 py-0.5 bg-slate-100 text-slate-600">
+                                                            {s.access}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </SelectItem>
                                         ))}
@@ -182,6 +195,11 @@ export const Layout = () => {
                                     <Plus className="h-3.5 w-3.5 mr-1.5" />
                                     Add another store
                                 </Button>
+                                {activeStore?.access && activeStore.access !== 'owner' && (
+                                    <p className="text-[10px] leading-snug text-slate-500 px-2 pt-1">
+                                        You have <b>{activeStore.access}</b> access to this store — some actions are locked.
+                                    </p>
+                                )}
                             </>
                         ) : (
                             <Button
@@ -191,7 +209,7 @@ export const Layout = () => {
                                 onClick={() => navigate('/connect')}
                             >
                                 <Plus className="h-3.5 w-3.5 mr-1.5" />
-                                Kết nối store
+                                Connect a store
                             </Button>
                         )}
                     </div>

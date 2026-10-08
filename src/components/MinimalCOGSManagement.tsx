@@ -18,6 +18,8 @@ import {
   validateCogsConfig
 } from '@/utils/minimalCogsResolver';
 import { sampleCogsConfig } from '@/utils/sampleMinimalCogs';
+import { apiFetch } from '@/utils/apiClient';
+import { useAuth } from '@/context/AuthContext';
 
 interface MinimalCOGSManagementProps {
   onUpdateCOGS?: (config: CogsConfig) => void;
@@ -41,6 +43,7 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   const [editingProduct, setEditingProduct] = useState<ProductCog | null>(null);
   const [editingCombo, setEditingCombo] = useState<ComboCog | null>(null);
   const { toast } = useToast();
+  const { activeStore } = useAuth();
 
   // Form states
   const [newProduct, setNewProduct] = useState<Partial<ProductCog>>({
@@ -74,6 +77,7 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   const [saveTimeout, setSaveTimeout] = useState<NodeJS.Timeout | null>(null);
 
   const saveToDatabase = async (config: CogsConfig) => {
+    if (!activeStore) return;
     try {
       // Use relative URL - Vite proxy will handle routing to backend
       const apiBaseUrl = '/api';
@@ -118,21 +122,15 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
         };
       });
 
-      const response = await fetch(`${apiBaseUrl}/cogs/configs/bulk`, {
+      // Identity comes from the JWT + active store that apiFetch attaches.
+      // This used to send hardcoded placeholder X-User-Id / X-Store-Id values,
+      // which the backend trusted and lazily materialised into real User /
+      // ShopifyStore rows — so every merchant wrote their costs into one
+      // shared, fabricated account.
+      await apiFetch(`${apiBaseUrl}/cogs/configs/bulk`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': 'user_123', // TODO: Get from auth context
-          'X-Store-Id': 'store_123' // TODO: Get from auth context
-        },
         body: JSON.stringify({ configs: enrichedConfigs }),
       });
-
-      if (!response.ok) {
-        console.warn('Failed to save COGS config to database:', response.statusText);
-      } else {
-        console.log('COGS config saved successfully');
-      }
     } catch (error) {
       console.warn('Error saving COGS config to database:', error);
     }
@@ -153,19 +151,15 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
 
   // Load COGS config from database
   const loadFromDatabase = async () => {
+    if (!activeStore) return;
     try {
       // Use relative URL - Vite proxy will handle routing to backend
       const apiBaseUrl = '/api';
 
-      const response = await fetch(`${apiBaseUrl}/cogs/configs`, {
-        headers: {
-          'X-User-Id': 'user_123', // TODO: Get from auth context
-          'X-Store-Id': 'store_123' // TODO: Get from auth context
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
+      // See saveToDatabase: the hardcoded placeholder identity headers this
+      // replaced meant everyone read back the same fabricated account.
+      const data = await apiFetch<{ configs?: any[] }>(`${apiBaseUrl}/cogs/configs`);
+      {
         // Backend returns { configs: COGSConfigData[] }
         if (data.configs && Array.isArray(data.configs)) {
           // Map backend data to frontend format
@@ -215,13 +209,8 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   const loadShippingCompanies = async () => {
     try {
       const apiBaseUrl = '/api';
-      const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies`);
-
-      if (response.ok) {
-        const data = await response.json();
-        const companyNames = data.map((company: any) => company.name);
-        setShippingCompanies(companyNames);
-      }
+      const data = await apiFetch<any[]>(`${apiBaseUrl}/cogs/shipping-companies`);
+      setShippingCompanies(data.map((company: any) => company.name));
     } catch (error) {
       console.warn('Error loading shipping companies:', error);
       // Fallback to default list if API fails
@@ -229,11 +218,12 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
     }
   };
 
-  // Load config from database on mount
+  // Load config from database once the active store is known.
   useEffect(() => {
     loadFromDatabase();
     loadShippingCompanies();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStore]);
 
   // Filter products based on search query
   const filteredProducts = products.filter(product => {
@@ -255,41 +245,25 @@ export const MinimalCOGSManagement: React.FC<MinimalCOGSManagementProps> = ({ on
   useEffect(() => {
     setJsonText(JSON.stringify(config, null, 2));
     loadProducts();
-  }, [config]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, activeStore]);
 
+  // Products come from the signed-in user's ACTIVE store. This used to read
+  // `shopify_store_url` / `shopify_access_token` straight out of localStorage,
+  // which survived logout and so served the previous merchant's catalogue.
+  // apiFetch attaches the JWT + X-Shopify-Store-Domain from AuthContext, and
+  // the backend resolves the real token from the DB.
   const loadProducts = async () => {
+    if (!activeStore) {
+      setProducts([]);
+      return;
+    }
     try {
-      const storeUrl = localStorage.getItem('shopify_store_url');
-      const accessToken = localStorage.getItem('shopify_access_token');
-
-      if (!storeUrl || !accessToken) {
-        console.log('Shopify not connected, skipping product fetch');
-        return;
-      }
-
-      // Use localhost API when running on ngrok
-      const apiBaseUrl = window.location.origin.includes('ngrok')
-        ? 'http://localhost:3001/api'
-        : '/api';
-
-      const response = await fetch(`${apiBaseUrl}/shopify/products?status=active&limit=50`, {
-        headers: {
-          'X-Shopify-Store-Domain': storeUrl,
-          'X-Shopify-Access-Token': accessToken,
-        },
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Failed to fetch products:', response.status, errorText);
-        return;
-      }
-
-      const data = await response.json();
-      console.log('Products loaded:', data.products?.length || 0, 'products');
+      const data = await apiFetch<{ products?: any[] }>('/api/shopify/products?status=active&limit=50');
       setProducts(data.products || []);
     } catch (error) {
       console.error('Error fetching products:', error);
+      setProducts([]);
     }
   };
 

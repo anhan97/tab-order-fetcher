@@ -12,7 +12,7 @@ import {
 } from '../services/fb-access.service';
 import { snapshotAccountDay, queryHistoricalSnapshots } from '../services/fb-snapshot.service';
 import { getSchedulerStatus } from '../jobs/fb-adlux-scheduler';
-import { resolveStore } from '../middleware/resolve-store';
+import { resolveStore, requireStoreOwner, requireStoreCapability } from '../middleware/resolve-store';
 import { requireRole } from '../middleware/require-role';
 import { getConfig as getAdluxConfig, setConfig as setAdluxConfig, maskSecret } from '../services/adlux-config.service';
 import {
@@ -270,7 +270,7 @@ router.get('/adlux-accounts', resolveStore, async (req, res) => {
 });
 
 /** Bulk-grant access to multiple accounts at once. */
-router.post('/claim-accounts-bulk', resolveStore, async (req, res) => {
+router.post('/claim-accounts-bulk', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const accountIds = Array.isArray(req.body?.accountIds) ? req.body.accountIds : null;
   if (!accountIds) return res.status(400).json({ error: 'accountIds[] required' });
@@ -302,7 +302,7 @@ router.get('/my-accounts', resolveStore, async (req, res) => {
  * Grant the current user access to a specific account they own. Used during
  * onboarding when user manually picks accounts they shared.
  */
-router.post('/claim-account', resolveStore, async (req, res) => {
+router.post('/claim-account', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { accountId, role } = req.body || {};
   if (!accountId) return res.status(400).json({ error: 'accountId required' });
@@ -318,7 +318,7 @@ router.post('/claim-account', resolveStore, async (req, res) => {
  * Auto-claim all accounts shared from the user's own FB Business. Reads
  * client_ad_accounts filtered by source business id.
  */
-router.post('/auto-claim', resolveStore, async (req, res) => {
+router.post('/auto-claim', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { fbBusinessId } = req.body || {};
   if (!fbBusinessId) return res.status(400).json({ error: 'fbBusinessId required' });
@@ -332,7 +332,7 @@ router.post('/auto-claim', resolveStore, async (req, res) => {
   }
 });
 
-router.delete('/unclaim-account', resolveStore, async (req, res) => {
+router.delete('/unclaim-account', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const accountId = String(req.query.accountId || '').replace(/^act_/, '');
   if (!accountId) return res.status(400).json({ error: 'accountId required' });
@@ -344,7 +344,7 @@ router.delete('/unclaim-account', resolveStore, async (req, res) => {
   }
 });
 
-router.put('/account-favorite', resolveStore, async (req, res) => {
+router.put('/account-favorite', resolveStore, requireStoreCapability('manage'), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { accountId, isFavorite } = req.body || {};
   if (!accountId) return res.status(400).json({ error: 'accountId required' });
@@ -402,7 +402,7 @@ router.post('/snapshot-day', async (req, res) => {
  * long-lived (~60 days) using app secret, stores AES-encrypted in DB.
  * Returns safe metadata only — never echoes the token back.
  */
-router.post('/connect', resolveStore, async (req, res) => {
+router.post('/connect', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { token, adAccounts, fbAppId } = req.body || {};
   if (!token || typeof token !== 'string') {
@@ -434,7 +434,7 @@ router.get('/connection-status', resolveStore, async (req, res) => {
   }
 });
 
-router.delete('/connection', resolveStore, async (req, res) => {
+router.delete('/connection', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     await userToken.disconnect(req.resolved.userId);
@@ -453,7 +453,7 @@ router.delete('/connection', resolveStore, async (req, res) => {
  * Front-end calls this when the merchant picks "Switch FB mode" so they
  * land back on the mode-picker with a clean slate.
  */
-router.delete('/disconnect-all', resolveStore, async (req, res) => {
+router.delete('/disconnect-all', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const userId = req.resolved.userId;
   const wiped = { userToken: false, adluxAccounts: 0 };
@@ -539,7 +539,7 @@ router.get('/assets', resolveStore, async (req, res) => {
 });
 
 /** Enroll an ad account: creates / re-activates the FacebookAdAccount row. */
-router.post('/assets/ad-accounts/:accountId/enroll', resolveStore, async (req, res) => {
+router.post('/assets/ad-accounts/:accountId/enroll', resolveStore, requireStoreOwner, async (req, res) => {
   try {
     if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
     const accountId = String(req.params.accountId).replace(/^act_/, '');
@@ -553,7 +553,7 @@ router.post('/assets/ad-accounts/:accountId/enroll', resolveStore, async (req, r
 
 /** Unenroll an ad account: soft-delete (isActive=false). Historical
  *  FacebookAdSpend rows stay so prior P&L numbers don't change. */
-router.delete('/assets/ad-accounts/:accountId', resolveStore, async (req, res) => {
+router.delete('/assets/ad-accounts/:accountId', resolveStore, requireStoreOwner, async (req, res) => {
   try {
     if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
     const accountId = String(req.params.accountId).replace(/^act_/, '');
@@ -577,7 +577,7 @@ router.delete('/assets/ad-accounts/:accountId', resolveStore, async (req, res) =
 router.get('/my-app', resolveStore, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
-    res.json(await userFbApp.getOwnAppSafe(req.resolved.userId));
+    res.json(await userFbApp.getOwnAppSafe(req.resolved.actorId));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -604,13 +604,13 @@ router.put('/my-app', resolveStore, requireRole(['admin']), async (req, res) => 
     return res.status(400).json({ error: 'fbAppSecret looks too short — paste the full App Secret from FB' });
   }
   try {
-    await userFbApp.upsertForUser(req.resolved.userId, {
+    await userFbApp.upsertForUser(req.resolved.actorId, {
       fbAppId: fbAppId?.trim(),
       fbAppSecret: fbAppSecret?.trim(),
       fbBmId: fbBmId !== undefined ? (fbBmId?.trim() || null) : undefined,
       appName: appName !== undefined ? (appName?.trim() || null) : undefined
     });
-    res.json(await userFbApp.getOwnAppSafe(req.resolved.userId));
+    res.json(await userFbApp.getOwnAppSafe(req.resolved.actorId));
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -620,7 +620,7 @@ router.put('/my-app', resolveStore, requireRole(['admin']), async (req, res) => 
 router.delete('/my-app', resolveStore, requireRole(['admin']), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
-    await userFbApp.deleteForUser(req.resolved.userId);
+    await userFbApp.deleteForUser(req.resolved.actorId);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -636,7 +636,7 @@ router.delete('/my-app', resolveStore, requireRole(['admin']), async (req, res) 
 router.get('/my-apps', resolveStore, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
-    const apps = await userFbApp.listForUser(req.resolved.userId);
+    const apps = await userFbApp.listForUser(req.resolved.actorId);
     res.json({ apps });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -654,7 +654,7 @@ router.post('/my-apps', resolveStore, requireRole(['admin']), async (req, res) =
     return res.status(400).json({ error: 'fbAppSecret looks too short — paste the full App Secret from FB' });
   }
   try {
-    const out = await userFbApp.upsert(req.resolved.userId, {
+    const out = await userFbApp.upsert(req.resolved.actorId, {
       fbAppId: fbAppId.trim(),
       fbAppSecret: fbAppSecret.trim(),
       fbBmId: fbBmId !== undefined ? (String(fbBmId).trim() || null) : undefined,
@@ -674,7 +674,7 @@ router.put('/my-apps/:fbAppId', resolveStore, requireRole(['admin']), async (req
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
   const { fbAppSecret, fbBmId, appName, makeDefault } = req.body || {};
   try {
-    const out = await userFbApp.upsert(req.resolved.userId, {
+    const out = await userFbApp.upsert(req.resolved.actorId, {
       fbAppId,
       fbAppSecret: typeof fbAppSecret === 'string' && fbAppSecret.length >= 16 ? fbAppSecret.trim() : undefined,
       fbBmId: fbBmId !== undefined ? (String(fbBmId).trim() || null) : undefined,
@@ -693,8 +693,8 @@ router.put('/my-apps/:fbAppId/default', resolveStore, requireRole(['admin']), as
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
   try {
-    await userFbApp.setDefault(req.resolved.userId, fbAppId);
-    const apps = await userFbApp.listForUser(req.resolved.userId);
+    await userFbApp.setDefault(req.resolved.actorId, fbAppId);
+    const apps = await userFbApp.listForUser(req.resolved.actorId);
     res.json({ apps });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -707,7 +707,7 @@ router.delete('/my-apps/:fbAppId', resolveStore, requireRole(['admin']), async (
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
   try {
-    await userFbApp.deleteApp(req.resolved.userId, fbAppId);
+    await userFbApp.deleteApp(req.resolved.actorId, fbAppId);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -725,7 +725,7 @@ router.get('/my-apps/:fbAppId/users', resolveStore, requireRole(['admin']), asyn
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
   try {
-    const users = await fbAppAccess.listUsersForApp(req.resolved.userId, fbAppId);
+    const users = await fbAppAccess.listUsersForApp(req.resolved.actorId, fbAppId);
     res.json({ users });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -748,8 +748,8 @@ router.put('/my-apps/:fbAppId/users', resolveStore, requireRole(['admin']), asyn
     return res.status(400).json({ error: 'userIds: string[] required' });
   }
   try {
-    const r = await fbAppAccess.setUsersForApp(req.resolved.userId, fbAppId, userIds);
-    const users = await fbAppAccess.listUsersForApp(req.resolved.userId, fbAppId);
+    const r = await fbAppAccess.setUsersForApp(req.resolved.actorId, fbAppId, userIds);
+    const users = await fbAppAccess.listUsersForApp(req.resolved.actorId, fbAppId);
     res.json({ ...r, users });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -763,7 +763,7 @@ router.delete('/my-apps/:fbAppId/users/:userId', resolveStore, requireRole(['adm
   const targetUserId = String(req.params.userId || '').trim();
   if (!fbAppId || !targetUserId) return res.status(400).json({ error: 'fbAppId + userId required' });
   try {
-    await fbAppAccess.revokeUser(req.resolved.userId, fbAppId, targetUserId);
+    await fbAppAccess.revokeUser(req.resolved.actorId, fbAppId, targetUserId);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -782,7 +782,7 @@ router.delete('/my-apps/:fbAppId/users/:userId', resolveStore, requireRole(['adm
 router.get('/available-apps', resolveStore, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
-    const apps = await fbAppAccess.listAppsForUser(req.resolved.userId);
+    const apps = await fbAppAccess.listAppsForUser(req.resolved.actorId);
     res.json({ apps });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -801,7 +801,7 @@ router.get('/connections', resolveStore, async (req, res) => {
 });
 
 /** POST /connections — connect a specific app (frontend sends fbAppId + short token). */
-router.post('/connections', resolveStore, async (req, res) => {
+router.post('/connections', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { token, fbAppId } = req.body || {};
   if (!token || typeof token !== 'string') {
@@ -816,7 +816,7 @@ router.post('/connections', resolveStore, async (req, res) => {
 });
 
 /** DELETE /connections/:fbAppId — drop one connection without deleting the app. */
-router.delete('/connections/:fbAppId', resolveStore, async (req, res) => {
+router.delete('/connections/:fbAppId', resolveStore, requireStoreOwner, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const fbAppId = String(req.params.fbAppId || '').trim();
   if (!fbAppId) return res.status(400).json({ error: 'fbAppId required' });
@@ -838,7 +838,7 @@ router.delete('/connections/:fbAppId', resolveStore, async (req, res) => {
 router.post('/my-app/test', resolveStore, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
-    const cfg = await userFbApp.getForUser(req.resolved.userId);
+    const cfg = await userFbApp.getForUser(req.resolved.actorId);
     if (!cfg.fbAppId || !cfg.fbAppSecret) {
       return res.status(400).json({ ok: false, error: 'No FB app credentials set yet.' });
     }
@@ -852,7 +852,7 @@ router.post('/my-app/test', resolveStore, async (req, res) => {
     try { parsed = JSON.parse(text); } catch { /* keep text */ }
     if (!r.ok) {
       const msg = parsed?.error?.message || text.slice(0, 200);
-      await userFbApp.markError(req.resolved.userId, msg);
+      await userFbApp.markError(req.resolved.actorId, msg);
       return res.status(400).json({ ok: false, error: msg, source: cfg.source });
     }
     res.json({ ok: true, source: cfg.source, hasAppToken: !!parsed?.access_token });
@@ -1124,7 +1124,7 @@ router.get('/campaigns', resolveStore, async (req, res) => {
  * passes the ad-account list it wants campaigns for; backend's user
  * token authorises the FB API calls.
  */
-router.post('/campaigns/bridge', resolveStore, async (req, res) => {
+router.post('/campaigns/bridge', resolveStore, requireStoreCapability('manage'), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const accounts = Array.isArray(req.body?.accounts) ? req.body.accounts : [];
   if (accounts.length === 0) return res.json({ campaigns: [] });
@@ -1186,7 +1186,7 @@ router.post('/campaigns/bridge', resolveStore, async (req, res) => {
 });
 
 /** Upsert mapping for a single campaign. storeId=null clears the mapping. */
-router.put('/campaign-mapping', resolveStore, async (req, res) => {
+router.put('/campaign-mapping', resolveStore, requireStoreCapability('manage'), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { campaignId, campaignName, accountId, storeId } = req.body || {};
   if (!campaignId || !accountId) {
@@ -1210,7 +1210,7 @@ router.put('/campaign-mapping', resolveStore, async (req, res) => {
  * Set-semantics save for one store: replace the store's mapping with the
  * given campaign list atomically. Used by the Facebook tab's mapping panel.
  */
-router.post('/campaign-mapping/save-for-store', resolveStore, async (req, res) => {
+router.post('/campaign-mapping/save-for-store', resolveStore, requireStoreCapability('manage'), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, campaigns } = req.body || {};
   if (!storeId || !Array.isArray(campaigns)) {
@@ -1237,7 +1237,7 @@ router.post('/campaign-mapping/save-for-store', resolveStore, async (req, res) =
 });
 
 /** Bulk-map every campaign whose name matches the given pattern. */
-router.post('/campaign-mapping/bulk', resolveStore, async (req, res) => {
+router.post('/campaign-mapping/bulk', resolveStore, requireStoreCapability('manage'), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, pattern, patternType } = req.body || {};
   if (!storeId || !pattern) return res.status(400).json({ error: 'storeId + pattern required' });
@@ -1260,7 +1260,7 @@ router.post('/campaign-mapping/bulk', resolveStore, async (req, res) => {
  * mapping changed and the user wants P&L numbers to update immediately
  * instead of waiting for the daily 00:15 cron.
  */
-router.post('/recompute-store-spend', resolveStore, async (req, res) => {
+router.post('/recompute-store-spend', resolveStore, requireStoreCapability('sync'), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, since, until } = req.body || {};
   if (!storeId || !since || !until) {
@@ -1304,7 +1304,7 @@ router.get('/store-spend-today', resolveStore, async (req, res) => {
  * Burns N days × M accounts insights reads, sequential — sized for "fix it
  * once" not "background loop".
  */
-router.post('/backfill-store-spend', resolveStore, async (req, res) => {
+router.post('/backfill-store-spend', resolveStore, requireStoreCapability('sync'), async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, daysBack } = req.body || {};
   if (!storeId) return res.status(400).json({ error: 'storeId required' });

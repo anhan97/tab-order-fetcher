@@ -3,7 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ShopifyConnection } from '@/components/ShopifyConnection';
 import { ShopifyOAuthConnect } from '@/components/ShopifyOAuthConnect';
 import { Button } from '@/components/ui/button';
-import { Store, Trash2, CheckCircle2 } from 'lucide-react';
+import { Store, Trash2, CheckCircle2, Bell } from 'lucide-react';
+import { TelegramAlertsDialog } from '@/components/TelegramAlertsDialog';
 import { useAuth } from '@/context/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
@@ -14,6 +15,7 @@ export const ConnectPage = () => {
     const { toast } = useToast();
     const [searchParams, setSearchParams] = useSearchParams();
     const [busy, setBusy] = useState<string | null>(null);
+    const [alertsFor, setAlertsFor] = useState<{ storeDomain: string; name: string | null } | null>(null);
 
     // Landing back from the Shopify OAuth callback:
     //   ?status=connected&shop=…  → refresh list, activate the new store
@@ -28,12 +30,12 @@ export const ConnectPage = () => {
             (async () => {
                 await refreshStores();
                 setActiveStoreByDomain(shop);
-                toast({ title: 'Đã kết nối store qua Shopify', description: `${shop} — đơn hàng đang được đồng bộ nền.` });
+                toast({ title: 'Store connected via Shopify', description: `${shop} — orders are syncing in the background.` });
             })();
         } else if (status === 'error') {
             toast({
-                title: 'Kết nối Shopify thất bại',
-                description: `Lý do: ${reason || 'không rõ'}. Thử lại hoặc dùng cách dán token bên dưới.`,
+                title: 'Shopify connection failed',
+                description: `Reason: ${reason || 'unknown'}. Try again, or paste a token manually below.`,
                 variant: 'destructive'
             });
         }
@@ -45,7 +47,7 @@ export const ConnectPage = () => {
             await addStore(config.storeUrl, config.accessToken);
             const cleanDomain = config.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
             setActiveStoreByDomain(cleanDomain);
-            toast({ title: 'Đã thêm store', description: cleanDomain });
+            toast({ title: 'Store added', description: cleanDomain });
         } catch (e: any) {
             toast({ title: 'Failed to save store', description: e?.message || String(e), variant: 'destructive' });
         }
@@ -71,8 +73,8 @@ export const ConnectPage = () => {
             <div>
                 <h1 className="text-xl font-bold text-slate-900">Stores</h1>
                 <p className="text-sm text-slate-500">
-                    Kết nối cửa hàng Shopify của bạn. Một tài khoản quản lý được nhiều store — chọn store
-                    ở thanh bên để chuyển qua lại.
+                    Connect your Shopify stores. One account can manage several — pick the store
+                    in the sidebar to switch between them.
                 </p>
             </div>
 
@@ -81,14 +83,14 @@ export const ConnectPage = () => {
                 <CardHeader>
                     <CardTitle className="text-lg flex items-center gap-2">
                         <Store className="h-5 w-5 text-teal-500" />
-                        Cửa hàng của bạn
+                        Your stores
                         <span className="text-sm font-normal text-slate-500">({stores.length})</span>
                     </CardTitle>
                 </CardHeader>
                 <CardContent>
                     {stores.length === 0 ? (
                         <div className="text-center py-8 text-slate-500 text-sm">
-                            Chưa có store nào. Kết nối store đầu tiên bên dưới để bắt đầu.
+                            No stores yet. Connect your first one below to get started.
                         </div>
                     ) : (
                         <div className="space-y-2">
@@ -119,6 +121,17 @@ export const ConnectPage = () => {
                                                     Switch to
                                                 </Button>
                                             )}
+                                            {(!s.capabilities || s.capabilities.includes('manage')) && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 text-slate-500 hover:text-teal-700"
+                                                    onClick={() => setAlertsFor({ storeDomain: s.storeDomain, name: s.name })}
+                                                    title="Telegram order alerts"
+                                                >
+                                                    <Bell className="h-4 w-4" />
+                                                </Button>
+                                            )}
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
@@ -138,16 +151,24 @@ export const ConnectPage = () => {
                 </CardContent>
             </Card>
 
+            {alertsFor && (
+                <TelegramAlertsDialog
+                    store={alertsFor}
+                    open={!!alertsFor}
+                    onOpenChange={o => { if (!o) setAlertsFor(null); }}
+                />
+            )}
+
             {/* Add / connect another store */}
             <Card>
                 <CardHeader>
-                    <CardTitle className="text-lg">{stores.length === 0 ? 'Kết nối store' : 'Thêm store khác'}</CardTitle>
+                    <CardTitle className="text-lg">{stores.length === 0 ? 'Connect a store' : 'Add another store'}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <ShopifyOAuthConnect />
                     <details className="text-xs text-slate-400">
                         <summary className="cursor-pointer hover:text-slate-600">
-                            Cách cũ: dán Admin API token thủ công
+                            Legacy: paste an Admin API token manually
                         </summary>
                         <div className="mt-3">
                             <ShopifyConnection onConnectionSuccess={handleConnectionSuccess} />

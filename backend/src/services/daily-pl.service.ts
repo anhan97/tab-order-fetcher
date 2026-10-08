@@ -229,6 +229,9 @@ export async function aggregateForDate(userId: string, storeId: string, date: Da
   }
 
   // Operating cost — split categories so the UI can show them separately:
+  //   fb_ads    → fbAdSpend    (Facebook spend entered by hand — ADDED to
+  //                              mapped spend, for accounts that aren't
+  //                              mapped or spend FB can't attribute)
   //   other_ads → otherAdSpend (Google/TikTok/etc)
   //   app_fee   → appFees      (Shopify/SaaS app subscriptions)
   //   else      → operatingCost (salary, domain, misc)
@@ -248,7 +251,8 @@ export async function aggregateForDate(userId: string, storeId: string, date: Da
   let operatingCost = 0;
   for (const c of opCosts) {
     const amt = num(c.amount);
-    if (c.category === 'other_ads') otherAdSpend += amt;
+    if (c.category === 'fb_ads') fbAdSpend += amt;
+    else if (c.category === 'other_ads') otherAdSpend += amt;
     else if (c.category === 'app_fee') appFees += amt;
     else operatingCost += amt;
   }

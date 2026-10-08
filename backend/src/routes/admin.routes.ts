@@ -14,6 +14,8 @@ import { requireAuth } from '../middleware/require-auth';
 import { requireAdmin } from '../middleware/require-admin';
 import { encryptToken, decryptToken } from '../lib/token-crypto';
 import { backendBaseUrl } from './shopify-oauth.routes';
+import { GRANTABLE_STORE_ROLES, isGrantableStoreRole, capabilitiesFor } from '../lib/store-access';
+import { audit } from '../lib/audit';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -378,6 +380,149 @@ router.get('/stats', async (_req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Store members — delegate a store to someone who does not own it ─────────
+//
+// ShopifyStore.userId stays the owner. These endpoints only add/remove
+// StoreMember rows, so revoking a grant is instant and total: the member
+// never held the store's Shopify token, only the right to ask our API.
+
+/** GET /api/admin/stores/:id/members — who can work on this store. */
+router.get('/stores/:id/members', async (req: Request, res: Response) => {
+  try {
+    const store = await prisma.shopifyStore.findUnique({
+      where: { id: req.params.id },
+      include: { user: { select: { id: true, email: true, firstName: true, lastName: true } } }
+    });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const members = await prisma.storeMember.findMany({
+      where: { storeId: store.id },
+      include: { user: { select: { id: true, email: true, firstName: true, lastName: true, status: true } } },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    res.json({
+      store: { id: store.id, storeDomain: store.storeDomain, name: store.name },
+      owner: store.user,
+      members: members.map(m => ({
+        userId: m.userId,
+        email: m.user.email,
+        firstName: m.user.firstName,
+        lastName: m.user.lastName,
+        status: m.user.status,
+        role: m.role,
+        capabilities: capabilitiesFor(m.role as any),
+        grantedBy: m.grantedBy,
+        createdAt: m.createdAt
+      })),
+      grantableRoles: GRANTABLE_STORE_ROLES
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to list store members' });
+  }
+});
+
+/**
+ * PUT /api/admin/stores/:id/members  body: { email | userId, role }
+ *
+ * Idempotent: re-granting the same person changes their role rather than
+ * erroring, so the admin UI can use one button for add and for edit.
+ */
+router.put('/stores/:id/members', async (req: Request, res: Response) => {
+  try {
+    const { email, userId, role } = req.body ?? {};
+    if (!isGrantableStoreRole(role)) {
+      return res.status(400).json({ error: `role must be one of: ${GRANTABLE_STORE_ROLES.join(', ')}` });
+    }
+    const store = await prisma.shopifyStore.findUnique({ where: { id: req.params.id } });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const target = userId
+      ? await prisma.user.findUnique({ where: { id: String(userId) } })
+      : email
+        ? await prisma.user.findUnique({ where: { email: String(email).trim().toLowerCase() } })
+        : null;
+    if (!target) return res.status(404).json({ error: 'User not found — they must register first' });
+
+    // Granting the owner access to their own store is a no-op that would
+    // otherwise show up as a duplicate row in the members list.
+    if (target.id === store.userId) {
+      return res.status(400).json({ error: 'This user already owns the store' });
+    }
+
+    const member = await prisma.storeMember.upsert({
+      where: { userId_storeId: { userId: target.id, storeId: store.id } },
+      create: { userId: target.id, storeId: store.id, role, grantedBy: req.userId ?? null },
+      update: { role, grantedBy: req.userId ?? null }
+    });
+
+    await audit({
+      userId: target.id,
+      actorUserId: req.userId,
+      action: 'store_member.grant',
+      target: store.id,
+      metadata: { storeDomain: store.storeDomain, role }
+    });
+
+    res.json({
+      member: {
+        userId: member.userId,
+        email: target.email,
+        role: member.role,
+        capabilities: capabilitiesFor(member.role as any)
+      }
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to grant store access' });
+  }
+});
+
+/** DELETE /api/admin/stores/:id/members/:userId — revoke a grant. */
+router.delete('/stores/:id/members/:userId', async (req: Request, res: Response) => {
+  try {
+    const { id, userId } = req.params;
+    const deleted = await prisma.storeMember.deleteMany({ where: { storeId: id, userId } });
+    if (deleted.count === 0) return res.status(404).json({ error: 'This user has no grant on that store' });
+
+    await audit({
+      userId,
+      actorUserId: req.userId,
+      action: 'store_member.revoke',
+      target: id
+    });
+
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to revoke store access' });
+  }
+});
+
+/** GET /api/admin/users/:id/stores — every store this person can reach. */
+router.get('/users/:id/stores', async (req: Request, res: Response) => {
+  try {
+    const [owned, granted] = await Promise.all([
+      prisma.shopifyStore.findMany({
+        where: { userId: req.params.id, isActive: true },
+        select: { id: true, storeDomain: true, name: true },
+        orderBy: { createdAt: 'asc' }
+      }),
+      prisma.storeMember.findMany({
+        where: { userId: req.params.id },
+        include: { store: { select: { id: true, storeDomain: true, name: true, isActive: true } } },
+        orderBy: { createdAt: 'asc' }
+      })
+    ]);
+    res.json({
+      owned,
+      granted: granted
+        .filter(g => g.store?.isActive)
+        .map(g => ({ id: g.store.id, storeDomain: g.store.storeDomain, name: g.store.name, role: g.role }))
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to list user stores' });
   }
 });
 

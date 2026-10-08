@@ -16,7 +16,7 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
         const lines = csv.split('\n').filter(line => line.trim());
         
         if (lines.length < 2) {
-          throw new Error('File CSV phải có ít nhất 2 dòng (header + data)');
+          throw new Error('The CSV needs at least 2 rows (header + data)');
         }
         
         const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
@@ -28,7 +28,7 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
         );
         
         if (missingColumns.length > 0) {
-          throw new Error(`Thiếu các cột: ${missingColumns.join(', ')}`);
+          throw new Error(`Missing columns: ${missingColumns.join(', ')}`);
         }
         
         // Find column indexes
@@ -72,7 +72,7 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
         }
         
         if (records.length === 0) {
-          throw new Error('Không tìm thấy dữ liệu hợp lệ trong file CSV');
+          throw new Error('No valid rows found in the CSV');
         }
         
         resolve(records);
@@ -83,7 +83,7 @@ export const parseCsvFile = (file: File): Promise<TrackingRecord[]> => {
     };
     
     reader.onerror = () => {
-      reject(new Error('Không thể đọc file'));
+      reject(new Error('Could not read the file'));
     };
     
     reader.readAsText(file, 'utf-8');

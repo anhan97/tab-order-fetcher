@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
 import { Plus, Edit, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { apiFetch } from '@/utils/apiClient';
 
 interface ShippingCompany {
     id: string;
@@ -33,18 +34,7 @@ export const ShippingCompanyManager: React.FC = () => {
         try {
             setIsLoading(true);
             const apiBaseUrl = '/api';
-            const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies`);
-
-            if (response.ok) {
-                const data = await response.json();
-                setCompanies(data);
-            } else {
-                toast({
-                    title: 'Error',
-                    description: 'Failed to load shipping companies',
-                    variant: 'destructive',
-                });
-            }
+            setCompanies(await apiFetch<ShippingCompany[]>(`${apiBaseUrl}/cogs/shipping-companies`));
         } catch (error) {
             console.error('Error loading shipping companies:', error);
             toast({
@@ -69,27 +59,17 @@ export const ShippingCompanyManager: React.FC = () => {
 
         try {
             const apiBaseUrl = '/api';
-            const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies`, {
+            await apiFetch(`${apiBaseUrl}/cogs/shipping-companies`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData),
             });
-
-            if (response.ok) {
-                toast({
-                    title: 'Success',
-                    description: 'Shipping company added successfully',
-                });
-                setShowAddDialog(false);
-                setFormData({ name: '', display_name: '', tracking_prefixes: '' });
-                loadCompanies();
-            } else {
-                toast({
-                    title: 'Error',
-                    description: 'Failed to add shipping company',
-                    variant: 'destructive',
-                });
-            }
+            toast({
+                title: 'Success',
+                description: 'Shipping company added successfully',
+            });
+            setShowAddDialog(false);
+            setFormData({ name: '', display_name: '', tracking_prefixes: '' });
+            loadCompanies();
         } catch (error) {
             console.error('Error adding shipping company:', error);
             toast({
@@ -112,28 +92,18 @@ export const ShippingCompanyManager: React.FC = () => {
 
         try {
             const apiBaseUrl = '/api';
-            const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies/${editingCompany.id}`, {
+            await apiFetch(`${apiBaseUrl}/cogs/shipping-companies/${editingCompany.id}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData),
             });
-
-            if (response.ok) {
-                toast({
-                    title: 'Success',
-                    description: 'Shipping company updated successfully',
-                });
-                setShowEditDialog(false);
-                setEditingCompany(null);
-                setFormData({ name: '', display_name: '', tracking_prefixes: '' });
-                loadCompanies();
-            } else {
-                toast({
-                    title: 'Error',
-                    description: 'Failed to update shipping company',
-                    variant: 'destructive',
-                });
-            }
+            toast({
+                title: 'Success',
+                description: 'Shipping company updated successfully',
+            });
+            setShowEditDialog(false);
+            setEditingCompany(null);
+            setFormData({ name: '', display_name: '', tracking_prefixes: '' });
+            loadCompanies();
         } catch (error) {
             console.error('Error updating shipping company:', error);
             toast({
@@ -151,23 +121,14 @@ export const ShippingCompanyManager: React.FC = () => {
 
         try {
             const apiBaseUrl = '/api';
-            const response = await fetch(`${apiBaseUrl}/cogs/shipping-companies/${id}`, {
+            await apiFetch(`${apiBaseUrl}/cogs/shipping-companies/${id}`, {
                 method: 'DELETE',
             });
-
-            if (response.ok) {
-                toast({
-                    title: 'Success',
-                    description: 'Shipping company deleted successfully',
-                });
-                loadCompanies();
-            } else {
-                toast({
-                    title: 'Error',
-                    description: 'Failed to delete shipping company',
-                    variant: 'destructive',
-                });
-            }
+            toast({
+                title: 'Success',
+                description: 'Shipping company deleted successfully',
+            });
+            loadCompanies();
         } catch (error) {
             console.error('Error deleting shipping company:', error);
             toast({

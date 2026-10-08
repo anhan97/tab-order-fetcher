@@ -21,6 +21,7 @@ import { apiFetch, ApiError } from '@/utils/apiClient';
 import { useToast } from '@/hooks/use-toast';
 import { FacebookAppsManager } from '@/components/FacebookAppsManager';
 import { ShopifyAppConfigCard } from '@/components/ShopifyAppConfigCard';
+import { StoreMembersDialog } from '@/components/StoreMembersDialog';
 
 interface AdminStats {
   users: number;
@@ -135,6 +136,8 @@ export const AdminPage = () => {
   const [selected, setSelected] = useState<AdminUserDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'users' | 'stores' | 'apps'>('users');
+  // Which store's member list is open (null = dialog closed).
+  const [membersFor, setMembersFor] = useState<AdminStoreRow | null>(null);
 
   const loadUsers = async (q = '') => {
     setLoading(true);
@@ -174,10 +177,10 @@ export const AdminPage = () => {
     }
   };
 
-  // Approval gate action: duyệt (PENDING→ACTIVE), khoá (→SUSPENDED, thu hồi
-  // toàn bộ phiên), mở khoá (→ACTIVE).
+  // Approval gate: approve (PENDING->ACTIVE), suspend (->SUSPENDED, which
+  // revokes every session), or reinstate (->ACTIVE).
   const changeStatus = async (target: AdminUserSummary, status: 'ACTIVE' | 'SUSPENDED') => {
-    if (status === 'SUSPENDED' && !confirm(`Khoá tài khoản ${target.email}? Mọi phiên đăng nhập của họ sẽ bị thu hồi.`)) return;
+    if (status === 'SUSPENDED' && !confirm(`Suspend ${target.email}? All of their sessions will be revoked.`)) return;
     try {
       await apiFetch(`/api/admin/users/${target.id}/status`, {
         method: 'PATCH',
@@ -185,12 +188,12 @@ export const AdminPage = () => {
       });
       toast({
         title: status === 'ACTIVE'
-          ? (target.status === 'PENDING' ? `Đã duyệt ${target.email}` : `Đã mở khoá ${target.email}`)
-          : `Đã khoá ${target.email}`
+          ? (target.status === 'PENDING' ? `Approved ${target.email}` : `Reinstated ${target.email}`)
+          : `Suspended ${target.email}`
       });
       await loadUsers(userSearch);
     } catch (e: any) {
-      toast({ title: 'Đổi trạng thái thất bại', description: e.message, variant: 'destructive' });
+      toast({ title: 'Could not change status', description: e.message, variant: 'destructive' });
     }
   };
 
@@ -259,14 +262,14 @@ export const AdminPage = () => {
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           <StatCard icon={<Users className="h-4 w-4 text-slate-400" />} label="Users" value={stats.users} />
           <StatCard icon={<ShieldCheck className="h-4 w-4 text-amber-500" />} label="Admins" value={stats.admins} />
-          <StatCard icon={<Users className="h-4 w-4 text-rose-500" />} label="Chờ duyệt" value={stats.pendingUsers ?? 0} />
+          <StatCard icon={<Users className="h-4 w-4 text-rose-500" />} label="Pending approval" value={stats.pendingUsers ?? 0} />
           <StatCard icon={<StoreIcon className="h-4 w-4 text-emerald-500" />} label="Stores" value={stats.stores} />
           <StatCard icon={<AppWindow className="h-4 w-4 text-blue-500" />} label="FB Apps" value={stats.fbApps} />
           <StatCard icon={<Link2 className="h-4 w-4 text-violet-500" />} label="FB Connections" value={stats.fbConnections} />
         </div>
       )}
 
-      {/* Shopify App (OAuth) hệ thống — admin cấu hình 1 app dùng chung */}
+      {/* System-wide Shopify OAuth app — one shared app, configured by an admin */}
       <ShopifyAppConfigCard />
 
       <Tabs value={activeTab} onValueChange={v => setActiveTab(v as 'users' | 'stores' | 'apps')}>
@@ -347,7 +350,7 @@ export const AdminPage = () => {
                               className="bg-emerald-600 hover:bg-emerald-700 mr-1"
                               onClick={() => changeStatus(u, 'ACTIVE')}
                             >
-                              Duyệt
+                              Approve
                             </Button>
                           )}
                           {u.status === 'ACTIVE' && u.id !== user?.id && (
@@ -357,7 +360,7 @@ export const AdminPage = () => {
                               className="text-rose-600 border-rose-200 hover:bg-rose-50 mr-1"
                               onClick={() => changeStatus(u, 'SUSPENDED')}
                             >
-                              Khoá
+                              Suspend
                             </Button>
                           )}
                           {u.status === 'SUSPENDED' && (
@@ -367,7 +370,7 @@ export const AdminPage = () => {
                               className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 mr-1"
                               onClick={() => changeStatus(u, 'ACTIVE')}
                             >
-                              Mở khoá
+                              Reinstate
                             </Button>
                           )}
                           <Button
@@ -423,16 +426,17 @@ export const AdminPage = () => {
                       <th className="text-right px-4 py-2">Orders</th>
                       <th className="text-left px-4 py-2">Status</th>
                       <th className="text-left px-4 py-2">Created</th>
+                      <th className="text-right px-4 py-2">Access</th>
                     </tr>
                   </thead>
                   <tbody>
                     {storesLoading && stores.length === 0 && (
-                      <tr><td colSpan={7} className="text-center py-10 text-slate-400">
+                      <tr><td colSpan={8} className="text-center py-10 text-slate-400">
                         <Loader2 className="h-4 w-4 animate-spin inline mr-2" /> Loading stores…
                       </td></tr>
                     )}
                     {!storesLoading && stores.length === 0 && (
-                      <tr><td colSpan={7} className="text-center py-10 text-slate-400">No stores matched.</td></tr>
+                      <tr><td colSpan={8} className="text-center py-10 text-slate-400">No stores matched.</td></tr>
                     )}
                     {stores.map(s => (
                       <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50/50">
@@ -456,6 +460,13 @@ export const AdminPage = () => {
                             : <Badge variant="outline">inactive</Badge>}
                         </td>
                         <td className="px-4 py-2 text-xs text-slate-500">{new Date(s.createdAt).toISOString().slice(0, 10)}</td>
+                        <td className="px-4 py-2 text-right">
+                          <Button size="sm" variant="outline" className="h-7 text-xs"
+                                  onClick={() => setMembersFor(s)}>
+                            <Users className="h-3 w-3 mr-1" />
+                            Members
+                          </Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -463,6 +474,12 @@ export const AdminPage = () => {
               </div>
             </CardContent>
           </Card>
+
+          <StoreMembersDialog
+            storeId={membersFor?.id ?? null}
+            storeLabel={membersFor ? (membersFor.name ? `${membersFor.name} — ${membersFor.storeDomain}` : membersFor.storeDomain) : ''}
+            onClose={() => setMembersFor(null)}
+          />
         </TabsContent>
 
         <TabsContent value="apps" className="mt-4">

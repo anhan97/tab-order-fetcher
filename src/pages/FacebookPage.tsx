@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -122,12 +123,18 @@ export const FacebookPage = () => {
               {facebookAccounts.length} ad account{facebookAccounts.length === 1 ? '' : 's'} accessible · 60-day token (auto-refresh)
             </div>
           </div>
+          <Button asChild size="sm" className="bg-teal-600 hover:bg-teal-700 ml-auto">
+            <Link to={selectedAccount ? `/ads-launcher?account=${selectedAccount.id}` : '/ads-launcher'}>
+              <Rocket className="h-3.5 w-3.5 mr-1" />
+              Create ads
+            </Link>
+          </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={handleDisconnect}
             disabled={disconnecting}
-            className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50 ml-auto"
+            className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50"
           >
             <LogOut className="h-3.5 w-3.5 mr-1" />
             {disconnecting ? 'Signing out...' : 'Disconnect Facebook'}
@@ -181,11 +188,11 @@ export const FacebookPage = () => {
             />
           ) : (
             <Card className="p-8 text-center text-slate-600">
-              <h3 className="font-semibold text-slate-900 mb-1">Chưa thấy ad account nào</h3>
+              <h3 className="font-semibold text-slate-900 mb-1">No ad accounts found</h3>
               <p className="text-sm">
-                Facebook đã kết nối nhưng token chưa thấy ad account nào (account đang
-                pending, bị disable, hoặc thiếu quyền <code>ads_read</code>). Mở tab{' '}
-                <strong>Diagnostics</strong> để xem chi tiết — không cần kết nối lại.
+                Facebook is connected, but the token sees no ad accounts (they may be
+                pending, disabled, or missing the <code>ads_read</code> scope). Open the{' '}
+                <strong>Diagnostics</strong> tab for details — no need to reconnect.
               </p>
             </Card>
           )}

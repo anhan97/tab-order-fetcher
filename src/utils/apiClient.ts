@@ -11,6 +11,11 @@
 const TOKEN_KEY = 'auth_token';
 const REFRESH_KEY = 'auth_refresh_token';
 const STORE_KEY = 'active_store_domain';
+// Retired keys from the pre-JWT "paste your Admin API token" flow. Nothing
+// writes them any more, but a browser that ran an older build still holds
+// them — and they used to survive logout, leaking the previous merchant's
+// store (and token) into the next session. clear() evicts them for good.
+const LEGACY_KEYS = ['shopify_store_url', 'shopify_access_token'];
 
 export class ApiError extends Error {
   status: number;
@@ -29,6 +34,34 @@ export function buildHeaders(extra: Record<string, string> = {}): Record<string,
   const storeDomain = localStorage.getItem(STORE_KEY);
   if (storeDomain && !headers['X-Shopify-Store-Domain']) headers['X-Shopify-Store-Domain'] = storeDomain;
   return headers;
+}
+
+/**
+ * Headers for the call sites that still use bare `fetch` against store-scoped
+ * backend routes.
+ *
+ * Those sites used to authenticate purely by echoing the store's Admin API
+ * token in `X-Shopify-Access-Token`. That silently stopped working for anyone
+ * operating a store granted to them rather than owned: they hold no token, so
+ * the header went out EMPTY and the backend answered 401 on every call. The
+ * Bearer JWT is the identity now; the legacy token is only sent when we
+ * actually have one, because an empty value reads as a failed legacy attempt.
+ *
+ * Prefer apiFetch for new code — it adds refresh-and-retry on top of this.
+ */
+export function storeHeaders(
+  cfg?: { storeUrl?: string | null; accessToken?: string | null } | null,
+  extra: Record<string, string> = {}
+): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  if (cfg?.storeUrl) {
+    headers['X-Shopify-Store-Domain'] = cfg.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  }
+  if (cfg?.accessToken) {
+    headers['X-Shopify-Access-Token'] = cfg.accessToken;
+  }
+  // Fills in Authorization, plus the active-store domain if not set above.
+  return buildHeaders(headers);
 }
 
 async function parse(res: Response): Promise<any> {
@@ -98,7 +131,14 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     }
   }
   if (!res.ok) {
-    const msg = (body && typeof body === 'object' && body.error) || `${res.status} ${res.statusText}`;
+    // Take the most specific thing the server said. Some routes answer with a
+    // generic `error` plus the real reason in `details`; showing only the
+    // former turned every failure into "Failed to update order tracking".
+    const obj = body && typeof body === 'object' ? body : null;
+    const parts = [obj?.error, obj?.details, obj?.message]
+      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    const unique = parts.filter((v, i) => parts.findIndex(p => p === v || v.includes(p)) === i);
+    const msg = unique.join(' — ') || `${res.status} ${res.statusText}`;
     throw new ApiError(msg, res.status, body);
   }
   return body as T;
@@ -130,5 +170,6 @@ export const auth = {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem(STORE_KEY);
+    LEGACY_KEYS.forEach(k => localStorage.removeItem(k));
   }
 };

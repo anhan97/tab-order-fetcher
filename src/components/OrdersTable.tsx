@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { FacebookAdAccount } from '@/types/facebook';
 import { DashboardInsights } from '@/components/DashboardInsights';
 import { useAppContext } from '@/context/AppContext';
+import { apiFetch, storeHeaders } from '@/utils/apiClient';
 import {
   getShopifyDateRange,
   getDateRangeFromPreset,
@@ -104,6 +105,11 @@ export const OrdersTable = ({
   // Map of shopifyOrderId → payment fee (from Shopify Payments balance API).
   // Keyed by string because Shopify order IDs are very large numbers.
   const [orderFees, setOrderFees] = useState<Record<string, number>>({});
+  // shopifyOrderId → COGS frozen on the order's line items in our DB — the
+  // same number Daily P&L and Fulfillment use, so all three agree. Preferred
+  // over the legacy browser-side cogsConfig, which only existed in whichever
+  // browser someone had once set it up in (hence "works for some stores").
+  const [orderCogs, setOrderCogs] = useState<Record<string, { cogs: number | null; missing: boolean }>>({});
   const [statusFilter, setStatusFilter] = useState<string>('any');
   // Default to today — matches dashboards/P&L. Old "30 days" default surfaced
   // a 30-day total ad spend that confused users on first load.
@@ -129,11 +135,7 @@ export const OrdersTable = ({
   useEffect(() => {
     const loadShippingCompanies = async () => {
       try {
-        const response = await fetch('/api/cogs/shipping-companies');
-        if (response.ok) {
-          const data = await response.json();
-          setShippingCompanies(data);
-        }
+        setShippingCompanies(await apiFetch<any[]>('/api/cogs/shipping-companies'));
       } catch (error) {
         console.error('Failed to load shipping companies:', error);
       }
@@ -166,7 +168,9 @@ export const OrdersTable = ({
   // Pull payment fees from our DB whenever the date range changes. Failure is
   // non-fatal — Fees column simply renders $0 for orders we don't have data on.
   useEffect(() => {
-    if (!shopifyConfig?.storeUrl || !shopifyConfig?.accessToken) return;
+    // Members of a store have no Shopify token client-side — the request is
+    // authorized by the session (storeHeaders), so only the domain is needed.
+    if (!shopifyConfig?.storeUrl) return;
     const ctrl = new AbortController();
     (async () => {
       try {
@@ -175,19 +179,19 @@ export const OrdersTable = ({
           to: new Date(dateRange.to.getFullYear(), dateRange.to.getMonth(), dateRange.to.getDate() + 1).toISOString()
         });
         const res = await fetch(`/api/pl/order-fees?${params}`, {
-          headers: {
-            'X-Shopify-Store-Domain': shopifyConfig.storeUrl,
-            'X-Shopify-Access-Token': shopifyConfig.accessToken
-          },
+          headers: storeHeaders(shopifyConfig),
           signal: ctrl.signal
         });
         if (!res.ok) return;
         const data = await res.json();
         const map: Record<string, number> = {};
+        const cogsMap: Record<string, { cogs: number | null; missing: boolean }> = {};
         for (const [orderId, info] of Object.entries(data.fees || {})) {
           map[orderId] = (info as any).fee || 0;
+          cogsMap[orderId] = { cogs: (info as any).cogs ?? null, missing: !!(info as any).missingCost };
         }
         setOrderFees(map);
+        setOrderCogs(cogsMap);
       } catch (e) {
         if ((e as any)?.name !== 'AbortError') console.warn('Failed to load order fees:', e);
       }
@@ -233,11 +237,7 @@ export const OrdersTable = ({
       ctrl = new AbortController();
       setIsLoadingAdSpend(true);
       try {
-        const headers = {
-          'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-          'X-Shopify-Access-Token': shopifyConfig.accessToken,
-          ...(timezone ? { 'X-Tz': timezone } : {})
-        };
+        const headers = storeHeaders(shopifyConfig, timezone ? { 'X-Tz': timezone } : {});
         // Today single-day → /api/pl/today (5min memo). Multi-day or
         // historical → /api/pl/daily (recent days re-aggregated live, older
         // from snapshot). Both honour CampaignStoreMapping for this store.
@@ -423,9 +423,23 @@ export const OrdersTable = ({
     const totalRevenue = orders.reduce((sum, order) => sum + order.totalPrice, 0);
     let totalCogs = 0;
 
-    if (cogsConfig && orders.length > 0) {
+    // DB cost first (once per order id); the legacy config only fills in
+    // orders the DB has no cost for yet.
+    const counted = new Set<string>();
+    const legacyOrders: Order[] = [];
+    for (const order of orders) {
+      const db = orderCogs[String(order.id)];
+      if (db && db.cogs !== null) {
+        if (!counted.has(String(order.id))) totalCogs += db.cogs;
+        counted.add(String(order.id));
+      } else {
+        legacyOrders.push(order);
+      }
+    }
+
+    if (cogsConfig && legacyOrders.length > 0) {
       // Calculate COGS directly in frontend - much faster than API calls
-      for (const order of orders) {
+      for (const order of legacyOrders) {
         const orderLines = order.lineItems.map(item => ({
           variant_id: parseInt(item.variantId),
           quantity: item.quantity
@@ -561,8 +575,8 @@ export const OrdersTable = ({
   const handleExportCSV = () => {
     if (orders.length === 0) { // Changed from filteredOrders to orders
       toast({
-        title: "Không có dữ liệu",
-        description: "Không có đơn hàng nào để xuất.",
+        title: "No data",
+        description: "There are no orders to export.",
         variant: "destructive",
       });
       return;
@@ -570,8 +584,8 @@ export const OrdersTable = ({
 
     exportToCSV(orders); // Changed from filteredOrders to orders
     toast({
-      title: "Xuất CSV thành công!",
-      description: `Đã xuất ${orders.length} đơn hàng ra file CSV.`, // Changed from filteredOrders to orders
+      title: "CSV exported",
+      description: `Exported ${orders.length} orders to CSV.`, // Changed from filteredOrders to orders
     });
   };
 
@@ -708,22 +722,19 @@ export const OrdersTable = ({
         if (orderLines.length > 0) {
           const apiBaseUrl = '/api';
 
-          const response = await fetch(`${apiBaseUrl}/cogs/calculate`, {
+          // NOTE: /api/cogs/calculate has no backend route, so this has been
+          // failing (silently, into the catch below) for a while — totalCogs
+          // just stays 0. Left wired up rather than deleted because the P&L
+          // path that would replace it lives in /api/pl.
+          const result = await apiFetch<{ total_cogs?: number }>(`${apiBaseUrl}/cogs/calculate`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
             body: JSON.stringify({
               order_lines: orderLines,
               country_code: countryCode,
               shipping_company: shippingCompany
             }),
           });
-
-          if (response.ok) {
-            const result = await response.json();
-            totalCogs = result.total_cogs || 0;
-          }
+          totalCogs = result.total_cogs || 0;
         }
       } catch (error) {
         console.warn(`Failed to calculate COGS for order ${order.id}:`, error);
@@ -787,7 +798,7 @@ export const OrdersTable = ({
 
     calculateAllMetrics();
     calculateAllMetrics();
-  }, [orders, dateRange, cogsConfig, selectedShippingProvider, shippingCompanies]);
+  }, [orders, dateRange, cogsConfig, selectedShippingProvider, shippingCompanies, orderCogs]);
 
   // Calculate individual order costs using bulk API
   useEffect(() => {
@@ -995,7 +1006,7 @@ export const OrdersTable = ({
         <CardContent className="flex items-center justify-center py-12">
           <div className="text-center space-y-4">
             <RefreshCw className="h-8 w-8 animate-spin text-teal-500 mx-auto" />
-            <p className="text-slate-600">Đang tải dữ liệu đơn hàng từ Shopify...</p>
+            <p className="text-slate-600">Loading orders from Shopify…</p>
           </div>
         </CardContent>
       </Card>
@@ -1006,6 +1017,9 @@ export const OrdersTable = ({
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div className="flex items-center space-x-4">
+          {/* Own range controls only when used standalone — on the dashboard
+              the shared picker above the tabs owns the range. */}
+          {!globalDateRange && (<>
           <Select
             value={datePreset}
             onValueChange={(value: DatePreset) => handleDatePresetChange(value)}
@@ -1074,6 +1088,7 @@ export const OrdersTable = ({
               </Popover>
             </div>
           )}
+          </>)}
 
           <Select
             value={periodType}
@@ -1475,13 +1490,17 @@ export const OrdersTable = ({
                   .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                   .map((order) => {
                     const daysSinceOrder = getDaysSinceOrder(order.orderDate);
-                    const costs = orderCosts.get(order.id) || {
-                      cogs: 0,
-                      handlingFee: 0,
-                      shippingCost: 0,
-                      totalCost: 0,
-                      netProfit: 0,
-                      netProfitMargin: 0
+                    const legacy = orderCosts.get(order.id);
+                    const db = orderCogs[String(order.id)];
+                    const fee = orderFees[String(order.id)] || 0;
+                    const cogs = db && db.cogs !== null ? db.cogs : (legacy?.cogs ?? null);
+                    const shipping = legacy?.shippingCost ?? order.shippingCost ?? 0;
+                    const netProfit = order.totalPrice - (cogs ?? 0) - shipping - fee;
+                    const costs = {
+                      cogs,
+                      missing: !!db?.missing,
+                      netProfit,
+                      netProfitMargin: order.totalPrice > 0 ? (netProfit / order.totalPrice) * 100 : 0
                     };
                     return (
                       <TableRow key={order.id} className="group hover:bg-slate-50">
@@ -1521,7 +1540,13 @@ export const OrdersTable = ({
                         <TableCell className="text-purple-700">
                           {formatCurrency(orderFees[String(order.id)] || 0)}
                         </TableCell>
-                        <TableCell>{formatCurrency(costs.cogs)}</TableCell>
+                        <TableCell>
+                          {costs.cogs === null
+                            ? <span className="text-xs text-amber-600" title="No COGS price for this order yet — set it on the COGS page">No cost</span>
+                            : <span title={costs.missing ? 'Some items in this order have no COGS price yet' : undefined}>
+                                {formatCurrency(costs.cogs)}{costs.missing && <span className="text-amber-600"> *</span>}
+                              </span>}
+                        </TableCell>
                         <TableCell>
                           <div>
                             <p className={costs.netProfit >= 0 ? "text-green-600" : "text-red-600"}>

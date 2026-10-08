@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
 /**
- * Landing screen for PENDING (chờ admin duyệt) and SUSPENDED accounts.
+ * Landing screen for PENDING (awaiting admin approval) and SUSPENDED accounts.
  * They can log in — every feature route is blocked server-side by
  * requireActive — so this page is all they see until an admin acts.
  */
@@ -32,26 +32,26 @@ export const PendingApprovalPage = () => {
             : <Clock className="h-10 w-10 text-white" />}
         </div>
         <h2 className="text-2xl font-bold text-slate-900 mb-2">
-          {suspended ? 'Tài khoản đã bị khoá' : 'Đang chờ admin duyệt'}
+          {suspended ? 'Account suspended' : 'Waiting for admin approval'}
         </h2>
         <p className="text-slate-600 mb-6">
           {suspended ? (
-            <>Tài khoản <strong>{user?.email}</strong> đã bị tạm khoá. Liên hệ admin để được mở lại.</>
+            <>Account <strong>{user?.email}</strong> has been suspended. Contact an admin to have it reinstated.</>
           ) : (
-            <>Tài khoản <strong>{user?.email}</strong> đã đăng ký thành công và đang chờ admin
-            phê duyệt. Sau khi được duyệt, đăng nhập lại (hoặc bấm kiểm tra) là vào được hệ thống.</>
+            <>Account <strong>{user?.email}</strong> was registered and is waiting for an admin to
+            approve it. Once approved, sign in again (or hit check) to get in.</>
           )}
         </p>
         <div className="flex gap-3 justify-center">
           {!suspended && (
             <Button variant="outline" onClick={() => window.location.reload()}>
               <RefreshCw className="h-4 w-4 mr-2" />
-              Kiểm tra lại
+              Check again
             </Button>
           )}
           <Button variant="outline" onClick={handleLogout} className="text-rose-600 border-rose-200 hover:bg-rose-50">
             <LogOut className="h-4 w-4 mr-2" />
-            Đăng xuất
+            Sign out
           </Button>
         </div>
       </Card>

@@ -2,7 +2,7 @@
  * Single source of truth for the fulfillment export.
  *
  * Every column a user can put in an exported CSV/text file is declared once
- * here (key + Vietnamese UI label + English file header + how to pull the
+ * here (key + UI label + file header + how to pull the
  * value off an order row). The frontend fetches this list to render the
  * column picker, and the export endpoint uses the same list to build the file
  * — so adding a new exportable column is a one-line change here and never
@@ -24,7 +24,7 @@ export interface ExportRowCtx {
 
 export interface ExportFieldDef {
   key: string;
-  /** Vietnamese label shown in the column-picker UI. */
+  /** Label shown in the column-picker UI. */
   label: string;
   /** English column header written into the exported file. */
   header: string;
@@ -34,48 +34,48 @@ export interface ExportFieldDef {
 const num = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
 
 export const EXPORT_FIELDS: ExportFieldDef[] = [
-  { key: 'orderNumber',    label: 'Mã đơn',           header: 'Order Number',    get: ({ order }) => order.orderNumber ?? '' },
-  { key: 'processedAt',    label: 'Ngày đặt',         header: 'Order Date',      get: ({ order }) => (order.processedAt ? new Date(order.processedAt).toISOString().slice(0, 10) : '') },
-  { key: 'fulfillStatus',  label: 'Trạng thái xử lý', header: 'Fulfill Status',  get: ({ order }) => order.fulfillStatus ?? '' },
-  { key: 'paymentStatus',  label: 'Thanh toán',       header: 'Payment Status',  get: ({ order }) => order.status ?? '' },
-  { key: 'deliveryStatus', label: 'Trạng thái giao',  header: 'Delivery Status', get: ({ order }) => order.deliveryStatus ?? '' },
+  { key: 'orderNumber',    label: 'Order number',           header: 'Order Number',    get: ({ order }) => order.orderNumber ?? '' },
+  { key: 'processedAt',    label: 'Order date',         header: 'Order Date',      get: ({ order }) => (order.processedAt ? new Date(order.processedAt).toISOString().slice(0, 10) : '') },
+  { key: 'fulfillStatus',  label: 'Fulfillment status', header: 'Fulfill Status',  get: ({ order }) => order.fulfillStatus ?? '' },
+  { key: 'paymentStatus',  label: 'Payment status',       header: 'Payment Status',  get: ({ order }) => order.status ?? '' },
+  { key: 'deliveryStatus', label: 'Delivery status',  header: 'Delivery Status', get: ({ order }) => order.deliveryStatus ?? '' },
 
-  { key: 'customerName',   label: 'Tên khách',        header: 'NAME',            get: ({ order, address }) => order.customerName ?? address.name ?? '' },
+  { key: 'customerName',   label: 'Customer name',        header: 'NAME',            get: ({ order, address }) => order.customerName ?? address.name ?? '' },
   { key: 'customerEmail',  label: 'Email',            header: 'EMAIL',           get: ({ order }) => order.customerEmail ?? '' },
-  { key: 'customerPhone',  label: 'SĐT',              header: 'Phone Number',    get: ({ order, address }) => order.customerPhone ?? address.phone ?? '' },
+  { key: 'customerPhone',  label: 'Phone',              header: 'Phone Number',    get: ({ order, address }) => order.customerPhone ?? address.phone ?? '' },
 
-  { key: 'address1',       label: 'Địa chỉ 1',        header: 'Address',         get: ({ address }) => address.address1 ?? '' },
-  { key: 'address2',       label: 'Địa chỉ 2',        header: 'Address 2',       get: ({ address }) => address.address2 ?? '' },
-  { key: 'city',           label: 'Thành phố',        header: 'City',            get: ({ address }) => address.city ?? '' },
-  { key: 'province',       label: 'Tỉnh/Bang',        header: 'State/Province',  get: ({ address }) => address.province ?? '' },
-  { key: 'provinceCode',   label: 'Mã Tỉnh/Bang',     header: 'State Code',      get: ({ address }) => address.province_code ?? address.provinceCode ?? '' },
-  { key: 'zip',            label: 'Mã bưu chính',     header: 'Postal Code',     get: ({ address }) => address.zip ?? '' },
-  { key: 'country',        label: 'Quốc gia',         header: 'Country',         get: ({ address }) => address.country ?? '' },
-  { key: 'countryCode',    label: 'Mã QG',            header: 'Country Code',    get: ({ order, address }) => address.country_code ?? address.countryCode ?? order.shippingCountryCode ?? '' },
+  { key: 'address1',       label: 'Address 1',        header: 'Address',         get: ({ address }) => address.address1 ?? '' },
+  { key: 'address2',       label: 'Address 2',        header: 'Address 2',       get: ({ address }) => address.address2 ?? '' },
+  { key: 'city',           label: 'City',        header: 'City',            get: ({ address }) => address.city ?? '' },
+  { key: 'province',       label: 'State / province',        header: 'State/Province',  get: ({ address }) => address.province ?? '' },
+  { key: 'provinceCode',   label: 'State code',     header: 'State Code',      get: ({ address }) => address.province_code ?? address.provinceCode ?? '' },
+  { key: 'zip',            label: 'Postal code',     header: 'Postal Code',     get: ({ address }) => address.zip ?? '' },
+  { key: 'country',        label: 'Country',         header: 'Country',         get: ({ address }) => address.country ?? '' },
+  { key: 'countryCode',    label: 'Country code',            header: 'Country Code',    get: ({ order, address }) => address.country_code ?? address.countryCode ?? order.shippingCountryCode ?? '' },
   {
     key: 'fullAddress',
-    label: 'Địa chỉ đầy đủ',
+    label: 'Full address',
     header: 'Full Address',
     get: ({ address }) => [address.address1, address.address2, address.city, address.province, address.zip, address.country].filter(Boolean).join(', ')
   },
 
-  { key: 'productTitle', label: 'Sản phẩm',    header: 'Product Name', get: ({ lineItem }) => lineItem?.title ?? '' },
+  { key: 'productTitle', label: 'Product',    header: 'Product Name', get: ({ lineItem }) => lineItem?.title ?? '' },
   { key: 'sku',          label: 'SKU',         header: 'Product SKU',  get: ({ lineItem }) => lineItem?.sku ?? '' },
-  { key: 'style',        label: 'Style (màu)', header: 'STYLE(COLOR)', get: ({ lineItem }) => lineItem?.variantTitle ?? '' },
-  { key: 'quantity',     label: 'Số lượng',    header: 'Quantity',     get: ({ lineItem }) => (lineItem ? lineItem.quantity : '') },
-  { key: 'itemPrice',    label: 'Đơn giá',     header: 'Item Price',   get: ({ lineItem }) => num(lineItem?.price) },
+  { key: 'style',        label: 'Style (color)', header: 'STYLE(COLOR)', get: ({ lineItem }) => lineItem?.variantTitle ?? '' },
+  { key: 'quantity',     label: 'Quantity',    header: 'Quantity',     get: ({ lineItem }) => (lineItem ? lineItem.quantity : '') },
+  { key: 'itemPrice',    label: 'Item price',     header: 'Item Price',   get: ({ lineItem }) => num(lineItem?.price) },
   {
     key: 'itemTotal',
-    label: 'Thành tiền',
+    label: 'Line total',
     header: 'Item Total',
     get: ({ lineItem }) => (lineItem?.price != null ? (Number(lineItem.price) * (lineItem.quantity || 0)).toFixed(2) : '')
   },
 
-  { key: 'orderTotal',     label: 'Tổng đơn',     header: 'Order Total',     get: ({ order }) => num(order.totalAmount) },
-  { key: 'currency',       label: 'Tiền tệ',      header: 'Currency',        get: ({ order }) => order.currency ?? '' },
-  { key: 'trackingNumber', label: 'Mã vận đơn',   header: 'Tracking Number', get: ({ order }) => order.trackingNumber ?? '' },
-  { key: 'carrier',        label: 'Đơn vị VC',    header: 'Carrier',         get: ({ order }) => order.shippingCompany ?? '' },
-  { key: 'supplier',       label: 'Nhà cung cấp', header: 'Supplier',        get: ({ order }) => order.supplier ?? '' }
+  { key: 'orderTotal',     label: 'Order total',     header: 'Order Total',     get: ({ order }) => num(order.totalAmount) },
+  { key: 'currency',       label: 'Currency',      header: 'Currency',        get: ({ order }) => order.currency ?? '' },
+  { key: 'trackingNumber', label: 'Tracking number',   header: 'Tracking Number', get: ({ order }) => order.trackingNumber ?? '' },
+  { key: 'carrier',        label: 'Carrier',    header: 'Carrier',         get: ({ order }) => order.shippingCompany ?? '' },
+  { key: 'supplier',       label: 'Supplier', header: 'Supplier',        get: ({ order }) => order.supplier ?? '' }
 ];
 
 export const EXPORT_FIELD_MAP: Map<string, ExportFieldDef> = new Map(EXPORT_FIELDS.map(f => [f.key, f]));

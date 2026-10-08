@@ -18,7 +18,12 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
+        // Ads Launcher contract lives with the API (backend/src/ads-launcher)
+        // so both ends parse with the same zod schemas.
+        '@contract/ads-launcher': path.resolve(__dirname, './backend/src/ads-launcher/contract.ts'),
       },
+      // The contract imports zod from backend/; use the web app's copy.
+      dedupe: ['zod'],
     },
     server: {
       port: 8080,

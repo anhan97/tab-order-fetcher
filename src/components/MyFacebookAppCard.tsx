@@ -9,6 +9,7 @@ import { Loader2, Save, Trash2, ExternalLink, AlertCircle, CheckCircle2, Eye, Ey
 import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/context/AppContext';
 import { FacebookAdsApiClient } from '@/utils/facebookAdsApi';
+import { storeHeaders } from '@/utils/apiClient';
 
 interface MyAppResponse {
   hasOwnApp: boolean;
@@ -45,12 +46,8 @@ export function MyFacebookAppCard({ onSaved }: { onSaved?: () => void }) {
   const [showSecret, setShowSecret] = useState(false);
 
   const headers = (): Record<string, string> => {
-    if (!shopifyConfig) return { 'Content-Type': 'application/json' };
-    return {
-      'Content-Type': 'application/json',
-      'X-Shopify-Store-Domain': shopifyConfig.storeUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-      'X-Shopify-Access-Token': shopifyConfig.accessToken
-    };
+    if (!shopifyConfig) return storeHeaders(null);
+    return storeHeaders(shopifyConfig);
   };
 
   const load = async () => {

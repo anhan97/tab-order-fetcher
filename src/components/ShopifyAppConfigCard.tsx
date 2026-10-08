@@ -1,7 +1,7 @@
 /**
  * Admin-only: the ONE global Shopify App (OAuth) the whole system connects
- * stores through (shipbro-style). Admin dán Client ID + Secret ở đây; mọi
- * user "Kết nối qua Shopify" dùng app này. Secret mã hoá ở backend.
+ * stores through (shipbro-style). An admin pastes the Client ID + Secret here; every
+ * "Connect via Shopify" flow uses it. The secret is encrypted server-side.
  */
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -38,7 +38,7 @@ export function ShopifyAppConfigCard() {
       setEditing(!r.app);
       if (r.app) setClientId(r.app.clientId);
     } catch (e: any) {
-      toast({ title: 'Không tải được cấu hình', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Could not load the config', description: e?.message, variant: 'destructive' });
     } finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
@@ -51,31 +51,31 @@ export function ShopifyAppConfigCard() {
         method: 'PUT',
         body: JSON.stringify({ clientId: clientId.trim(), clientSecret: clientSecret.trim() })
       });
-      toast({ title: 'Đã lưu Shopify App hệ thống' });
+      toast({ title: 'System Shopify app saved' });
       setClientSecret('');
       setEditing(false);
       await load();
     } catch (e: any) {
-      toast({ title: 'Lưu thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Save failed', description: e?.message, variant: 'destructive' });
     } finally { setSaving(false); }
   };
 
   const remove = async () => {
-    if (!confirm('Xoá cấu hình Shopify App hệ thống? Người dùng sẽ không kết nối được store mới cho tới khi cấu hình lại.')) return;
+    if (!confirm('Delete the system Shopify app config? Nobody can connect a new store until it is set up again.')) return;
     try {
       await apiFetch('/api/admin/shopify-app', { method: 'DELETE' });
       setApp(null);
       setEditing(true);
       await load();
     } catch (e: any) {
-      toast({ title: 'Xoá thất bại', description: e?.message, variant: 'destructive' });
+      toast({ title: 'Delete failed', description: e?.message, variant: 'destructive' });
     }
   };
 
   if (loading) {
     return (
       <Card><CardContent className="p-6 flex items-center text-slate-400">
-        <Loader2 className="h-4 w-4 animate-spin mr-2" /> Đang tải cấu hình Shopify App…
+        <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading Shopify app config…
       </CardContent></Card>
     );
   }
@@ -85,10 +85,10 @@ export function ShopifyAppConfigCard() {
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <AppWindow className="h-4 w-4 text-teal-600" />
-          Shopify App (OAuth hệ thống)
-          {app && <Badge className="bg-emerald-100 text-emerald-700">đã cấu hình</Badge>}
-          {!app && envFallback && <Badge className="bg-slate-100 text-slate-600">đang dùng env</Badge>}
-          {!app && !envFallback && <Badge className="bg-amber-100 text-amber-700">chưa cấu hình</Badge>}
+          Shopify app (system OAuth)
+          {app && <Badge className="bg-emerald-100 text-emerald-700">configured</Badge>}
+          {!app && envFallback && <Badge className="bg-slate-100 text-slate-600">using env</Badge>}
+          {!app && !envFallback && <Badge className="bg-amber-100 text-amber-700">not configured</Badge>}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -96,10 +96,10 @@ export function ShopifyAppConfigCard() {
           <div className="flex items-center justify-between">
             <div>
               <div className="font-mono text-sm">{app.clientId}</div>
-              <div className="text-xs text-slate-500">Secret: {'•'.repeat(8)} ({app.secretLength} ký tự)</div>
+              <div className="text-xs text-slate-500">Secret: {'•'.repeat(8)} ({app.secretLength} characters)</div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>Sửa</Button>
+              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>Edit</Button>
               <Button variant="ghost" size="sm" className="text-rose-600" onClick={remove}>
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -114,9 +114,9 @@ export function ShopifyAppConfigCard() {
             <div className="flex gap-2">
               <Button onClick={save} disabled={saving || !clientId.trim() || !clientSecret.trim()} size="sm" className="bg-teal-600 hover:bg-teal-700">
                 {saving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Save className="h-4 w-4 mr-1.5" />}
-                Lưu app
+                Save app
               </Button>
-              {app && <Button variant="outline" size="sm" onClick={() => { setEditing(false); setClientSecret(''); }}>Huỷ</Button>}
+              {app && <Button variant="outline" size="sm" onClick={() => { setEditing(false); setClientSecret(''); }}>Cancel</Button>}
             </div>
           </>
         )}
@@ -125,17 +125,17 @@ export function ShopifyAppConfigCard() {
           <Info className="h-4 w-4" />
           <AlertDescription className="text-xs space-y-1">
             <p>
-              Tạo <strong>1 app duy nhất</strong> ở{' '}
+              Create <strong>one single app</strong> at{' '}
               <a href="https://partners.shopify.com" target="_blank" rel="noopener noreferrer" className="underline">partners.shopify.com</a>{' '}
-              (chọn <strong>Public distribution</strong> để cài được nhiều store), lấy Client ID + Secret dán vào đây.
-              Mọi user trong hệ thống sẽ kết nối store của họ qua app này.
+              (choose <strong>Public distribution</strong> so it installs on many stores), then paste the Client ID + Secret here.
+              Everyone on the system connects their store through this app.
             </p>
             {redirectUri && (
               <p>Khai <strong>Allowed redirection URL</strong> trong app: <code className="bg-white px-1 rounded break-all">{redirectUri}</code></p>
             )}
-            {scopes && <p>Scopes cần cấp: <code className="bg-white px-1 rounded">{scopes}</code></p>}
+            {scopes && <p>Required scopes: <code className="bg-white px-1 rounded">{scopes}</code></p>}
             <p className="text-amber-700">
-              Lưu ý: để đọc được tên/địa chỉ/SĐT khách, app phải được Shopify duyệt
+              Note: to read customer names, addresses and phone numbers, the app must be approved by Shopify
               <strong> Protected customer data access</strong> (Partner Dashboard → API access).
             </p>
           </AlertDescription>

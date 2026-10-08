@@ -114,24 +114,24 @@ export function AvailableAppsPicker({
             <ShieldAlert className="h-6 w-6 text-amber-600 shrink-0 mt-0.5" />
             <div className="flex-1">
               <h3 className="font-semibold text-slate-900 mb-1">
-                Tài khoản chưa được cấp Facebook App
+                No Facebook app assigned to your account
               </h3>
               <p className="text-sm text-slate-700 leading-relaxed">
-                Liên hệ <strong>admin</strong> để được cấp quyền sử dụng một
-                Facebook App. Admin sẽ vào <strong>/admin → tab FB Apps</strong>,
-                chọn app rồi bấm <strong>Users</strong> để thêm bạn vào danh sách
-                được phép connect. Sau khi được cấp, F5 lại trang này và nút
-                <em> Connect</em> sẽ hiện ra.
+                Ask an <strong>admin</strong> to grant you access to a
+                Facebook app. They open <strong>/admin → FB Apps tab</strong>,
+                pick an app, then click <strong>Users</strong> to add you to the list
+                of people allowed to connect. Once granted, refresh this page and the
+                <em> Connect</em> button appears.
               </p>
             </div>
           </div>
           <Alert className="border-slate-200 bg-white">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-xs text-slate-600">
-              Vì sao cần cấp app: mỗi user dùng chung 1 FB App của admin để
-              tránh mỗi người tự register app riêng (rủi ro chính sách + khó
-              quản lý). Admin giữ App Secret; bạn chỉ cần login Facebook qua app
-              đó để hệ thống lấy được access token.
+              Why this exists: everyone shares one admin-owned FB app so that
+              nobody has to register their own (a policy risk, and hard to
+              manage). The admin keeps the App Secret; you just log in to Facebook
+              through that app so we can obtain an access token.
             </AlertDescription>
           </Alert>
         </CardContent>
@@ -155,8 +155,8 @@ export function AvailableAppsPicker({
       <CardContent className="space-y-3">
         <p className="text-sm text-slate-600">
           {apps.length === 1
-            ? <>Bấm <strong>Connect</strong> để liên kết tài khoản Facebook qua app này.</>
-            : <>{apps.length} apps đã được cấp — chọn app để connect (gợi ý: <strong>{recommended.appName || recommended.fbAppId}</strong>).</>}
+            ? <>Click <strong>Connect</strong> to link your Facebook account through this app.</>
+            : <>{apps.length} apps available — pick one to connect (suggested: <strong>{recommended.appName || recommended.fbAppId}</strong>).</>}
         </p>
         {apps.map(app => (
           <div
