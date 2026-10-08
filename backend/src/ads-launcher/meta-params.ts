@@ -83,6 +83,9 @@ export function targetingFields(t: LaunchTargeting): MetaFields {
     targeting_automation: { advantage_audience: 1 }
   };
   if (t.genders.length === 1) out.genders = t.genders;
+  if (t.customAudienceIds?.length) out.custom_audiences = t.customAudienceIds.map(id => ({ id }));
+  if (t.excludedAudienceIds?.length) out.excluded_custom_audiences = t.excludedAudienceIds.map(id => ({ id }));
+  if (t.interestIds?.length) out.flexible_spec = [{ interests: t.interestIds.map(id => ({ id })) }];
   if (!t.advantagePlacements) {
     out.publisher_platforms = ['facebook', 'instagram'];
     out.facebook_positions = ['feed', 'story', 'facebook_reels'];
@@ -173,6 +176,8 @@ const nonEmpty = (o: Record<string, unknown>) =>
 export function imageCreativeFields(c: {
   name: string;
   pageId: string;
+  /** Instagram account the ad runs as on Instagram (replaces instagram_actor_id). */
+  instagramUserId?: string;
   imageHash: string;
   link: string;
   displayLink?: string;
@@ -185,6 +190,7 @@ export function imageCreativeFields(c: {
     url_tags: c.urlTags,
     object_story_spec: {
       page_id: c.pageId,
+      ...(c.instagramUserId ? { instagram_user_id: c.instagramUserId } : {}),
       link_data: nonEmpty({
         link: c.link,
         image_hash: c.imageHash,
@@ -201,6 +207,7 @@ export function imageCreativeFields(c: {
 export function videoCreativeFields(c: {
   name: string;
   pageId: string;
+  instagramUserId?: string;
   videoId: string;
   thumbnail: { imageHash: string } | { imageUrl: string };
   link: string;
@@ -213,6 +220,7 @@ export function videoCreativeFields(c: {
     url_tags: c.urlTags,
     object_story_spec: {
       page_id: c.pageId,
+      ...(c.instagramUserId ? { instagram_user_id: c.instagramUserId } : {}),
       video_data: nonEmpty({
         video_id: c.videoId,
         ...('imageHash' in c.thumbnail ? { image_hash: c.thumbnail.imageHash } : { image_url: c.thumbnail.imageUrl }),

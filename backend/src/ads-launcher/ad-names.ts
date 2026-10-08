@@ -23,6 +23,7 @@ export function stableStringify(value: unknown): string {
 export function creativeKey(k: {
   creativeId: string;
   pageId: string;
+  instagramUserId: string;
   link: string;
   displayLink: string;
   callToAction: string;

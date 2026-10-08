@@ -145,6 +145,19 @@ describe('targeting', () => {
     expect(targetingFields({ countries: ['US'], ageMin: 18, ageMax: 65, genders: [2], advantagePlacements: true }).genders).toEqual([2]);
   });
 
+  it('custom / excluded audiences and interests', () => {
+    const t = targetingFields({
+      countries: ['US'], ageMin: 18, ageMax: 65, genders: [], advantagePlacements: true,
+      customAudienceIds: ['11', '12'], excludedAudienceIds: ['13'], interestIds: ['6003107902433']
+    });
+    expect(t.custom_audiences).toEqual([{ id: '11' }, { id: '12' }]);
+    expect(t.excluded_custom_audiences).toEqual([{ id: '13' }]);
+    expect(t.flexible_spec).toEqual([{ interests: [{ id: '6003107902433' }] }]);
+    const none = targetingFields({ countries: ['US'], ageMin: 18, ageMax: 65, genders: [], advantagePlacements: true, customAudienceIds: [], interestIds: [] });
+    expect(none.custom_audiences).toBeUndefined();
+    expect(none.flexible_spec).toBeUndefined();
+  });
+
   it('placements only when Advantage+ placements is off', () => {
     const t = targetingFields({ countries: ['US'], ageMin: 18, ageMax: 65, genders: [], advantagePlacements: false });
     expect(t.publisher_platforms).toEqual(['facebook', 'instagram']);
@@ -187,6 +200,15 @@ describe('creative + ad fields', () => {
     expect((g.object_story_spec as any).video_data.image_url).toBe('https://x/t.jpg');
   });
 
+  it('Instagram account goes in object_story_spec.instagram_user_id (never instagram_actor_id)', () => {
+    const img = imageCreativeFields({ name: 'N', pageId: 'P', instagramUserId: '777', imageHash: 'H', link: 'https://s.com', copy, callToAction: 'SHOP_NOW', urlTags: '' });
+    expect((img.object_story_spec as any).instagram_user_id).toBe('777');
+    const vid = videoCreativeFields({ name: 'N', pageId: 'P', instagramUserId: '777', videoId: 'V', thumbnail: { imageHash: 'T' }, link: 'https://s.com', copy, callToAction: 'SHOP_NOW', urlTags: '' });
+    expect((vid.object_story_spec as any).instagram_user_id).toBe('777');
+    const noIg = imageCreativeFields({ name: 'N', pageId: 'P', imageHash: 'H', link: 'https://s.com', copy, callToAction: 'SHOP_NOW', urlTags: '' });
+    expect(JSON.stringify(noIg)).not.toMatch(/instagram/);
+  });
+
   it('old post → object_story_id only', () => {
     expect(postCreativeFields({ name: 'P', postId: '1_2', urlTags: 'u' })).toEqual({ name: 'P', object_story_id: '1_2', url_tags: 'u' });
   });
@@ -206,9 +228,10 @@ describe('sharing keys and names', () => {
   });
 
   it('same creative/page/link/copy → same key; any difference → new key', () => {
-    const base = { creativeId: 'c1', pageId: 'p', link: 'l', displayLink: 'd', callToAction: 'SHOP_NOW', urlTags: 'u', copy: { primaryText: 'a', headline: 'b', description: 'c' } };
+    const base = { creativeId: 'c1', pageId: 'p', instagramUserId: '', link: 'l', displayLink: 'd', callToAction: 'SHOP_NOW', urlTags: 'u', copy: { primaryText: 'a', headline: 'b', description: 'c' } };
     expect(creativeKey(base)).toBe(creativeKey({ ...base, copy: { description: 'c', headline: 'b', primaryText: 'a' } }));
     expect(creativeKey(base)).not.toBe(creativeKey({ ...base, copy: { ...base.copy, primaryText: 'x' } }));
+    expect(creativeKey(base)).not.toBe(creativeKey({ ...base, instagramUserId: '777' }));
     expect(postKey('1_2', 'u')).toBe(postKey('1_2', 'u'));
     expect(postKey('1_2', 'u')).not.toBe(postKey('1_2', 'v'));
   });
@@ -253,6 +276,14 @@ describe('contract: presets', () => {
     const roas = presetConfigSchema.safeParse({ ...c, campaign: { ...c.campaign, bidStrategy: 'LOWEST_COST_WITH_MIN_ROAS', roasGoal: '1.5' } });
     expect(roas.success).toBe(false);
     if (!roas.success) expect(formatIssues(roas.error).join()).toMatch(/Ad set · optimizationGoal/);
+  });
+
+  it('audiences may carry custom audiences + interests (id + name)', () => {
+    const c = STARTER_PRESETS[0].config;
+    const withRefs = { ...c, adset: { ...c.adset, audiences: [{ ...c.adset.audiences[0], customAudiences: [{ id: '11', name: 'Buyers' }], interests: [{ id: '6003', name: 'Hair' }] }] } };
+    expect(presetConfigSchema.safeParse(withRefs).success).toBe(true);
+    const badId = { ...c, adset: { ...c.adset, audiences: [{ ...c.adset.audiences[0], interests: [{ id: 'abc', name: 'x' }] }] } };
+    expect(presetConfigSchema.safeParse(badId).success).toBe(false);
   });
 
   it('old presets read as repeat on + Highest volume', () => {

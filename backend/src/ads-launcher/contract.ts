@@ -21,6 +21,8 @@ export const LIMITS = {
   adsPerCampaign: 200,
   audiencesPerPreset: 10,
   countriesPerAudience: 50,
+  customAudiencesPerAudience: 50,
+  interestsPerAudience: 100,
   ageMin: 13,
   ageMax: 65,
   metaBatchSize: 50,
@@ -114,13 +116,25 @@ export const structureSchema = z
   });
 export type Structure = z.infer<typeof structureSchema>;
 
+/** A Meta object picked in the UI: id to send, name to show. */
+export const namedRefSchema = z.object({ id: fbIdSchema, name: z.string().trim().max(300) });
+export type NamedRef = z.infer<typeof namedRefSchema>;
+
 export const audienceSchema = z
   .object({
     label: z.string().trim().min(1, 'Name the audience').max(80),
     countries: z.array(z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Use 2-letter country codes')).min(1, 'Pick at least one country').max(LIMITS.countriesPerAudience),
     ageMin: z.number().int().min(LIMITS.ageMin).max(LIMITS.ageMax),
     ageMax: z.number().int().min(LIMITS.ageMin).max(LIMITS.ageMax),
-    gender: z.enum(GENDERS)
+    gender: z.enum(GENDERS),
+    /**
+     * Custom + lookalike audiences to include / exclude. They belong to one ad
+     * account: launching into another account makes Meta reject the ad set.
+     */
+    customAudiences: z.array(namedRefSchema).max(LIMITS.customAudiencesPerAudience).optional(),
+    excludedAudiences: z.array(namedRefSchema).max(LIMITS.customAudiencesPerAudience).optional(),
+    /** Detailed targeting interests (account-agnostic). */
+    interests: z.array(namedRefSchema).max(LIMITS.interestsPerAudience).optional()
   })
   .refine(a => a.ageMin <= a.ageMax, { message: 'Min age must be ≤ max age', path: ['ageMin'] });
 export type Audience = z.infer<typeof audienceSchema>;
@@ -296,7 +310,10 @@ export const targetingSchema = z
     ageMax: z.number().int().min(LIMITS.ageMin).max(LIMITS.ageMax),
     /** [] = all, [1] = men, [2] = women (Meta codes). */
     genders: z.array(z.union([z.literal(1), z.literal(2)])).max(1),
-    advantagePlacements: z.boolean()
+    advantagePlacements: z.boolean(),
+    customAudienceIds: z.array(fbIdSchema).max(LIMITS.customAudiencesPerAudience).optional(),
+    excludedAudienceIds: z.array(fbIdSchema).max(LIMITS.customAudiencesPerAudience).optional(),
+    interestIds: z.array(fbIdSchema).max(LIMITS.interestsPerAudience).optional()
   })
   .refine(t => t.ageMin <= t.ageMax, { message: 'ageMin must be ≤ ageMax', path: ['ageMin'] });
 export type LaunchTargeting = z.infer<typeof targetingSchema>;
@@ -342,6 +359,8 @@ export const launchRequestSchema = z
     /** Meta ad account id, digits only (no `act_`). */
     adAccountId: fbIdSchema,
     pageId: fbIdSchema,
+    /** The page's Instagram account; ads on Instagram show as it (Meta: instagram_user_id). */
+    instagramUserId: fbIdSchema.optional(),
     pixelId: fbIdSchema.optional(),
     campaign: launchCampaignSchema,
     adsets: z.array(launchAdsetSchema).min(1).max(LIMITS.adsetsPerCampaign),
@@ -456,11 +475,31 @@ export interface ExistingCampaign {
   adsets: ExistingAdset[];
 }
 
+export interface LauncherPage {
+  externalId: string;
+  name: string;
+  pictureUrl: string | null;
+  /** Linked Instagram account, sent as instagram_user_id. */
+  instagramUserId: string | null;
+  /** Already added to the ad account (promote_pages). */
+  linked: boolean;
+}
+
+export interface LauncherAudience {
+  externalId: string;
+  name: string;
+  /** CUSTOM, LOOKALIKE, WEBSITE, ENGAGEMENT… as Meta reports it. */
+  subtype: string | null;
+  approximateCount: number | null;
+}
+
 export interface LauncherOptions {
   adAccount: LauncherAdAccount;
-  pages: Array<{ externalId: string; name: string; pictureUrl: string | null }>;
+  pages: LauncherPage[];
   pixels: Array<{ externalId: string; name: string }>;
   campaigns: ExistingCampaign[];
+  /** Custom + lookalike audiences of the ad account. */
+  audiences: LauncherAudience[];
   /** Non-fatal problems loading part of the options (e.g. no pixel permission). */
   warnings: string[];
 }
@@ -471,6 +510,40 @@ export interface LandingStore {
   hostname: string;
   product: { productId: string; handle: string; title: string; url: string; listingStatus: 'active' | 'draft' | 'archived' | 'unpublished' } | null;
   pages: Array<{ id: string; title: string; url: string }>;
+}
+
+export interface InterestOption {
+  id: string;
+  name: string;
+  audienceSizeLower: number | null;
+  audienceSizeUpper: number | null;
+  path: string[];
+}
+
+// ─── Launch history ─────────────────────────────────────────────────────────
+
+export interface LaunchHistoryRow {
+  /** Mirror row id. */
+  id: string;
+  externalId: string;
+  name: string;
+  adAccountId: string;
+  isDemo: boolean;
+  status: string;
+  objective: string | null;
+  /** Minor units; null = ABO. */
+  dailyBudget: string | null;
+  bidStrategy: string | null;
+  adsets: number;
+  ads: number;
+  launchedBy: string | null;
+  createdAt: string;
+}
+
+export interface LaunchHistoryPage {
+  items: LaunchHistoryRow[];
+  total: number;
+  hasMore: boolean;
 }
 
 // ─── Creatives ──────────────────────────────────────────────────────────────

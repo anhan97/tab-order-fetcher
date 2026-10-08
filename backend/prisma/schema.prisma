@@ -1040,6 +1040,11 @@ model ShippingCompany {
   @@map("shipping_companies")
 }
 
+// RETIRED: the old Auto-launch wizard (/api/ads) was replaced by the Ads
+// Launcher (see the Ads Launcher models below). AdLaunchTemplate,
+// AdLaunchHistory and AdLaunchItem are kept only so past rows survive; no
+// code reads or writes them any more.
+//
 // Saved wizard config for the Auto-launch ads feature. The wizard's surface
 // changes frequently (new targeting fields, new bid options) so we store
 // the whole snapshot as JSON rather than columnising — columns force a

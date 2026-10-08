@@ -69,15 +69,39 @@ export function campaignBudgetText(c: ExistingCampaign, currency?: string | null
   return 'ABO';
 }
 
-/** "Broad · US, CA · 18–65 · All genders". */
+/** "+2 audiences · −1 · 3 interests" ('' when there is no detailed targeting). */
+export function detailedTargetingText(a: Audience | null | undefined): string {
+  if (!a) return '';
+  const inc = a.customAudiences?.length ?? 0;
+  const exc = a.excludedAudiences?.length ?? 0;
+  const int = a.interests?.length ?? 0;
+  return [
+    inc ? `+${inc} audience${inc === 1 ? '' : 's'}` : '',
+    exc ? `−${exc}` : '',
+    int ? `${int} interest${int === 1 ? '' : 's'}` : ''
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** "Broad · US, CA · 18–65 · All genders · +2 audiences · −1 · 3 interests". */
 export function audienceText(a: Audience | null | undefined): string {
   if (!a) return 'No audience';
-  return `${a.label} · ${a.countries.join(', ')} · ${a.ageMin}–${a.ageMax} · ${genderLabel(a.gender)}`;
+  const detail = detailedTargetingText(a);
+  return `${a.label} · ${a.countries.join(', ')} · ${a.ageMin}–${a.ageMax} · ${genderLabel(a.gender)}${detail ? ` · ${detail}` : ''}`;
+}
+
+/** 1234567 → "1.2M" (audience sizes). */
+export function compactNumber(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '';
+  return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
 
 export const actId = (id: string) => `act_${id}`;
 export const adsManagerUrl = (adAccountId: string) =>
   `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${encodeURIComponent(adAccountId)}`;
+export const adsManagerCampaignUrl = (adAccountId: string, campaignId: string) =>
+  `${adsManagerUrl(adAccountId)}&selected_campaign_ids=${encodeURIComponent(campaignId)}`;
 
 /** `<input type="datetime-local">` value (browser time) → ISO 8601; '' → null. */
 export function localInputToIso(value: string): string | null {

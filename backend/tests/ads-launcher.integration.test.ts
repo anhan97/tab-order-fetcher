@@ -250,7 +250,13 @@ describe('Ads Launcher routes', { timeout: 60_000 }, () => {
     const accounts = await call('/api/ads-launcher/accounts', 'GET', ownerId);
     expect(accounts.json.data.items.find((a: any) => a.isDemo)).toMatchObject({ id: DEMO });
     const options = await call(`/api/ads-launcher/options?adAccountId=${DEMO}`, 'GET', ownerId);
-    expect(options.json.data).toMatchObject({ adAccount: { isDemo: true }, pages: [{ externalId: PAGE }], pixels: [{ externalId: PIXEL }] });
+    expect(options.json.data).toMatchObject({ adAccount: { isDemo: true }, pixels: [{ externalId: PIXEL }] });
+    // The whole business, not only the page linked to the ad account.
+    expect(options.json.data.pages.length).toBeGreaterThan(1);
+    expect(options.json.data.pages[0]).toMatchObject({ externalId: PAGE, linked: true, instagramUserId: expect.any(String) });
+    expect(options.json.data.audiences.length).toBeGreaterThan(0);
+    const interests = await call(`/api/ads-launcher/interests?adAccountId=${DEMO}&q=hair`, 'GET', ownerId);
+    expect(interests.json.data.items[0]).toMatchObject({ name: expect.stringMatching(/hair/i) });
 
     const body = launchBody([{ creativeId: created[0] }, { creativeId: created[0] }, { creativeId: created[1] }]);
     const r = await call('/api/ads-launcher/launch', 'POST', ownerId, body);
@@ -261,6 +267,10 @@ describe('Ads Launcher routes', { timeout: 60_000 }, () => {
     const ads = await db!.metaAd.findMany({ where: { ownerId, creativeId: created[0] } });
     expect(ads).toHaveLength(2);
     expect(ads[0].postId).toMatch(/^\d+_\d+$/);
+
+    const history = await call('/api/ads-launcher/history', 'GET', ownerId);
+    expect(history.json.data.items[0]).toMatchObject({ name: `IT ${suffix}`, isDemo: true, adsets: 1, ads: 3, launchedBy: 'Triết' });
+    expect((await call('/api/ads-launcher/history', 'GET', viewerId)).status).toBe(403);
 
     const replay = await call('/api/ads-launcher/launch', 'POST', ownerId, body);
     expect(replay.status).toBe(201);

@@ -162,6 +162,26 @@ describe('LaunchAds', () => {
     expect((writer.calls.find(c => c.op === 'createAdSet')!.payload as any).bid_amount).toBe('2500');
   });
 
+  it('Instagram account of the page goes on every creative', async () => {
+    const { writer, deps: d } = deps();
+    await launchAds(request({ instagramUserId: '900000000000301' }), d);
+    const items = writer.calls.find(c => c.op === 'createCreatives')!.payload as any[];
+    expect(items.every(i => i.object_story_spec.instagram_user_id === '900000000000301')).toBe(true);
+  });
+
+  it('targeting audiences and interests reach the ad set', async () => {
+    const { writer, deps: d } = deps();
+    await launchAds(request({}, [newAdset('A', [{ creativeId: C1 }], {
+      targeting: { countries: ['US'], ageMin: 18, ageMax: 65, genders: [], advantagePlacements: true, customAudienceIds: ['900000000000402'], excludedAudienceIds: ['900000000000401'], interestIds: ['6003107902433'] }
+    })]), d);
+    const t = (writer.calls.find(c => c.op === 'createAdSet')!.payload as any).targeting;
+    expect(t).toMatchObject({
+      custom_audiences: [{ id: '900000000000402' }],
+      excluded_custom_audiences: [{ id: '900000000000401' }],
+      flexible_spec: [{ interests: [{ id: '6003107902433' }] }]
+    });
+  });
+
   it('ROAS goal 1.8: VALUE + roas_average_floor 18000', async () => {
     const { writer, deps: d } = deps();
     await launchAds(request(

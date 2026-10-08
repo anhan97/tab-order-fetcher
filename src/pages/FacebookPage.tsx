@@ -12,7 +12,6 @@ import { FacebookAdsManager } from '@/components/FacebookAdsManager';
 import { CampaignMappingPanel } from '@/components/CampaignMappingPanel';
 import { MyFacebookAppCard } from '@/components/MyFacebookAppCard';
 import { FacebookAppsManager } from '@/components/FacebookAppsManager';
-import { AutoLaunchAds } from '@/components/AutoLaunchAds';
 import { FacebookDiagnostics } from '@/components/FacebookDiagnostics';
 import { FacebookAssetManager } from '@/components/FacebookAssetManager';
 import { apiFetch } from '@/utils/apiClient';
@@ -152,10 +151,6 @@ export const FacebookPage = () => {
             <BarChart3 className="h-4 w-4" />
             Dashboard
           </TabsTrigger>
-          <TabsTrigger value="launch" className="gap-2">
-            <Rocket className="h-4 w-4" />
-            Auto-launch
-          </TabsTrigger>
           <TabsTrigger value="diagnostics" className="gap-2">
             <Stethoscope className="h-4 w-4" />
             Diagnostics
@@ -196,12 +191,6 @@ export const FacebookPage = () => {
               </p>
             </Card>
           )}
-        </TabsContent>
-
-        <TabsContent value="launch" className="m-0">
-          <AutoLaunchAds
-            adAccounts={facebookAccounts.map(a => ({ id: a.id, name: a.name }))}
-          />
         </TabsContent>
 
         <TabsContent value="diagnostics" className="m-0">

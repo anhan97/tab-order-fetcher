@@ -24,6 +24,8 @@ import {
   type LaunchPresetConfig,
   type LaunchRequest,
   type LaunchTargeting,
+  type LauncherAudience,
+  type NamedRef,
   type OptimizationGoal
 } from '@contract/ads-launcher';
 import type { PoolItem } from './pool';
@@ -476,6 +478,32 @@ export function targetIssues(
   return issues;
 }
 
+/**
+ * Custom / lookalike audiences belong to one ad account: a preset made in
+ * another account would make Meta reject the ad set. `accountAudiences` null
+ * = options not loaded (nothing to compare against yet).
+ */
+export function audienceRefIssues(
+  config: LaunchPresetConfig | null,
+  accountAudiences: LauncherAudience[] | null,
+  target?: LaunchTarget,
+): string[] {
+  if (!config || !accountAudiences || !createsNewAdsets(target)) return [];
+  const known = new Set(accountAudiences.map((a) => a.externalId));
+  const issues: string[] = [];
+  for (const a of config.adset?.audiences ?? []) {
+    for (const [refs, kind] of [
+      [a.customAudiences, 'custom audience'],
+      [a.excludedAudiences, 'excluded audience'],
+    ] as const) {
+      for (const ref of refs ?? []) {
+        if (!known.has(ref.id)) issues.push(`Audience '${a.label}': ${kind} '${ref.name || ref.id}' is not in this ad account`);
+      }
+    }
+  }
+  return unique(issues);
+}
+
 // ─── Requests (§7.3) ────────────────────────────────────────────────────────
 
 /** A request before the run loop stamps `requestId` / `launchId` on it (§12.3). */
@@ -497,6 +525,8 @@ export interface BuildInput {
   copy?: Record<string, CopyOverride>;
   /** ISO 8601 with offset; empty = start now. */
   startTime?: string | null;
+  /** The selected page's Instagram account; omitted = ads on Instagram use the Page. */
+  instagramUserId?: string | null;
 }
 
 const COPY_FIELDS = ['primaryText', 'headline', 'description'] as const;
@@ -514,14 +544,23 @@ export function adSpecFor(item: PoolItem, copy?: CopyOverride): LaunchAdSpec {
   return spec;
 }
 
+const refIds = (refs: NamedRef[] | undefined) => [...new Set((refs ?? []).map((r) => r.id).filter(Boolean))];
+
 export function targetingFor(audience: Audience | null, advantagePlacements: boolean): LaunchTargeting {
-  const a = audience ?? { countries: [], ageMin: 18, ageMax: 65, gender: 'all' as const };
+  const a: Audience = audience ?? { label: '', countries: [], ageMin: 18, ageMax: 65, gender: 'all' };
+  const include = refIds(a.customAudiences);
+  const exclude = refIds(a.excludedAudiences);
+  const interests = refIds(a.interests);
   return {
     countries: [...a.countries],
     ageMin: a.ageMin,
     ageMax: a.ageMax,
     genders: a.gender === 'men' ? [1] : a.gender === 'women' ? [2] : [],
     advantagePlacements,
+    // Empty lists are left out: the request only carries what was picked.
+    ...(include.length ? { customAudienceIds: include } : {}),
+    ...(exclude.length ? { excludedAudienceIds: exclude } : {}),
+    ...(interests.length ? { interestIds: interests } : {}),
   };
 }
 
@@ -533,6 +572,7 @@ export function buildStructureRequests(input: BuildInput): LaunchRequestDraft[] 
   const pixelId = setup.pixelId.trim();
   const displayLink = setup.displayLink.trim();
   const startTime = input.startTime?.trim() || null;
+  const instagramUserId = input.instagramUserId?.trim() && NUMERIC_ID.test(input.instagramUserId.trim()) ? input.instagramUserId.trim() : null;
 
   const amounts = (s: BidStrategy | null) => ({
     ...(needsBidAmount(s) && config.campaign.bidAmount ? { bidAmount: config.campaign.bidAmount } : {}),
@@ -579,6 +619,7 @@ export function buildStructureRequests(input: BuildInput): LaunchRequestDraft[] 
     return {
       adAccountId: setup.adAccountId.trim(),
       pageId: setup.pageId.trim(),
+      ...(instagramUserId ? { instagramUserId } : {}),
       ...(pixelId ? { pixelId } : {}),
       campaign,
       adsets,

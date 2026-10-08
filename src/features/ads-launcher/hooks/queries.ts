@@ -17,8 +17,12 @@ export const launcherKeys = {
   options: (store: string, adAccountId: string) => [...launcherKeys.all, store, 'options', adAccountId] as const,
   landing: (store: string, productId: string) => [...launcherKeys.all, store, 'landing', productId] as const,
   posts: (store: string) => [...launcherKeys.all, store, 'posts'] as const,
-  postList: (store: string, params: object) => [...launcherKeys.posts(store), params] as const
+  postList: (store: string, params: object) => [...launcherKeys.posts(store), params] as const,
+  interests: (store: string, adAccountId: string, q: string) => [...launcherKeys.all, store, 'interests', adAccountId, q] as const,
+  history: (store: string, params: object) => [...launcherKeys.all, store, 'history', params] as const
 };
+
+export const INTEREST_MIN_QUERY = 2;
 
 export const presetKeys = {
   all: ['launch-presets'] as const,
@@ -72,6 +76,30 @@ export function useLanding(productId: string | null | undefined) {
 export function usePosts(params: Parameters<typeof launcherApi.posts>[0], enabled = true) {
   const store = useStoreKey();
   return useQuery({ queryKey: launcherKeys.postList(store, params), queryFn: () => launcherApi.posts(params), enabled, placeholderData: prev => prev });
+}
+
+/** Interest search; give it an already-debounced query. */
+export function useInterestSearch(adAccountId: string | null | undefined, q: string) {
+  const store = useStoreKey();
+  const query = q.trim();
+  return useQuery({
+    queryKey: launcherKeys.interests(store, adAccountId ?? '', query.toLowerCase()),
+    queryFn: () => launcherApi.interests(adAccountId!, query).then(r => r.items),
+    enabled: !!adAccountId && query.length >= INTEREST_MIN_QUERY,
+    staleTime: 10 * 60_000,
+    placeholderData: prev => prev,
+    retry: 1
+  });
+}
+
+export function useLaunchHistory(params: { page: number; pageSize: number }, enabled = true) {
+  const store = useStoreKey();
+  return useQuery({
+    queryKey: launcherKeys.history(store, params),
+    queryFn: () => launcherApi.history(params),
+    enabled,
+    placeholderData: prev => prev
+  });
 }
 
 export function useRefreshPosts() {

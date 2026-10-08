@@ -6,13 +6,28 @@
  * call so tests can assert on sharing / caching. Failure hooks let tests make
  * one element of a batch fail.
  */
-import type { ExistingCampaign } from './contract';
+import type { ExistingCampaign, InterestOption, LauncherAudience, LauncherPage } from './contract';
 import type { MetaFields } from './meta-params';
 import type { BatchResult, MetaAdsWriter, RemoteAdSet, RemoteCampaign } from './meta-ads-writer';
 import { knownBidStrategy } from './meta-ads-writer';
 
 export const DEMO_AD_ACCOUNT = { id: '900000000000001', name: 'Demo account (no Meta calls)', currency: 'USD' };
-export const DEMO_PAGE = { externalId: '900000000000101', name: 'Demo Page', pictureUrl: null };
+export const DEMO_PAGE: LauncherPage = { externalId: '900000000000101', name: 'Demo Page', pictureUrl: null, instagramUserId: '900000000000301', linked: true };
+/** A business usually has many pages; only some are linked to the ad account. */
+export const DEMO_PAGES: LauncherPage[] = [
+  DEMO_PAGE,
+  { externalId: '900000000000102', name: 'Demo Brand Two', pictureUrl: null, instagramUserId: null, linked: false },
+  { externalId: '900000000000103', name: 'Demo Outlet', pictureUrl: null, instagramUserId: '900000000000303', linked: false }
+];
+export const DEMO_AUDIENCES: LauncherAudience[] = [
+  { externalId: '900000000000401', name: 'Purchasers 180d', subtype: 'WEBSITE', approximateCount: 12000 },
+  { externalId: '900000000000402', name: 'LAL 1% Purchasers US', subtype: 'LOOKALIKE', approximateCount: 2300000 }
+];
+const DEMO_INTERESTS: InterestOption[] = [
+  { id: '6003107902433', name: 'Hair care', audienceSizeLower: 150000000, audienceSizeUpper: 180000000, path: ['Interests', 'Beauty', 'Hair care'] },
+  { id: '6003348604581', name: 'Hairstyle', audienceSizeLower: 90000000, audienceSizeUpper: 110000000, path: ['Interests', 'Beauty', 'Hairstyle'] },
+  { id: '6003020834693', name: 'Travel', audienceSizeLower: 800000000, audienceSizeUpper: 900000000, path: ['Interests', 'Travel'] }
+];
 export const DEMO_PIXEL = { externalId: '900000000000201', name: 'Demo Pixel' };
 
 export const isDemoAccount = (adAccountId: string) => adAccountId.replace(/^act_/, '') === DEMO_AD_ACCOUNT.id;
@@ -168,7 +183,16 @@ export class FakeMetaAdsWriter implements MetaAdsWriter {
   }
 
   async listPages() {
-    return [DEMO_PAGE];
+    return { pages: DEMO_PAGES, warnings: [] };
+  }
+
+  async listCustomAudiences() {
+    return DEMO_AUDIENCES;
+  }
+
+  async searchInterests(query: string) {
+    const q = query.trim().toLowerCase();
+    return DEMO_INTERESTS.filter(i => i.name.toLowerCase().includes(q));
   }
 
   async listPixels() {

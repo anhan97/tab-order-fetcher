@@ -4,6 +4,8 @@
  *   GET  /api/ads-launcher/accounts              ad accounts the caller may launch into
  *   GET  /api/ads-launcher/options?adAccountId=  pages, pixels, existing campaigns
  *   GET  /api/ads-launcher/landing?productId=    landing pages grouped by store domain
+ *   GET  /api/ads-launcher/interests?adAccountId=&q=  detailed-targeting interest search
+ *   GET  /api/ads-launcher/history               campaigns the launcher created
  *   POST /api/ads-launcher/launch                one campaign per request
  *   GET  /api/ads-launcher/posts                 posts the launcher's ads run
  *   POST /api/ads-launcher/posts/refresh         ask Meta for missing post ids
@@ -14,13 +16,17 @@
  */
 import express, { type Request, type Response } from 'express';
 import { listAccessibleStores } from '../lib/store-access';
+import { z } from 'zod';
 import {
+  type LaunchHistoryPage,
+  type LaunchHistoryRow,
   type LauncherOptions,
+  creatorDisplayName,
   launchRequestSchema,
   postsQuerySchema,
   refreshPostsSchema
 } from '../ads-launcher/contract';
-import { DEMO_PAGE, DEMO_PIXEL, isDemoAccount } from '../ads-launcher/fake-meta-ads-writer';
+import { DEMO_PIXEL, isDemoAccount } from '../ads-launcher/fake-meta-ads-writer';
 import { callerOf, fail, handle, ok, scopeOf, storeChain, zodFail } from '../ads-launcher/http';
 import { LaunchError, launchAds, noCache } from '../ads-launcher/launch-ads.use-case';
 import { idempotencyKey, launchAssetCache, prismaIdempotency } from '../ads-launcher/launch-state';
@@ -78,17 +84,20 @@ router.get('/options', ...storeChain('manage'), handle(async (req, res) => {
   };
 
   try {
-    const [account, pages, pixels, campaigns] = await Promise.all([
+    const [account, pageList, pixels, campaigns, audiences] = await Promise.all([
       settle('Ad account', writer.getAdAccount(adAccountId), { id: adAccountId, name: adAccountId, currency: null, accountStatus: null }),
-      settle('Pages', writer.listPages(adAccountId), []),
+      settle('Pages', writer.listPages(adAccountId), { pages: [], warnings: [] }),
       settle('Pixels', writer.listPixels(adAccountId), []),
-      isDemo ? demoCampaigns(scopeOf(req).ownerId, adAccountId) : settle('Campaigns', writer.listCampaigns(adAccountId), [])
+      isDemo ? demoCampaigns(scopeOf(req).ownerId, adAccountId) : settle('Campaigns', writer.listCampaigns(adAccountId), []),
+      settle('Audiences', writer.listCustomAudiences(adAccountId), [])
     ]);
+    warnings.push(...pageList.warnings);
     const data: LauncherOptions = {
       adAccount: { id: account.id || adAccountId, name: account.name, currency: account.currency, accountStatus: account.accountStatus, isDemo },
-      pages: isDemo ? [DEMO_PAGE] : pages,
+      pages: pageList.pages,
       pixels: isDemo ? [DEMO_PIXEL] : pixels,
       campaigns,
+      audiences,
       warnings
     };
     ok(res, data);
@@ -117,6 +126,74 @@ async function demoCampaigns(ownerId: string, adAccountId: string): Promise<Laun
     adsets: c.adsets.map(a => ({ externalId: a.externalId, name: a.name, status: a.status, dailyBudget: a.dailyBudget }))
   }));
 }
+
+router.get('/interests', ...storeChain('manage'), handle(async (req, res) => {
+  const adAccountId = digits(req.query.adAccountId);
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
+  if (!adAccountId) return fail(res, 400, 'invalid_request', 'adAccountId is required');
+  if (q.length < 2) return ok(res, { items: [] });
+  try {
+    const { writer } = await resolveWriter(await callerOf(req), adAccountId);
+    ok(res, { items: await writer.searchInterests(q) });
+  } catch (e) {
+    if (accessFail(res, e)) return;
+    throw e;
+  }
+}));
+
+const historyQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20)
+});
+
+/** Campaigns the launcher created in this store, newest first. */
+router.get('/history', ...storeChain('manage'), handle(async (req, res) => {
+  const parsed = historyQuery.safeParse(req.query);
+  if (!parsed.success) return zodFail(res, parsed.error);
+  const { page, pageSize } = parsed.data;
+  const scope = scopeOf(req);
+  const where = {
+    ownerId: scope.ownerId,
+    storeId: scope.storeId,
+    deletedAt: null,
+    raw: { path: ['launched_by'], equals: 'ads-launcher' }
+  };
+  const [rows, total] = await Promise.all([
+    prisma.metaCampaign.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: { adsets: { where: { deletedAt: null }, select: { _count: { select: { ads: { where: { deletedAt: null } } } } } } }
+    }),
+    prisma.metaCampaign.count({ where })
+  ]);
+  const actorIds = [...new Set(rows.map(r => (r.raw as any)?.actor_id).filter((v): v is string => typeof v === 'string'))];
+  const users = actorIds.length
+    ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, firstName: true, lastName: true, email: true } })
+    : [];
+  const names = new Map(users.map(u => [u.id, creatorDisplayName(u)]));
+  const items: LaunchHistoryRow[] = rows.map(r => {
+    const raw = (r.raw ?? {}) as Record<string, unknown>;
+    return {
+      id: r.id,
+      externalId: r.externalId,
+      name: r.name,
+      adAccountId: r.adAccountId,
+      isDemo: raw.demo === true || isDemoAccount(r.adAccountId),
+      status: r.status,
+      objective: r.objective,
+      dailyBudget: r.dailyBudget,
+      bidStrategy: r.bidStrategy,
+      adsets: r.adsets.length,
+      ads: r.adsets.reduce((n, a) => n + a._count.ads, 0),
+      launchedBy: typeof raw.actor_id === 'string' ? names.get(raw.actor_id) ?? null : null,
+      createdAt: r.createdAt.toISOString()
+    };
+  });
+  const data: LaunchHistoryPage = { items, total, hasMore: page * pageSize < total };
+  ok(res, data);
+}));
 
 router.get('/landing', ...storeChain('manage'), handle(async (req, res) => {
   const productId = typeof req.query.productId === 'string' && /^\d{1,40}$/.test(req.query.productId) ? req.query.productId : null;

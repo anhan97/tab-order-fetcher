@@ -83,6 +83,43 @@ describe('batch', () => {
   });
 });
 
+describe('pages', () => {
+  it('unions linked, own, business-owned and client pages, follows paging, linked first', async () => {
+    const { fn, calls } = fakeFetch(url => {
+      const path = new URL(url).pathname;
+      if (url.includes('cursor=2')) return { status: 200, body: { data: [{ id: '5', name: 'Zeta (page 2)' }] } };
+      if (path.endsWith('/act_9')) return { status: 200, body: { id: 'act_9', business: { id: 'B1' } } };
+      if (path.endsWith('/promote_pages')) return { status: 200, body: { data: [{ id: '1', name: 'Linked', instagram_business_account: { id: 'IG1' } }] } };
+      if (path.endsWith('/me/accounts')) return { status: 200, body: { data: [{ id: '2', name: 'Mine' }, { id: '1', name: 'Linked' }] } };
+      if (path.endsWith('/B1/owned_pages')) {
+        return { status: 200, body: { data: [{ id: '3', name: 'Brand' }], paging: { next: 'https://graph.facebook.com/v23.0/B1/owned_pages?cursor=2&access_token=tok' } } };
+      }
+      if (path.endsWith('/B1/client_pages')) return { status: 200, body: { data: [{ id: '4', name: 'Client', instagram_business_account: { id: 'IG4' } }] } };
+      return { status: 404, body: { error: { message: 'unexpected ' + path, code: 100 } } };
+    });
+    const w = new FbMetaAdsWriter('tok', { fetch: fn });
+    const { pages, warnings } = await w.listPages('9');
+    expect(warnings).toEqual([]);
+    expect(pages.map(p => p.externalId)).toEqual(['1', '3', '4', '2', '5']);
+    expect(pages[0]).toMatchObject({ linked: true, instagramUserId: 'IG1' });
+    expect(pages.find(p => p.externalId === '4')).toMatchObject({ linked: false, instagramUserId: 'IG4' });
+    expect(calls.some(c => c.url.includes('cursor=2'))).toBe(true);
+  });
+
+  it('a failing source becomes a warning, not an empty picker', async () => {
+    const { fn } = fakeFetch(url => {
+      const path = new URL(url).pathname;
+      if (path.endsWith('/act_9')) return { status: 200, body: { id: 'act_9' } }; // no business
+      if (path.endsWith('/promote_pages')) return { status: 400, body: { error: { message: 'No permission', code: 200 } } };
+      if (path.endsWith('/me/accounts')) return { status: 200, body: { data: [{ id: '2', name: 'Mine' }] } };
+      return { status: 404, body: { error: { message: 'unexpected', code: 100 } } };
+    });
+    const { pages, warnings } = await new FbMetaAdsWriter('tok', { fetch: fn }).listPages('9');
+    expect(pages.map(p => p.externalId)).toEqual(['2']);
+    expect(warnings[0]).toMatch(/linked to the ad account/);
+  });
+});
+
 describe('single calls + breaker', () => {
   it('posts form fields with objects as JSON', async () => {
     const { fn, calls } = fakeFetch(() => ({ status: 200, body: { id: '99' } }));

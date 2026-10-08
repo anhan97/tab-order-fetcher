@@ -8,7 +8,9 @@
 import { apiFetch, ApiError } from '@/utils/apiClient';
 import type {
   CreativeDto,
+  InterestOption,
   LandingStore,
+  LaunchHistoryPage,
   LaunchPreset,
   LaunchPresetInput,
   LaunchRequest,
@@ -67,7 +69,13 @@ export const launcherApi = {
     sort?: 'spend' | 'purchases' | 'roas' | 'recent'; postIds?: string[]; page?: number; pageSize?: number;
   }) => call<PostsPage>(`/api/ads-launcher/posts${qs({ ...params, postIds: params.postIds?.join(',') })}`),
   refreshPosts: (body: { adAccountId?: string; productId?: string; creativeId?: string }) =>
-    call<RefreshPostsResult>('/api/ads-launcher/posts/refresh', json('POST', body))
+    call<RefreshPostsResult>('/api/ads-launcher/posts/refresh', json('POST', body)),
+  /** Detailed-targeting interests (q ≥ 2 characters). */
+  interests: (adAccountId: string, q: string) =>
+    call<{ items: InterestOption[] }>(`/api/ads-launcher/interests${qs({ adAccountId, q })}`),
+  /** Campaigns the launcher created in the active store, newest first. */
+  history: (params: { page?: number; pageSize?: number }) =>
+    call<LaunchHistoryPage>(`/api/ads-launcher/history${qs(params)}`)
 };
 
 // ─── Presets ────────────────────────────────────────────────────────────────

@@ -61,9 +61,10 @@ const creative = (id: string, angle: string): CreativeDto => ({
 
 const OPTIONS: LauncherOptions = {
   adAccount: { id: ACCOUNT, name: 'Demo account', currency: 'USD', accountStatus: 1, isDemo: true },
-  pages: [{ externalId: '1000000001', name: 'My Page', pictureUrl: null }],
+  pages: [{ externalId: '1000000001', name: 'My Page', pictureUrl: null, instagramUserId: null, linked: true }],
   pixels: [{ externalId: '2000000002', name: 'Main pixel' }],
   campaigns: [],
+  audiences: [],
   warnings: []
 };
 

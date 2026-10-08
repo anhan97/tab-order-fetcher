@@ -250,7 +250,7 @@ export async function launchAds(req: LaunchRequest, deps: LaunchDeps): Promise<L
       return {
         spec,
         name: spec.name ?? creative.name,
-        key: creativeKey({ creativeId: creative.id, pageId: req.pageId, link, displayLink, callToAction: req.callToAction, urlTags: req.urlTags, copy }),
+        key: creativeKey({ creativeId: creative.id, pageId: req.pageId, instagramUserId: req.instagramUserId ?? '', link, displayLink, callToAction: req.callToAction, urlTags: req.urlTags, copy }),
         kind: 'creative',
         creative,
         postId: null,
@@ -306,7 +306,7 @@ export async function launchAds(req: LaunchRequest, deps: LaunchDeps): Promise<L
           objective: c.objective,
           dailyBudget: (fields.daily_budget as string) ?? null,
           bidStrategy: cbo ? strategy : null,
-          raw: { launched_by: 'ads-launcher', bid_strategy: cbo ? strategy : null, launch_id: launchId, ...(deps.isDemo ? { demo: true } : {}) }
+          raw: { launched_by: 'ads-launcher', actor_id: scope.actorId, bid_strategy: cbo ? strategy : null, launch_id: launchId, ...(deps.isDemo ? { demo: true } : {}) }
         })).id;
       } catch (e) {
         log.error('[ads-launcher] campaign mirror failed', created.id, e);
@@ -436,7 +436,7 @@ export async function launchAds(req: LaunchRequest, deps: LaunchDeps): Promise<L
       continue;
     }
     const asset = mediaByCreative.get(p.creative!.id)!;
-    const base = { name: p.creative!.name, pageId: req.pageId, link: p.link!, copy: p.copy!, callToAction: req.callToAction, urlTags: req.urlTags };
+    const base = { name: p.creative!.name, pageId: req.pageId, instagramUserId: req.instagramUserId, link: p.link!, copy: p.copy!, callToAction: req.callToAction, urlTags: req.urlTags };
     const fields = asset.kind === 'image'
       ? imageCreativeFields({ ...base, imageHash: asset.imageHash, displayLink: displayLink || undefined })
       : videoCreativeFields({

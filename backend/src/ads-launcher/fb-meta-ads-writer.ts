@@ -9,7 +9,7 @@
  */
 import { FACEBOOK_CONFIG } from '../config/facebook';
 import { recordUsageFromHeaders, shouldBackoff } from '../services/fb-rate-limit.service';
-import type { ExistingCampaign } from './contract';
+import type { ExistingCampaign, InterestOption, LauncherAudience, LauncherPage } from './contract';
 import { LIMITS } from './contract';
 import * as breaker from './meta-breaker';
 import { actId, encodeForm, type MetaFields } from './meta-params';
@@ -314,24 +314,111 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
   }
 
   /**
-   * Pages linked to the ad account first (promote_pages); when none are
-   * linked, every page the token manages, so the picker is never empty just
-   * because nobody linked a page in Business settings.
+   * Follow `paging.next` until `max` rows. Next links already carry the token,
+   * so they are fetched as-is.
+   */
+  private async listAll<T = any>(path: string, params: MetaFields, max = 500): Promise<T[]> {
+    const out: T[] = [];
+    let page = await this.call<{ data?: T[]; paging?: { next?: string } }>('GET', path, { ...params, limit: params.limit ?? 100 });
+    out.push(...(page.data || []));
+    while (page.paging?.next && out.length < max) {
+      await this.beforeCall();
+      const res = await this.fetchFn(page.paging.next);
+      this.afterResponse(res);
+      const json: any = await res.json().catch(() => null);
+      if (!res.ok || json?.error) throw this.failFrom(json?.error, res.status, `Meta returned HTTP ${res.status}`);
+      page = json;
+      out.push(...(page.data || []));
+    }
+    return out.slice(0, max);
+  }
+
+  /**
+   * Every page this connection can advertise with (§3.2 step 1). Four
+   * sources, merged and de-duplicated, linked pages first:
+   *   1. act_X/promote_pages       — pages already added to the ad account
+   *   2. me/accounts               — pages the user has a role on
+   *   3. <business>/owned_pages    — pages the ad account's business owns
+   *   4. <business>/client_pages   — pages shared with that business
+   * This used to stop at (1) whenever it returned anything, so an ad account
+   * with one linked page showed exactly one page out of a whole BM.
+   * Each source is best effort; failures come back as warnings.
    */
   async listPages(adAccountId: string) {
-    const map = (p: any) => ({ externalId: String(p.id), name: p.name || String(p.id), pictureUrl: p.picture?.data?.url ?? null });
-    const fields = 'id,name,picture{url}';
-    let pages: any[] = [];
-    try {
-      pages = (await this.call<any>('GET', `${actId(adAccountId)}/promote_pages`, { fields, limit: 100 })).data || [];
-    } catch (e) {
-      if (e instanceof MetaUnavailableError) throw e;
-    }
-    if (pages.length === 0) {
-      pages = (await this.call<any>('GET', 'me/accounts', { fields, limit: 100 })).data || [];
-    }
-    const seen = new Set<string>();
-    return pages.map(map).filter(p => (seen.has(p.externalId) ? false : (seen.add(p.externalId), true)));
+    const warnings: string[] = [];
+    const withIg = 'id,name,picture{url},instagram_business_account';
+    const plain = 'id,name,picture{url}';
+    const source = async (label: string, path: string): Promise<any[]> => {
+      try {
+        return await this.listAll(path, { fields: withIg });
+      } catch (e) {
+        if (e instanceof MetaUnavailableError) throw e;
+        // Some tokens may list pages but not read their Instagram link.
+        try {
+          return await this.listAll(path, { fields: plain });
+        } catch (e2) {
+          if (e2 instanceof MetaUnavailableError) throw e2;
+          warnings.push(`${label}: ${(e2 as Error).message}`);
+          return [];
+        }
+      }
+    };
+
+    const businessId = await this.call<any>('GET', actId(adAccountId), { fields: 'business' })
+      .then(r => (r?.business?.id ? String(r.business.id) : null))
+      .catch(e => {
+        if (e instanceof MetaUnavailableError) throw e;
+        return null;
+      });
+
+    const [linked, mine, owned, client] = await Promise.all([
+      source('Pages linked to the ad account', `${actId(adAccountId)}/promote_pages`),
+      source('Your pages', 'me/accounts'),
+      businessId ? source('Business pages', `${businessId}/owned_pages`) : Promise.resolve([]),
+      businessId ? source('Client pages', `${businessId}/client_pages`) : Promise.resolve([])
+    ]);
+
+    const byId = new Map<string, LauncherPage>();
+    const add = (p: any, isLinked: boolean) => {
+      const id = String(p.id);
+      const prev = byId.get(id);
+      const igId = p.instagram_business_account?.id ? String(p.instagram_business_account.id) : null;
+      byId.set(id, {
+        externalId: id,
+        name: p.name || prev?.name || id,
+        pictureUrl: p.picture?.data?.url ?? prev?.pictureUrl ?? null,
+        instagramUserId: igId ?? prev?.instagramUserId ?? null,
+        linked: isLinked || !!prev?.linked
+      });
+    };
+    linked.forEach(p => add(p, true));
+    [...mine, ...owned, ...client].forEach(p => add(p, false));
+
+    const pages = [...byId.values()].sort((a, b) => Number(b.linked) - Number(a.linked) || a.name.localeCompare(b.name));
+    return { pages, warnings };
+  }
+
+  async listCustomAudiences(adAccountId: string): Promise<LauncherAudience[]> {
+    const rows = await this.listAll(`${actId(adAccountId)}/customaudiences`, {
+      fields: 'id,name,subtype,approximate_count_lower_bound'
+    });
+    return rows.map((a: any) => ({
+      externalId: String(a.id),
+      name: a.name || String(a.id),
+      subtype: a.subtype ?? null,
+      approximateCount: typeof a.approximate_count_lower_bound === 'number' && a.approximate_count_lower_bound >= 0 ? a.approximate_count_lower_bound : null
+    }));
+  }
+
+  async searchInterests(query: string): Promise<InterestOption[]> {
+    const r = await this.call<any>('GET', 'search', { type: 'adinterest', q: query, limit: 25 });
+    return (r.data || []).map((i: any) => ({
+      id: String(i.id),
+      name: i.name || String(i.id),
+      audienceSizeLower: typeof i.audience_size_lower_bound === 'number' ? i.audience_size_lower_bound : null,
+      audienceSizeUpper: typeof i.audience_size_upper_bound === 'number' ? i.audience_size_upper_bound : null,
+      path: Array.isArray(i.path) ? i.path.map(String) : []
+    }));
   }
 
   async listPixels(adAccountId: string) {

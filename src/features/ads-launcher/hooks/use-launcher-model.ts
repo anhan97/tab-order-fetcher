@@ -4,7 +4,7 @@
  * launch requests. Both screens read the same model, so the diagram, the
  * review and the requests can never disagree.
  */
-import { useEffect, useMemo, type Dispatch } from 'react';
+import { useEffect, useMemo, useRef, type Dispatch } from 'react';
 import {
   STARTER_PRESETS,
   normalizePresetConfig,
@@ -12,13 +12,16 @@ import {
   type LaunchPreset,
   type LauncherAdAccount,
   type LauncherOptions,
+  type LauncherPage,
   type ProductOption
 } from '@contract/ads-launcher';
 import { useLanding, useLauncherAccounts, useLauncherOptions, usePresets, useProducts } from './queries';
 import { errorMessage, localInputToIso } from '../lib/format';
 import { defaultLanding, displayLinkFor, findLanding, landingById, landingGroups, CUSTOM_LANDING, type LandingGroup } from '../lib/landing';
+import { initialPageId } from '../lib/pages';
 import { poolProduct } from '../lib/pool';
 import {
+  audienceRefIssues,
   buildStructureRequests,
   planStructure,
   setupIssues,
@@ -41,6 +44,8 @@ export interface LauncherModel {
   accountsError: string | null;
   account: LauncherAdAccount | null;
   options: LauncherOptions | null;
+  /** The selected Facebook page, when it is in the options. */
+  page: LauncherPage | null;
   optionsLoading: boolean;
   optionsError: string | null;
   presets: LaunchPreset[];
@@ -121,22 +126,33 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
     if (next !== setup.adAccountId) dispatch({ type: 'account', adAccountId: next });
   }, [accountsQ.isSuccess, accounts, setup.adAccountId, dispatch]);
 
-  // Pixel / page: exactly one → selected; one not offered by this account → cleared.
+  // Pixel: exactly one → selected; one not offered by this account → cleared.
   // An empty list keeps a hand-typed id (the list may be hidden by permissions).
   useEffect(() => {
     if (!options) return;
-    const patch: Partial<WizardState['setup']> = {};
-    const pick = (list: Array<{ externalId: string }>, current: string) => {
-      if (list.length === 0) return current;
-      if (list.some(x => x.externalId === current)) return current;
-      return list.length === 1 ? list[0].externalId : '';
-    };
-    const pixelId = pick(options.pixels ?? [], setup.pixelId);
-    const pageId = pick(options.pages ?? [], setup.pageId);
-    if (pixelId !== setup.pixelId) patch.pixelId = pixelId;
-    if (pageId !== setup.pageId) patch.pageId = pageId;
-    if (Object.keys(patch).length) dispatch({ type: 'setup', patch });
-  }, [options, setup.pixelId, setup.pageId, dispatch]);
+    const pixels = options.pixels ?? [];
+    if (pixels.length === 0 || pixels.some(x => x.externalId === setup.pixelId)) return;
+    const pixelId = pixels.length === 1 ? pixels[0].externalId : '';
+    if (pixelId !== setup.pixelId) dispatch({ type: 'setup', patch: { pixelId } });
+  }, [options, setup.pixelId, dispatch]);
+
+  // Page, once per account load: one page → it; one linked page → it; else
+  // the remembered page if offered. Later the user's choice is left alone,
+  // unless the page disappears from the list.
+  const pagePickedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!options) return;
+    const pages = options.pages ?? [];
+    if (pages.length === 0) return; // keep a hand-typed id
+    let pageId = setup.pageId;
+    if (pagePickedFor.current !== options.adAccount.id) {
+      pagePickedFor.current = options.adAccount.id;
+      pageId = initialPageId(pages, setup.pageId);
+    } else if (pageId && !pages.some(p => p.externalId === pageId)) {
+      pageId = '';
+    }
+    if (pageId !== setup.pageId) dispatch({ type: 'setup', patch: { pageId } });
+  }, [options, setup.pageId, dispatch]);
 
   // Product: nothing in the pool tells and the store sells exactly one → that one.
   useEffect(() => {
@@ -220,7 +236,11 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
     () => setupIssues(setup, { config: state.config, items: state.pool, target: state.target }),
     [setup, state.config, state.pool, state.target]
   );
-  const planProblems = plan ? plan.issues : [presetsQ.isLoading ? 'Loading presets…' : 'Pick a preset'];
+  const audienceProblems = useMemo(
+    () => audienceRefIssues(state.config, options ? options.audiences ?? [] : null, state.target),
+    [state.config, options, state.target]
+  );
+  const planProblems = plan ? [...plan.issues, ...audienceProblems] : [presetsQ.isLoading ? 'Loading presets…' : 'Pick a preset'];
   const targetProblems = useMemo(
     () =>
       plan
@@ -230,6 +250,8 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
   );
   const all = [...setupProblems, ...planProblems, ...targetProblems];
   const blocked = all.length > 0;
+  const page = options?.pages?.find(p => p.externalId === setup.pageId) ?? null;
+  const instagramUserId = page?.instagramUserId ?? null;
 
   const requests = useMemo(
     () =>
@@ -241,10 +263,11 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
             target: state.target,
             existingCampaign,
             copy: state.copy,
-            startTime: localInputToIso(state.startTime)
+            startTime: localInputToIso(state.startTime),
+            instagramUserId
           })
         : [],
-    [blocked, plan, state.config, setup, state.target, existingCampaign, state.copy, state.startTime]
+    [blocked, plan, state.config, setup, state.target, existingCampaign, state.copy, state.startTime, instagramUserId]
   );
 
   return {
@@ -253,6 +276,7 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
     accountsError: accountsQ.isError ? errorMessage(accountsQ.error) : null,
     account,
     options,
+    page,
     optionsLoading: !!setup.adAccountId && optionsQ.isLoading,
     optionsError: optionsQ.isError ? errorMessage(optionsQ.error) : null,
     presets,
