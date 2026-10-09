@@ -18,6 +18,7 @@ import {
   type MetaAdsWriter,
   type RemoteAdSet,
   type RemoteCampaign,
+  type VideoStatus,
   MetaApiError,
   MetaUnavailableError,
   knownBidStrategy
@@ -31,6 +32,22 @@ interface GraphError {
   error_user_title?: string;
   code?: number;
   error_subcode?: number;
+  is_transient?: boolean;
+  fbtrace_id?: string;
+}
+
+/**
+ * Errors worth retrying: Meta flags them is_transient, or answers the generic
+ * "Something went wrong. Please try again later" (#100/1487390, #1, #2).
+ * Rate limits are NOT retried here — the breaker handles those.
+ */
+export function isTransientError(err: GraphError | undefined): boolean {
+  if (!err) return false;
+  if (breaker.isRateLimit(err.code)) return false;
+  if (err.is_transient) return true;
+  if (err.code === 1 || err.code === 2) return true;
+  if (err.code === 100 && err.error_subcode === 1487390) return true;
+  return /try again later/i.test(`${err.error_user_msg ?? ''} ${err.message ?? ''}`);
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -40,7 +57,9 @@ export function graphErrorMessage(err: GraphError | undefined, fallback: string)
   if (!err) return fallback;
   const text = err.error_user_msg || err.message || fallback;
   const code = err.code ? ` (#${err.code}${err.error_subcode ? `/${err.error_subcode}` : ''})` : '';
-  return `${text}${code}`;
+  // fbtrace_id is what Meta support asks for when an error persists.
+  const trace = err.fbtrace_id ? ` [trace ${err.fbtrace_id}]` : '';
+  return `${text}${code}${trace}`;
 }
 
 function headersToRecord(h: Headers): Record<string, string> {
@@ -52,7 +71,10 @@ function headersToRecord(h: Headers): Record<string, string> {
 export class FbMetaAdsWriter implements MetaAdsWriter {
   readonly kind = 'meta' as const;
   private readonly base: string;
+  /** Token-wide breaker (dead token, blocked app). */
   private readonly key: string;
+  /** Per ad account breaker (rate limits are counted per account). */
+  private readonly accountKey: string | null;
 
   constructor(
     private readonly token: string,
@@ -60,6 +82,7 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
   ) {
     this.base = `https://graph.facebook.com/${opts.version ?? FACEBOOK_CONFIG.version}`;
     this.key = breaker.breakerKey(token);
+    this.accountKey = opts.adAccountId ? `${this.key}:${opts.adAccountId}` : null;
   }
 
   private get fetchFn(): FetchFn {
@@ -68,11 +91,19 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
 
   /** Throws MetaUnavailableError when the breaker is open. */
   assertAvailable(): void {
+    const minutes = (until: number) => Math.max(1, Math.ceil((until - Date.now()) / 60_000));
     const open = breaker.check(this.key);
     if (open) {
       throw new MetaUnavailableError(
-        `Meta is unavailable for this Facebook connection (${open.reason}). Try again in a few minutes.`,
+        `Meta is unavailable for this Facebook connection (${open.reason}). Try again in about ${minutes(open.until)} min.`,
         open.until - Date.now()
+      );
+    }
+    const limited = this.accountKey ? breaker.check(this.accountKey) : null;
+    if (limited) {
+      throw new MetaUnavailableError(
+        `Meta is rate-limiting this ad account (${limited.reason}). Nothing was sent; try again in about ${minutes(limited.until)} min.`,
+        limited.until - Date.now()
       );
     }
   }
@@ -83,7 +114,7 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
     if (!account) return;
     const wait = shouldBackoff(account);
     if (wait > 10_000) {
-      breaker.trip(this.key, 'ad account rate limit', wait);
+      breaker.trip(this.accountKey!, 'usage is near the limit', wait);
       this.assertAvailable();
     }
     if (wait > 0) await sleep(wait);
@@ -95,7 +126,15 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
 
   private failFrom(err: GraphError | undefined, httpStatus: number, fallback: string): MetaApiError {
     const ms = breaker.tripDurationMs(err?.code, err?.error_subcode);
-    if (ms > 0) breaker.trip(this.key, graphErrorMessage(err, 'Meta error'), ms);
+    if (ms > 0) {
+      if (breaker.isRateLimit(err?.code) && this.accountKey) {
+        // Meta's own estimate (usage header) when it gives one, capped at an hour.
+        const estimate = shouldBackoff(this.opts.adAccountId!);
+        breaker.trip(this.accountKey, graphErrorMessage(err, 'rate limit'), Math.min(60 * 60_000, Math.max(ms, estimate)));
+      } else {
+        breaker.trip(this.key, graphErrorMessage(err, 'Meta error'), ms);
+      }
+    }
     return new MetaApiError(graphErrorMessage(err, fallback), err?.code, err?.error_subcode, httpStatus);
   }
 
@@ -130,8 +169,8 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
    * Graph batch, chunked by 50. A whole chunk failing (network, HTTP error)
    * fails only that chunk's operations; earlier chunks keep their results.
    */
-  private async batch(ops: Array<{ method: 'GET' | 'POST'; relative_url: string; body?: string }>): Promise<Array<{ ok: boolean; body: any; error?: string }>> {
-    const out: Array<{ ok: boolean; body: any; error?: string }> = [];
+  private async batch(ops: Array<{ method: 'GET' | 'POST'; relative_url: string; body?: string }>): Promise<Array<{ ok: boolean; body: any; error?: string; transient?: boolean }>> {
+    const out: Array<{ ok: boolean; body: any; error?: string; transient?: boolean }> = [];
     for (let i = 0; i < ops.length; i += LIMITS.metaBatchSize) {
       const chunk = ops.slice(i, i + LIMITS.metaBatchSize);
       try {
@@ -151,7 +190,7 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
         chunk.forEach((_, j) => {
           const item = json[j];
           if (!item) {
-            out.push({ ok: false, body: null, error: 'Meta did not finish this operation (batch timed out). Try again.' });
+            out.push({ ok: false, body: null, error: 'Meta did not finish this operation (batch timed out). Try again.', transient: true });
             return;
           }
           let body: any = null;
@@ -160,7 +199,7 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
             out.push({ ok: true, body });
           } else {
             const err = this.failFrom(body?.error, item.code, `Meta returned HTTP ${item.code}`);
-            out.push({ ok: false, body, error: err.message });
+            out.push({ ok: false, body, error: err.message, transient: isTransientError(body?.error) || item.code >= 500 });
           }
         });
       } catch (e: any) {
@@ -182,7 +221,7 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
       relative_url: `${actId(adAccountId)}/${edge}`,
       body: encodeForm(fields).toString()
     })));
-    return results.map(r => (r.ok && r.body?.id ? { id: String(r.body.id) } : { error: r.error || 'Meta returned no id' }));
+    return results.map(r => (r.ok && r.body?.id ? { id: String(r.body.id) } : { error: r.error || 'Meta returned no id', transient: !!r.transient }));
   }
 
   // ── Writes ────────────────────────────────────────────────────────────────
@@ -224,16 +263,20 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
     return { id: String(r.id) };
   }
 
-  async getVideoStatus(videoId: string) {
-    const r = await this.call<{ status?: { video_status?: string; processing_phase?: { status?: string; error?: { message?: string } } } }>(
-      'GET', videoId, { fields: 'status' }
+  async getVideoStatuses(videoIds: string[]) {
+    const out = new Map<string, VideoStatus>();
+    if (videoIds.length === 0) return out;
+    // GET /?ids=a,b,c — one call for every video still processing.
+    const r = await this.call<Record<string, { status?: { video_status?: string; processing_phase?: { error?: { message?: string } } } }>>(
+      'GET', '', { ids: videoIds.join(','), fields: 'status' }
     );
-    const vs = r.status?.video_status;
-    if (vs === 'ready') return { status: 'ready' as const };
-    if (vs === 'error' || vs === 'upload_failed') {
-      return { status: 'error' as const, detail: r.status?.processing_phase?.error?.message || vs };
+    for (const id of videoIds) {
+      const vs = r?.[id]?.status?.video_status;
+      if (vs === 'ready') out.set(id, { status: 'ready' });
+      else if (vs === 'error' || vs === 'upload_failed') out.set(id, { status: 'error', detail: r[id]?.status?.processing_phase?.error?.message || vs });
+      else out.set(id, { status: 'processing' });
     }
-    return { status: 'processing' as const };
+    return out;
   }
 
   async getVideoThumbnailUrl(videoId: string) {

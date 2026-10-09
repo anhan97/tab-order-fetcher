@@ -145,7 +145,7 @@ function QuickLaunchBody({
       </DialogHeader>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6">
-        <LaunchResults run={run} adAccountId={setup.adAccountId} compact />
+        <LaunchResults run={run} adAccountId={setup.adAccountId} compact onRetryFailed={runner.canRetry ? () => void runner.retryFailed() : undefined} />
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Preset" className="sm:col-span-2" hint={config ? `${structureLabel(config.structure)} · ${budgetSummary(config, model.currency)} · ${config.status === 'ACTIVE' ? 'Active' : 'Paused'}` : undefined}>
@@ -182,6 +182,16 @@ function QuickLaunchBody({
           </Field>
           {model.accountsError && <p className="text-xs text-rose-600 sm:col-span-2">Could not load ad accounts: {model.accountsError}</p>}
           {model.optionsError && <p className="text-xs text-rose-600 sm:col-span-2">Could not load this ad account: {model.optionsError}</p>}
+          {setup.adAccountId && (
+            <button
+              type="button"
+              className="justify-self-start text-[11px] font-medium text-teal-700 hover:underline disabled:text-slate-400 sm:col-span-2"
+              onClick={model.reloadOptions}
+              disabled={locked || model.optionsReloading || model.optionsLoading}
+            >
+              {model.optionsReloading ? 'Reloading pages & pixels…' : 'Reload pages & pixels'}
+            </button>
+          )}
 
           <PixelField options={model.options} value={setup.pixelId} onChange={pixelId => handlers.onSetup({ pixelId })} required={pixelRequired} loading={model.optionsLoading} disabled={locked} />
           <PageField options={model.options} value={setup.pageId} onChange={pageId => handlers.onSetup({ pageId })} loading={model.optionsLoading} disabled={locked} />

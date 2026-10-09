@@ -15,7 +15,7 @@ import {
   type LauncherPage,
   type ProductOption
 } from '@contract/ads-launcher';
-import { useLanding, useLauncherAccounts, useLauncherOptions, usePresets, useProducts } from './queries';
+import { useLanding, useLauncherAccounts, useLauncherOptions, usePresets, useProducts, useReloadOptions } from './queries';
 import { errorMessage, localInputToIso } from '../lib/format';
 import { defaultLanding, displayLinkFor, findLanding, landingById, landingGroups, CUSTOM_LANDING, type LandingGroup } from '../lib/landing';
 import { initialPageId } from '../lib/pages';
@@ -48,6 +48,9 @@ export interface LauncherModel {
   page: LauncherPage | null;
   optionsLoading: boolean;
   optionsError: string | null;
+  /** Fresh pages / pixels / audiences / campaigns from Meta, skipping the server's 10-min cache. */
+  reloadOptions: () => void;
+  optionsReloading: boolean;
   presets: LaunchPreset[];
   presetsLoading: boolean;
   /** Presets could not be loaded; the starters are shown read-only. */
@@ -84,6 +87,7 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
   // ─── Queries ──────────────────────────────────────────────────────────────
   const accountsQ = useLauncherAccounts();
   const optionsQ = useLauncherOptions(setup.adAccountId || null);
+  const reloadQ = useReloadOptions(setup.adAccountId || null);
   const presetsQ = usePresets();
   const productsQ = useProducts();
 
@@ -278,7 +282,10 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
     options,
     page,
     optionsLoading: !!setup.adAccountId && optionsQ.isLoading,
-    optionsError: optionsQ.isError ? errorMessage(optionsQ.error) : null,
+    optionsError: reloadQ.isError ? errorMessage(reloadQ.error) : optionsQ.isError ? errorMessage(optionsQ.error) : null,
+    /** Fresh pages / pixels / audiences / campaigns from Meta (skips the 10-min cache). */
+    reloadOptions: () => { if (setup.adAccountId) reloadQ.mutate(); },
+    optionsReloading: reloadQ.isPending,
     presets,
     presetsLoading: presetsQ.isLoading,
     presetsFallback,

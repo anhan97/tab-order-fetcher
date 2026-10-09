@@ -8,7 +8,7 @@
  */
 import type { ExistingCampaign, InterestOption, LauncherAudience, LauncherPage } from './contract';
 import type { MetaFields } from './meta-params';
-import type { BatchResult, MetaAdsWriter, RemoteAdSet, RemoteCampaign } from './meta-ads-writer';
+import type { BatchResult, MetaAdsWriter, RemoteAdSet, RemoteCampaign, VideoStatus } from './meta-ads-writer';
 import { knownBidStrategy } from './meta-ads-writer';
 
 export const DEMO_AD_ACCOUNT = { id: '900000000000001', name: 'Demo account (no Meta calls)', currency: 'USD' };
@@ -51,7 +51,8 @@ export interface FakeWriterOptions {
   failUpload?: (name: string) => string | null;
   failCreative?: (fields: MetaFields) => string | null;
   failAd?: (fields: MetaFields) => string | null;
-  /** Video status sequence returned by getVideoStatus (default: ready). */
+  /** Errors returned by fail* hooks that start with "transient:" are flagged transient. */
+  /** Video status sequence, one entry per polling round (default: ready). */
   videoStatuses?: Array<'ready' | 'processing' | 'error'>;
   /** Isolated state (tests) instead of the process-wide demo store. */
   isolated?: boolean;
@@ -118,11 +119,13 @@ export class FakeMetaAdsWriter implements MetaAdsWriter {
   }
 
   private videoPolls = 0;
-  async getVideoStatus(videoId: string) {
-    this.calls.push({ op: 'getVideoStatus', payload: videoId });
+  async getVideoStatuses(videoIds: string[]) {
+    this.calls.push({ op: 'getVideoStatuses', payload: videoIds });
     const seqList = this.opts.videoStatuses;
     const status = seqList ? seqList[Math.min(this.videoPolls++, seqList.length - 1)] : 'ready';
-    return status === 'error' ? { status, detail: 'Fake processing error' } : { status };
+    const out = new Map<string, VideoStatus>();
+    for (const id of videoIds) out.set(id, status === 'error' ? { status, detail: 'Fake processing error' } : { status });
+    return out;
   }
 
   async getVideoThumbnailUrl(videoId: string) {
@@ -134,7 +137,7 @@ export class FakeMetaAdsWriter implements MetaAdsWriter {
     this.calls.push({ op: 'createCreatives', adAccountId, payload: items });
     return items.map(fields => {
       const fail = this.opts.failCreative?.(fields);
-      if (fail) return { error: fail };
+      if (fail) return fail.startsWith('transient:') ? { error: fail.slice(10).trim(), transient: true } : { error: fail };
       const id = nextId();
       this.store.creatives.set(id, fields);
       return { id };
@@ -156,7 +159,7 @@ export class FakeMetaAdsWriter implements MetaAdsWriter {
     this.calls.push({ op: 'createAds', adAccountId, payload: items });
     return items.map(fields => {
       const fail = this.opts.failAd?.(fields);
-      if (fail) return { error: fail };
+      if (fail) return fail.startsWith('transient:') ? { error: fail.slice(10).trim(), transient: true } : { error: fail };
       const id = nextId();
       this.store.ads.set(id, { fields, creativeId: String((fields.creative as any)?.creative_id ?? '') });
       return { id };

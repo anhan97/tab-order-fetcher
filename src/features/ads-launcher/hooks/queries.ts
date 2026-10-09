@@ -58,8 +58,23 @@ export function useLauncherOptions(adAccountId: string | null | undefined) {
     queryKey: launcherKeys.options(store, adAccountId ?? ''),
     queryFn: () => launcherApi.options(adAccountId!),
     enabled: !!adAccountId,
-    staleTime: 60_000,
-    retry: 1
+    // Each load costs Meta ~8-10 calls against the ad account's rate limit:
+    // keep it, don't refetch on window focus, never auto-retry a rate limit
+    // (502) or a permission error (403). "Reload" asks for fresh data.
+    staleTime: 10 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: (count, err) => count < 1 && ![403, 502].includes((err as { status?: number })?.status ?? 0)
+  });
+}
+
+/** Fetch options bypassing the server cache (after linking a page in Meta, etc.). */
+export function useReloadOptions(adAccountId: string | null | undefined) {
+  const qc = useQueryClient();
+  const store = useStoreKey();
+  return useMutation({
+    mutationFn: () => launcherApi.options(adAccountId!, true),
+    onSuccess: data => qc.setQueryData(launcherKeys.options(store, adAccountId ?? ''), data)
   });
 }
 

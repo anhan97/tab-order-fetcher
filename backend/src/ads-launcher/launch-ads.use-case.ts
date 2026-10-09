@@ -152,8 +152,17 @@ export interface LaunchDeps {
   cache?: AssetCache;
   scope: LaunchScope;
   isDemo: boolean;
-  /** Video processing poll (§8.2 step 7): 10 × 3 s by default. */
+  /**
+   * Video processing poll (§8.2 step 7). Every round asks about ALL pending
+   * videos in one call, waiting 5 s, then 10 s, then 20 s between rounds
+   * (default 18 rounds ≈ 4.5 min) — every round is a read against the ad
+   * account's rate limit, so it backs off. 30 s total was too short for real
+   * videos, and a creative made from an unprocessed video fails at Meta with
+   * the generic "Something went wrong" (#100/1487390).
+   */
   videoPoll?: { attempts: number; intervalMs: number };
+  /** Waits before retrying Meta's transient errors (default 3 s, then 10 s). */
+  retryDelaysMs?: number[];
   log?: Pick<Console, 'error' | 'warn'>;
 }
 
@@ -174,7 +183,37 @@ const WARN_NOT_SAVED = 'Created on Meta but not saved locally yet. The next sync
 
 type MediaAsset =
   | { kind: 'image'; imageHash: string }
-  | { kind: 'video'; videoId: string; thumbnailHash?: string; thumbnailUrl?: string };
+  /** `ready` false = uploaded, still processing; a retry in the same launch polls again instead of re-uploading. */
+  | { kind: 'video'; videoId: string; thumbnailHash?: string; thumbnailUrl?: string; ready?: boolean };
+
+/** Run `fn` over `items`, at most `limit` at a time. */
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await fn(items[next++]);
+  });
+  await Promise.all(workers);
+}
+
+/**
+ * Retry the elements Meta flagged transient, a couple of times, with a pause.
+ * `run` gets the indexes still to (re)try and returns their results in order.
+ */
+async function withTransientRetries(
+  count: number,
+  run: (indexes: number[]) => Promise<Array<{ id?: string; error?: string; transient?: boolean }>>,
+  delays: number[]
+): Promise<Array<{ id?: string; error?: string; transient?: boolean }>> {
+  const all = await run(Array.from({ length: count }, (_, i) => i));
+  for (const delay of delays) {
+    const again = all.map((r, i) => (r && !r.id && r.transient ? i : -1)).filter(i => i >= 0);
+    if (again.length === 0) break;
+    await sleep(delay);
+    const retried = await run(again);
+    again.forEach((idx, k) => { all[idx] = retried[k] ?? all[idx]; });
+  }
+  return all;
+}
 
 interface PlannedAd {
   spec: LaunchAdSpec;
@@ -363,24 +402,59 @@ export async function launchAds(req: LaunchRequest, deps: LaunchDeps): Promise<L
   }
 
   // 7. Media: each creative uploaded once per request — and once per launch
-  // thanks to the cache. A failed upload fails only the ads that use it.
+  // thanks to the cache. Uploads run 3 at a time; then every video still
+  // processing is polled together (one call per round). A failed upload, or
+  // a video Meta has not finished, fails only the ads that use it.
   const mediaByCreative = new Map<string, MediaAsset>();
   const mediaErrors = new Map<string, string>();
+  const mediaHash = (c: CreativeRecord) => hashOf(['media', act, c.id, c.mediaPath]);
   const creativesNeedingMedia = unique(plans.flat().filter(p => p.kind === 'creative').map(p => p.creative!.id)).map(id => byId.get(id)!);
-  for (const creative of creativesNeedingMedia) {
-    const hash = hashOf(['media', act, creative.id, creative.mediaPath]);
+  await mapLimit(creativesNeedingMedia, 3, async creative => {
     try {
-      const cached = await safeCacheGet<MediaAsset>(cache, 'media', hash, log);
-      if (cached) {
-        mediaByCreative.set(creative.id, cached);
-        continue;
-      }
-      const asset = await uploadMedia(creative);
+      const cached = await safeCacheGet<MediaAsset>(cache, 'media', mediaHash(creative), log);
+      const asset = cached ?? (await uploadMedia(creative));
       mediaByCreative.set(creative.id, asset);
-      await safeCacheSet(cache, 'media', hash, asset, log);
+      if (!cached) await safeCacheSet(cache, 'media', mediaHash(creative), asset, log);
     } catch (e) {
       mediaErrors.set(creative.id, `Upload failed: ${errMsg(e)}`);
     }
+  });
+
+  const pendingVideos = () => [...mediaByCreative.entries()].filter(([, a]) => a.kind === 'video' && !a.ready) as Array<[string, Extract<MediaAsset, { kind: 'video' }>]>;
+  const poll = deps.videoPoll ?? { attempts: 18, intervalMs: 5000 };
+  for (let round = 0; round < poll.attempts && pendingVideos().length > 0; round++) {
+    if (round > 0) await sleep(poll.intervalMs * Math.min(4, 2 ** Math.floor((round - 1) / 3)));
+    const pending = pendingVideos();
+    let statuses: Map<string, { status: string; detail?: string }>;
+    try {
+      statuses = await writer.getVideoStatuses(pending.map(([, a]) => a.videoId));
+    } catch (e) {
+      log.warn('[ads-launcher] video status poll failed', errMsg(e));
+      if (e instanceof MetaUnavailableError) break;
+      continue;
+    }
+    for (const [creativeId, asset] of pending) {
+      const st = statuses.get(asset.videoId);
+      if (st?.status === 'ready') {
+        try {
+          const done = { ...asset, ...(await videoThumbnail(byId.get(creativeId)!, asset.videoId)), ready: true };
+          mediaByCreative.set(creativeId, done);
+          await safeCacheSet(cache, 'media', mediaHash(byId.get(creativeId)!), done, log);
+        } catch (e) {
+          mediaByCreative.delete(creativeId);
+          mediaErrors.set(creativeId, errMsg(e));
+        }
+      } else if (st?.status === 'error') {
+        mediaByCreative.delete(creativeId);
+        mediaErrors.set(creativeId, `Meta could not process the video${st.detail ? ` (${st.detail})` : ''}`);
+      }
+    }
+  }
+  for (const [creativeId] of pendingVideos()) {
+    // Never send a creative for an unprocessed video: Meta answers the
+    // generic #100/1487390. The upload stays cached for "Retry failed ads".
+    mediaByCreative.delete(creativeId);
+    mediaErrors.set(creativeId, 'Meta is still processing this video. Wait a few minutes, then use "Retry failed ads".');
   }
 
   async function uploadMedia(creative: CreativeRecord): Promise<MediaAsset> {
@@ -394,21 +468,28 @@ export async function launchAds(req: LaunchRequest, deps: LaunchDeps): Promise<L
     const upload = fileUrl
       ? await writer.uploadVideo(act, { name: fileName, fileUrl })
       : await writer.uploadVideo(act, { name: fileName, bytes: await media.readBytes(creative.mediaPath) });
-    const poll = deps.videoPoll ?? { attempts: 10, intervalMs: 3000 };
-    for (let i = 0; i < poll.attempts; i++) {
-      const s = await writer.getVideoStatus(upload.id);
-      if (s.status === 'ready') break;
-      if (s.status === 'error') throw new Error(`Meta could not process the video${s.detail ? ` (${s.detail})` : ''}`);
-      if (i < poll.attempts - 1) await sleep(poll.intervalMs);
-    }
+    // The thumbnail is picked once Meta has processed the video.
+    return { kind: 'video', videoId: upload.id, ready: false };
+  }
+
+  /**
+   * Thumbnail for video_data, cheapest first — every Meta call counts
+   * against the ad account's rate limit (a write costs 3× a read):
+   *   1. our poster at a public https URL → image_url, no call at all
+   *   2. Meta's own preferred thumbnail     → one read
+   *   3. upload our poster                  → one write (only if 2 has nothing)
+   */
+  async function videoThumbnail(creative: CreativeRecord, videoId: string): Promise<{ thumbnailUrl?: string; thumbnailHash?: string }> {
+    const posterUrl = creative.posterPath ? media.publicUrl(creative.posterPath) : null;
+    if (posterUrl) return { thumbnailUrl: posterUrl };
+    const metaThumb = await writer.getVideoThumbnailUrl(videoId).catch(() => null);
+    if (metaThumb) return { thumbnailUrl: metaThumb };
     if (creative.posterPath) {
-      const poster = await media.readBytes(creative.posterPath);
-      const { hash } = await writer.uploadImage(act, { bytes: poster, name: `${fileName}.poster.jpg` });
-      return { kind: 'video', videoId: upload.id, thumbnailHash: hash };
+      const fileName = creative.mediaPath.split('/').pop() || creative.id;
+      const { hash } = await writer.uploadImage(act, { bytes: await media.readBytes(creative.posterPath), name: `${fileName}.poster.jpg` });
+      return { thumbnailHash: hash };
     }
-    const thumbnailUrl = await writer.getVideoThumbnailUrl(upload.id);
-    if (!thumbnailUrl) throw new Error('This video has no poster image and Meta has no thumbnail for it yet');
-    return { kind: 'video', videoId: upload.id, thumbnailUrl };
+    throw new Error('This video has no poster image and Meta has no thumbnail for it yet');
   }
 
   // 8. Meta creatives: one per distinct key, reused from the launch cache when
@@ -450,7 +531,11 @@ export async function launchAds(req: LaunchRequest, deps: LaunchDeps): Promise<L
   if (toCreate.length > 0) {
     let results: Array<{ id?: string; error?: string }>;
     try {
-      results = await writer.createCreatives(act, toCreate.map(t => t.fields));
+      results = await withTransientRetries(
+        toCreate.length,
+        idx => writer.createCreatives(act, idx.map(i => toCreate[i].fields)),
+        deps.retryDelaysMs ?? [3000, 10000]
+      );
     } catch (e) {
       results = toCreate.map(() => ({ error: errMsg(e) }));
     }
@@ -577,7 +662,11 @@ export async function launchAds(req: LaunchRequest, deps: LaunchDeps): Promise<L
     if (batch.length > 0) {
       let results: Array<{ id?: string; error?: string }>;
       try {
-        results = await writer.createAds(act, batch.map(b => b.fields));
+        results = await withTransientRetries(
+          batch.length,
+          idx => writer.createAds(act, idx.map(i => batch[i].fields)),
+          deps.retryDelaysMs ?? [3000, 10000]
+        );
       } catch (e) {
         results = batch.map(() => ({ error: errMsg(e) }));
       }

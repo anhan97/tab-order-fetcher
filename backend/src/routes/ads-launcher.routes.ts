@@ -59,9 +59,37 @@ router.get('/accounts', ...storeChain('manage'), handle(async (req, res) => {
   ok(res, { items: await listLauncherAccounts(await callerOf(req)) });
 }));
 
+/**
+ * Options cost ~8-10 Meta calls (account, 4 page sources with paging,
+ * pixels, campaigns + ad sets, audiences). Opening the wizard, the quick
+ * launch dialog or switching tabs must not spend that every time — that is
+ * how an ad account hits Meta's rate limit (#17/2446079). Pages, pixels and
+ * audiences barely change: 10 min. Campaigns: 2 min, dropped after a launch.
+ * A load that came back with warnings is kept only 1 min. `?refresh=1` skips it.
+ */
+const STATIC_TTL_MS = 10 * 60_000;
+const CAMPAIGNS_TTL_MS = 2 * 60_000;
+const PARTIAL_TTL_MS = 60_000;
+interface CachedOptions {
+  base: Omit<LauncherOptions, 'campaigns' | 'warnings'>;
+  baseWarnings: string[];
+  baseAt: number;
+  campaigns: LauncherOptions['campaigns'] | null;
+  campaignWarnings: string[];
+  campaignsAt: number;
+}
+const optionsCache = new Map<string, CachedOptions>();
+const fresh = (at: number, ttl: number, warnings: string[]) => Date.now() - at < (warnings.length ? Math.min(ttl, PARTIAL_TTL_MS) : ttl);
+
+/** After a launch the account's campaign list is stale for everyone. */
+function forgetCampaigns(adAccountId: string): void {
+  for (const [key, entry] of optionsCache) if (key.endsWith(`:${adAccountId}`)) entry.campaigns = null;
+}
+
 router.get('/options', ...storeChain('manage'), handle(async (req, res) => {
   const adAccountId = digits(req.query.adAccountId);
   if (!adAccountId) return fail(res, 400, 'invalid_request', 'adAccountId is required');
+  const refresh = req.query.refresh === '1';
   const caller = await callerOf(req);
   let writer;
   let isDemo: boolean;
@@ -72,8 +100,7 @@ router.get('/options', ...storeChain('manage'), handle(async (req, res) => {
     throw e;
   }
 
-  const warnings: string[] = [];
-  const settle = async <T>(label: string, p: Promise<T>, fallback: T): Promise<T> => {
+  const settle = async <T>(warnings: string[], label: string, p: Promise<T>, fallback: T): Promise<T> => {
     try {
       return await p;
     } catch (e) {
@@ -83,23 +110,43 @@ router.get('/options', ...storeChain('manage'), handle(async (req, res) => {
     }
   };
 
+  const key = `${caller.actorId}:${caller.ownerId}:${adAccountId}`;
+  const hit = refresh ? undefined : optionsCache.get(key);
+  const entry: CachedOptions = hit ?? { base: null as never, baseWarnings: [], baseAt: 0, campaigns: null, campaignWarnings: [], campaignsAt: 0 };
+
   try {
-    const [account, pageList, pixels, campaigns, audiences] = await Promise.all([
-      settle('Ad account', writer.getAdAccount(adAccountId), { id: adAccountId, name: adAccountId, currency: null, accountStatus: null }),
-      settle('Pages', writer.listPages(adAccountId), { pages: [], warnings: [] }),
-      settle('Pixels', writer.listPixels(adAccountId), []),
-      isDemo ? demoCampaigns(scopeOf(req).ownerId, adAccountId) : settle('Campaigns', writer.listCampaigns(adAccountId), []),
-      settle('Audiences', writer.listCustomAudiences(adAccountId), [])
+    const needBase = !hit || !fresh(entry.baseAt, STATIC_TTL_MS, entry.baseWarnings);
+    const needCampaigns = isDemo || !hit || !entry.campaigns || !fresh(entry.campaignsAt, CAMPAIGNS_TTL_MS, entry.campaignWarnings);
+    await Promise.all([
+      needBase && (async () => {
+        const warnings: string[] = [];
+        const [account, pageList, pixels, audiences] = await Promise.all([
+          settle(warnings, 'Ad account', writer.getAdAccount(adAccountId), { id: adAccountId, name: adAccountId, currency: null, accountStatus: null }),
+          settle(warnings, 'Pages', writer.listPages(adAccountId), { pages: [], warnings: [] }),
+          settle(warnings, 'Pixels', writer.listPixels(adAccountId), []),
+          settle(warnings, 'Audiences', writer.listCustomAudiences(adAccountId), [])
+        ]);
+        warnings.push(...pageList.warnings);
+        entry.base = {
+          adAccount: { id: account.id || adAccountId, name: account.name, currency: account.currency, accountStatus: account.accountStatus, isDemo },
+          pages: pageList.pages,
+          pixels: isDemo ? [DEMO_PIXEL] : pixels,
+          audiences
+        };
+        entry.baseWarnings = warnings;
+        entry.baseAt = Date.now();
+      })(),
+      needCampaigns && (async () => {
+        const warnings: string[] = [];
+        entry.campaigns = isDemo
+          ? await demoCampaigns(scopeOf(req).ownerId, adAccountId)
+          : await settle(warnings, 'Campaigns', writer.listCampaigns(adAccountId), []);
+        entry.campaignWarnings = warnings;
+        entry.campaignsAt = Date.now();
+      })()
     ]);
-    warnings.push(...pageList.warnings);
-    const data: LauncherOptions = {
-      adAccount: { id: account.id || adAccountId, name: account.name, currency: account.currency, accountStatus: account.accountStatus, isDemo },
-      pages: pageList.pages,
-      pixels: isDemo ? [DEMO_PIXEL] : pixels,
-      campaigns,
-      audiences,
-      warnings
-    };
+    optionsCache.set(key, entry);
+    const data: LauncherOptions = { ...entry.base, campaigns: entry.campaigns ?? [], warnings: [...entry.baseWarnings, ...entry.campaignWarnings] };
     ok(res, data);
   } catch (e) {
     if (accessFail(res, e)) return;
@@ -244,6 +291,7 @@ router.post('/launch', ...storeChain('manage'), handle(async (req: Request, res:
       isDemo
     });
     await idempotency.complete(key, result);
+    if (result.summary.campaignCreated || result.summary.adsetsCreated > 0) forgetCampaigns(request.adAccountId);
     ok(res, result, result.campaign.status === 'ok' ? 201 : 200);
   } catch (e) {
     // Let a corrected retry through instead of answering 409 for a day.

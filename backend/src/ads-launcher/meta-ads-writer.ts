@@ -12,6 +12,8 @@ import type { MetaFields } from './meta-params';
 export interface BatchResult {
   id?: string;
   error?: string;
+  /** Meta says retrying may work ("Something went wrong. Please try again later"). */
+  transient?: boolean;
 }
 
 export interface RemoteCampaign {
@@ -42,7 +44,8 @@ export interface MetaAdsWriter {
   uploadImage(adAccountId: string, input: { bytes: Buffer; name: string }): Promise<{ hash: string }>;
   /** fileUrl when the file is publicly reachable over HTTPS, else raw bytes. */
   uploadVideo(adAccountId: string, input: { name: string; fileUrl?: string; bytes?: Buffer }): Promise<{ id: string }>;
-  getVideoStatus(videoId: string): Promise<{ status: 'ready' | 'processing' | 'error'; detail?: string }>;
+  /** Processing state of several videos in ONE call (GET /?ids=…), so polling costs one call per round. */
+  getVideoStatuses(videoIds: string[]): Promise<Map<string, VideoStatus>>;
   /** Meta's own preferred thumbnail, used when a video has no poster of ours. */
   getVideoThumbnailUrl(videoId: string): Promise<string | null>;
 
@@ -69,6 +72,11 @@ export interface MetaAdsWriter {
   listCampaigns(adAccountId: string): Promise<ExistingCampaign[]>;
   listCustomAudiences(adAccountId: string): Promise<LauncherAudience[]>;
   searchInterests(query: string): Promise<InterestOption[]>;
+}
+
+export interface VideoStatus {
+  status: 'ready' | 'processing' | 'error';
+  detail?: string;
 }
 
 /** A Graph error we can show to the user as-is. */

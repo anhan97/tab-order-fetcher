@@ -83,6 +83,44 @@ describe('batch', () => {
   });
 });
 
+describe('transient errors, video polling, rate limits', () => {
+  it('flags "try again later" / is_transient elements as transient, not permanent ones', async () => {
+    const { fn } = fakeFetch(() => ({ status: 200, body: [
+      { code: 400, body: JSON.stringify({ error: { message: 'Invalid parameter', code: 100, error_subcode: 1487390, error_user_msg: 'The Adcreative Create Failed for the following reason: Something went wrong. Please try again later', fbtrace_id: 'AbC123' } }) },
+      { code: 400, body: JSON.stringify({ error: { message: 'Invalid page', code: 100, error_subcode: 33 } }) },
+      { code: 500, body: JSON.stringify({ error: { message: 'Unknown', code: 1, is_transient: true } }) }
+    ] }));
+    const res = await new FbMetaAdsWriter('tok', { fetch: fn }).createCreatives('1', [{}, {}, {}]);
+    expect(res[0]).toMatchObject({ transient: true, error: expect.stringContaining('[trace AbC123]') });
+    expect(res[1].transient).toBe(false);
+    expect(res[2].transient).toBe(true);
+  });
+
+  it('asks about every pending video in one call', async () => {
+    const { fn, calls } = fakeFetch(() => ({ status: 200, body: {
+      v1: { status: { video_status: 'ready' } },
+      v2: { status: { video_status: 'processing' } },
+      v3: { status: { video_status: 'error', processing_phase: { error: { message: 'Bad codec' } } } }
+    } }));
+    const st = await new FbMetaAdsWriter('tok', { fetch: fn }).getVideoStatuses(['v1', 'v2', 'v3']);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0].url).searchParams.get('ids')).toBe('v1,v2,v3');
+    expect(st.get('v1')!.status).toBe('ready');
+    expect(st.get('v2')!.status).toBe('processing');
+    expect(st.get('v3')).toEqual({ status: 'error', detail: 'Bad codec' });
+  });
+
+  it('an ad account rate limit blocks only that ad account, and says how long', async () => {
+    const { fn, calls } = fakeFetch(() => ({ status: 400, body: { error: { message: 'There have been too many calls from this ad-account. Please wait a bit and try again.', code: 17, error_subcode: 2446079 } } }));
+    const busy = new FbMetaAdsWriter('tok-rl', { fetch: fn, adAccountId: '111' });
+    await expect(busy.createCampaign('111', {})).rejects.toBeInstanceOf(MetaApiError);
+    await expect(busy.createCampaign('111', {})).rejects.toThrow(/rate-limiting this ad account.*about \d+ min/);
+    expect(calls).toHaveLength(1);
+    // Same token, another ad account: still allowed.
+    expect(() => new FbMetaAdsWriter('tok-rl', { fetch: fn, adAccountId: '222' }).assertAvailable()).not.toThrow();
+  });
+});
+
 describe('pages', () => {
   it('unions linked, own, business-owned and client pages, follows paging, linked first', async () => {
     const { fn, calls } = fakeFetch(url => {

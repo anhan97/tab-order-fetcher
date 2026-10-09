@@ -25,6 +25,8 @@ export interface StepSetupProps {
   options: LauncherOptions | null;
   optionsLoading: boolean;
   optionsError: string | null;
+  onReloadOptions?: () => void;
+  optionsReloading?: boolean;
   pixelRequired: boolean;
   groups: LandingGroup[];
   landingLoading: boolean;
@@ -88,6 +90,22 @@ export function StepSetup(props: StepSetupProps) {
       </Section>
 
       <Section title="Pixel & page">
+        {props.onReloadOptions && (
+          <div className="-mt-1 mb-2 flex justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs text-slate-600"
+              onClick={props.onReloadOptions}
+              disabled={disabled || props.optionsReloading || props.optionsLoading}
+              title="Pages, pixels and audiences are kept for 10 minutes to spare Meta's rate limit"
+            >
+              <RotateCcw className={props.optionsReloading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+              {props.optionsReloading ? 'Reloading…' : 'Reload pages & pixels'}
+            </Button>
+          </div>
+        )}
         {props.optionsError && (
           <p className="mb-3 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

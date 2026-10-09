@@ -238,6 +238,8 @@ function AdsLauncherWizard({ userId }: { userId: string }) {
             options={model.options}
             optionsLoading={model.optionsLoading}
             optionsError={model.optionsError}
+            onReloadOptions={model.reloadOptions}
+            optionsReloading={model.optionsReloading}
             pixelRequired={pixelRequired}
             groups={model.landingGroups}
             landingLoading={model.landingLoading}
@@ -343,6 +345,7 @@ function AdsLauncherWizard({ userId }: { userId: string }) {
             status={config?.status ?? 'PAUSED'}
             onStatus={active.requestStatus}
             issues={model.issues.all}
+            onRetryFailed={runner.canRetry ? () => void runner.retryFailed() : undefined}
             run={run}
             adAccountId={setup.adAccountId}
             locked={locked}

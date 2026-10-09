@@ -98,7 +98,7 @@ function deps(writerOpts: FakeWriterOptions = {}, repoOpts = {}, extra: Partial<
   return {
     writer,
     mem,
-    deps: { writer, repo: mem.repo, media, scope: { ownerId: 'o1', storeId: 's1', actorId: 'u1' }, isDemo: true, videoPoll: { attempts: 3, intervalMs: 0 }, log: silent, ...extra } as LaunchDeps
+    deps: { writer, repo: mem.repo, media, scope: { ownerId: 'o1', storeId: 's1', actorId: 'u1' }, isDemo: true, videoPoll: { attempts: 3, intervalMs: 0 }, retryDelaysMs: [0, 0], log: silent, ...extra } as LaunchDeps
   };
 }
 
@@ -380,14 +380,89 @@ describe('LaunchAds', () => {
     expect(e.message).toMatch(/restore it in the library/);
   });
 
-  it('video: waits for processing, uploads the poster as thumbnail', async () => {
+  it('video: waits for processing, then uses Meta\'s thumbnail (one read) — no poster upload', async () => {
     const { writer, deps: d } = deps({ videoStatuses: ['processing', 'ready'] });
     const r = await launchAds(request({}, [newAdset('A', [{ creativeId: VIDEO }])]), d);
     expect(r.summary.adsCreated).toBe(1);
-    expect(writer.count('getVideoStatus')).toBe(2);
-    expect(writer.count('uploadImage')).toBe(1);
+    expect(writer.count('getVideoStatuses')).toBe(2);
+    expect(writer.count('uploadImage')).toBe(0);
+    expect(writer.count('getVideoThumbnailUrl')).toBe(1);
     const item = (writer.calls.find(c => c.op === 'createCreatives')!.payload as any[])[0];
-    expect(item.object_story_spec.video_data).toMatchObject({ title: 'Head 6', message: 'Body 6', image_hash: expect.stringMatching(/^fakehash/) });
+    expect(item.object_story_spec.video_data).toMatchObject({ title: 'Head 6', message: 'Body 6', image_url: expect.stringMatching(/thumb/) });
+  });
+
+  it('video with a public poster URL costs no thumbnail call at all', async () => {
+    const { writer, deps: d } = deps({}, {}, { media: { readBytes: async (p: string) => Buffer.from(p), publicUrl: (p: string) => `https://cdn.example/${p}` } });
+    await launchAds(request({}, [newAdset('A', [{ creativeId: VIDEO }])]), d);
+    expect(writer.count('getVideoThumbnailUrl')).toBe(0);
+    expect(writer.count('uploadImage')).toBe(0);
+    const item = (writer.calls.find(c => c.op === 'createCreatives')!.payload as any[])[0];
+    expect(item.object_story_spec.video_data.image_url).toBe('https://cdn.example/creatives/s1/v.poster.jpg');
+    // ...and Meta pulled the video from its public URL instead of a byte upload.
+    expect((writer.calls.find(c => c.op === 'uploadVideo')!.payload as any).fileUrl).toBe('https://cdn.example/creatives/s1/v.mp4');
+  });
+
+  it('video still processing after the wait → its ads fail clearly, no doomed creative is sent', async () => {
+    const { writer, deps: d } = deps({ videoStatuses: ['processing'] });
+    const r = await launchAds(request({}, [newAdset('A', [{ creativeId: VIDEO }, { creativeId: C1 }])]), d);
+    expect(r.adsets[0].ads[0]).toMatchObject({ status: 'failed', error: expect.stringMatching(/still processing/) });
+    expect(r.adsets[0].ads[1].status).toBe('ok');
+    const sent = writer.calls.filter(c => c.op === 'createCreatives').flatMap(c => c.payload as any[]);
+    expect(sent.some(f => f.object_story_spec?.video_data)).toBe(false);
+    expect(writer.count('getVideoStatuses')).toBe(3);
+  });
+
+  it('a retry in the same launch re-polls the cached video instead of uploading again', async () => {
+    const { writer, deps: d } = deps({ videoStatuses: ['processing', 'processing', 'processing', 'ready'] });
+    const cache = launchAssetCache('o1', '9b0c1c9e-8a43-4d36-9e37-0000000000aa');
+    const launchId = '9b0c1c9e-8a43-4d36-9e37-0000000000aa';
+    const first = await launchAds(request({ launchId }, [newAdset('A', [{ creativeId: VIDEO }])]), { ...d, cache });
+    expect(first.adsets[0].ads[0].status).toBe('failed');
+    const second = await launchAds(request({ launchId }, [newAdset('A', [{ creativeId: VIDEO }])]), { ...d, cache });
+    expect(second.adsets[0].ads[0].status).toBe('ok');
+    expect(writer.count('uploadVideo')).toBe(1);
+  });
+
+  it('several videos are polled together: one call per round', async () => {
+    const { writer, deps: d } = deps({ videoStatuses: ['processing', 'ready'] });
+    const VIDEO2 = VIDEO; // same file twice in two ad sets still means one video
+    await launchAds(request({}, [newAdset('A', [{ creativeId: VIDEO }]), newAdset('B', [{ creativeId: VIDEO2 }])]), d);
+    expect(writer.count('getVideoStatuses')).toBe(2);
+  });
+
+  it('transient Meta errors on creatives are retried; a retry that works counts as ok', async () => {
+    let attempts = 0;
+    const { writer, deps: d } = deps({
+      failCreative: f => ((f.object_story_spec as any)?.link_data?.message === 'Body 2' && ++attempts < 3
+        ? 'transient: Something went wrong. Please try again later (#100/1487390)'
+        : null)
+    });
+    const r = await launchAds(request({}, [newAdset('A', [{ creativeId: C1 }, { creativeId: C2 }, { creativeId: C3 }])]), d);
+    expect(r.adsets[0].ads.map(a => a.status)).toEqual(['ok', 'ok', 'ok']);
+    // first batch with 3 creatives, then two retries with only the failed one
+    const batches = writer.calls.filter(c => c.op === 'createCreatives').map(c => (c.payload as unknown[]).length);
+    expect(batches).toEqual([3, 1, 1]);
+  });
+
+  it('transient errors that keep failing end as failed after the retries; permanent errors are not retried', async () => {
+    const { writer, deps: d } = deps({
+      failCreative: f => {
+        const msg = (f.object_story_spec as any)?.link_data?.message;
+        if (msg === 'Body 1') return 'transient: Something went wrong. Please try again later';
+        if (msg === 'Body 2') return 'Invalid page';
+        return null;
+      }
+    });
+    const r = await launchAds(request({}, [newAdset('A', [{ creativeId: C1 }, { creativeId: C2 }])]), d);
+    expect(r.adsets[0].ads.map(a => a.status)).toEqual(['failed', 'failed']);
+    expect(writer.calls.filter(c => c.op === 'createCreatives').map(c => (c.payload as unknown[]).length)).toEqual([2, 1, 1]);
+  });
+
+  it('transient errors on ads are retried too', async () => {
+    let n = 0;
+    const { deps: d } = deps({ failAd: () => (++n === 1 ? 'transient: Please try again later' : null) });
+    const r = await launchAds(request(), d);
+    expect(r.summary).toMatchObject({ adsCreated: 2, adsFailed: 0 });
   });
 
   it('video processing error fails only its ads', async () => {

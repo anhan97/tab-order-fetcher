@@ -21,6 +21,9 @@ export const breakerKey = (token: string) => createHash('sha1').update(token).di
 
 const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80000, 80001, 80002, 80003, 80004, 80005, 80006, 80008, 80009, 80014]);
 
+/** Rate limits are counted per ad account / business, not per token. */
+export const isRateLimit = (code: number | undefined) => code !== undefined && RATE_LIMIT_CODES.has(code);
+
 /** How long to stay open for a Graph error code, or 0 = not a breaker error. */
 export function tripDurationMs(code: number | undefined, subcode?: number): number {
   if (code === undefined) return 0;

@@ -59,7 +59,9 @@ const json = (method: string, body: unknown): RequestInit => ({ method, body: JS
 
 export const launcherApi = {
   accounts: () => call<{ items: LauncherAdAccount[] }>('/api/ads-launcher/accounts'),
-  options: (adAccountId: string) => call<LauncherOptions>(`/api/ads-launcher/options${qs({ adAccountId })}`),
+  /** `refresh` skips the server's options cache (pages/pixels/audiences 10 min, campaigns 2 min). */
+  options: (adAccountId: string, refresh = false) =>
+    call<LauncherOptions>(`/api/ads-launcher/options${qs({ adAccountId, refresh: refresh ? 1 : undefined })}`),
   landing: (productId: string) => call<{ items: LandingStore[] }>(`/api/ads-launcher/landing${qs({ productId })}`),
   /** One request = one campaign (§7.3). */
   launch: (request: LaunchRequest) => call<LaunchResult>('/api/ads-launcher/launch', json('POST', request)),

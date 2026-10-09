@@ -23,6 +23,8 @@ export interface StepReviewProps {
   issues: string[];
   run: LaunchRunState;
   adAccountId: string;
+  /** Present when the last run has failed ads that can be sent again. */
+  onRetryFailed?: () => void;
   /** Sending: everything read-only. */
   locked: boolean;
 }
@@ -46,7 +48,7 @@ export function StepReview(props: StepReviewProps) {
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
-      <LaunchResults run={props.run} adAccountId={props.adAccountId} />
+      <LaunchResults run={props.run} adAccountId={props.adAccountId} onRetryFailed={props.onRetryFailed} />
       {locked && (
         <p className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
           <Lock className="h-3.5 w-3.5 shrink-0" />

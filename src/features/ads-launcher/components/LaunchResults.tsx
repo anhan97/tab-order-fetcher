@@ -3,7 +3,8 @@
  * §7.3 response). `ok` with a warning still counts as created.
  */
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, CircleSlash, ExternalLink, Loader2, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, CircleSlash, ExternalLink, Loader2, RotateCcw, XCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import type { ItemStatus, LaunchAdsetResult } from '@contract/ads-launcher';
@@ -16,6 +17,8 @@ export interface LaunchResultsProps {
   adAccountId: string;
   /** Campaign-level lines only (Quick launch). */
   compact?: boolean;
+  /** Present when something failed and can be sent again. */
+  onRetryFailed?: () => void;
 }
 
 function StatusIcon({ status, className }: { status: ItemStatus | 'error'; className?: string }) {
@@ -48,7 +51,7 @@ function AdsetLine({ adset }: { adset: LaunchAdsetResult }) {
               <StatusIcon status={ad.status} className="mt-px h-3 w-3" />
               <span className="min-w-0 break-words">
                 <span className="text-slate-700">{ad.name}</span>
-                {ad.externalId && <span className="ml-1 font-mono text-slate-400">{ad.externalId}</span>}
+                {ad.externalId && <span className="font-mono text-slate-400"> · {ad.externalId}</span>}
                 {ad.error && <span className="block text-rose-600">{ad.error}</span>}
                 {ad.warning && <span className="block text-amber-700">{ad.warning}</span>}
               </span>
@@ -90,7 +93,7 @@ function EntryCard({ entry, compact }: { entry: LaunchRunEntry; compact?: boolea
   );
 }
 
-export function LaunchResults({ run, adAccountId, compact }: LaunchResultsProps) {
+export function LaunchResults({ run, adAccountId, compact, onRetryFailed }: LaunchResultsProps) {
   if (run.phase === 'idle') return null;
   const pct = run.total ? Math.round((run.completed / run.total) * 100) : 0;
   const t = run.totals;
@@ -106,14 +109,26 @@ export function LaunchResults({ run, adAccountId, compact }: LaunchResultsProps)
                 ? `${t.ok} ad${t.ok === 1 ? '' : 's'} launched${t.failed ? `, ${t.failed} failed` : ''}`
                 : 'Done'}
           </p>
-          {run.phase === 'done' && adAccountId && (
-            <a href={adsManagerUrl(adAccountId)} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs font-medium text-teal-700 hover:underline">
-              Open in Ads Manager <ExternalLink className="h-3.5 w-3.5" />
-            </a>
+          {run.phase === 'done' && (
+            <div className="flex flex-wrap items-center gap-3">
+              {onRetryFailed && (
+                <Button type="button" size="sm" variant="outline" className="h-7 gap-1 border-amber-300 text-xs text-amber-800 hover:bg-amber-50" onClick={onRetryFailed}>
+                  <RotateCcw className="h-3.5 w-3.5" /> Retry failed ads
+                </Button>
+              )}
+              {adAccountId && (
+                <a href={adsManagerUrl(adAccountId)} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs font-medium text-teal-700 hover:underline">
+                  Open in Ads Manager <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              )}
+            </div>
           )}
         </div>
         <Progress value={pct} className="h-2 [&>div]:bg-teal-600" aria-label="Launch progress" />
-        {run.phase === 'running' && <p className="text-[11px] text-slate-500">Keep this page open until every campaign is sent.</p>}
+        {run.phase === 'running' && <p className="text-[11px] text-slate-500">Keep this page open until every campaign is sent. Videos can take a few minutes while Meta processes them.</p>}
+        {run.phase === 'done' && onRetryFailed && (
+          <p className="text-[11px] text-slate-500">Retry sends only what failed, into the campaigns and ad sets already created — nothing is duplicated.</p>
+        )}
       </div>
       {run.entries.length > 0 && (
         <ul className="space-y-2">
