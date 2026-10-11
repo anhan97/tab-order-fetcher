@@ -25,7 +25,9 @@ import { PendingApprovalPage } from "@/pages/PendingApprovalPage";
 import { PrivacyPolicyPage } from "@/pages/PrivacyPolicyPage";
 import { TermsOfServicePage } from "@/pages/TermsOfServicePage";
 import NotFound from "./pages/NotFound";
-import { Loader2 } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { storeAllowsPage, homePath, type AppRole } from "@/lib/permissions";
 
 const queryClient = new QueryClient();
 
@@ -65,6 +67,43 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
+/** "/" → the first page this user may open (a 'creative' member lands on Creatives). */
+const HomeRedirect = () => {
+  const { user, canInStore } = useAuth();
+  return <Navigate to={homePath((user?.role || 'user') as AppRole, canInStore)} replace />;
+};
+
+/**
+ * A store page the active store does not grant: say so instead of rendering a
+ * page whose every call answers 403. With no active store the page renders
+ * its own "pick a store" state. The server enforces the same rules.
+ */
+const StorePageGate = ({ path, children }: { path: string; children: React.ReactNode }) => {
+  const { user, activeStore, canInStore } = useAuth();
+  if (!activeStore || user?.role === 'admin' || storeAllowsPage(path, canInStore)) return <>{children}</>;
+  return (
+    <div className="max-w-xl mx-auto mt-8">
+      <Card className="p-10 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
+          <Lock className="h-6 w-6" />
+        </div>
+        <h2 className="mb-2 text-lg font-bold text-slate-900">No access to this page</h2>
+        <p className="text-sm text-slate-600">
+          Your access to <b>{activeStore.name || activeStore.storeDomain}</b> does not include this page.
+          Ask an admin to grant it, or switch store in the sidebar.
+        </p>
+      </Card>
+    </div>
+  );
+};
+
+/** ProtectedRoute + StorePageGate, the wrapper every store page uses. */
+const StorePage = ({ path, children }: { path: string; children: React.ReactNode }) => (
+  <ProtectedRoute>
+    <StorePageGate path={path}>{children}</StorePageGate>
+  </ProtectedRoute>
+);
+
 const AppRoutes = () => {
   return (
     <Routes>
@@ -76,7 +115,7 @@ const AppRoutes = () => {
       <Route path="/pending" element={<PendingApprovalPage />} />
 
       <Route element={<Layout />}>
-        <Route path="/" element={<Navigate to="/orders" replace />} />
+        <Route path="/" element={<ProtectedRoute><HomeRedirect /></ProtectedRoute>} />
 
         {/* Store management now lives inside the Layout so the sidebar +
             store switcher are always visible while connecting/switching. */}
@@ -86,57 +125,25 @@ const AppRoutes = () => {
           </ProtectedRoute>
         } />
 
-        <Route path="/orders" element={
-          <ProtectedRoute>
-            <OrdersPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/orders" element={<StorePage path="/orders"><OrdersPage /></StorePage>} />
 
-        <Route path="/fulfillment" element={
-          <ProtectedRoute>
-            <FulfillmentPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/fulfillment" element={<StorePage path="/fulfillment"><FulfillmentPage /></StorePage>} />
 
-        <Route path="/tracking" element={
-          <ProtectedRoute>
-            <TrackingPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/tracking" element={<StorePage path="/tracking"><TrackingPage /></StorePage>} />
 
         {/* /analytics + /profit retired — content lives under /orders tabs.
             Old bookmarks / inbound links keep working via redirect. */}
         <Route path="/analytics" element={<Navigate to="/orders" replace />} />
 
-        <Route path="/cogs" element={
-          <ProtectedRoute>
-            <CogsPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/cogs" element={<StorePage path="/cogs"><CogsPage /></StorePage>} />
 
-        <Route path="/facebook" element={
-          <ProtectedRoute>
-            <FacebookPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/facebook" element={<StorePage path="/facebook"><FacebookPage /></StorePage>} />
 
-        <Route path="/creatives" element={
-          <ProtectedRoute>
-            <CreativesPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/creatives" element={<StorePage path="/creatives"><CreativesPage /></StorePage>} />
 
-        <Route path="/ads-launcher" element={
-          <ProtectedRoute>
-            <AdsLauncherPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/ads-launcher" element={<StorePage path="/ads-launcher"><AdsLauncherPage /></StorePage>} />
 
-        <Route path="/content" element={
-          <ProtectedRoute>
-            <ContentAnalyticsPage />
-          </ProtectedRoute>
-        } />
+        <Route path="/content" element={<StorePage path="/content"><ContentAnalyticsPage /></StorePage>} />
 
         <Route path="/profit" element={<Navigate to="/orders" replace />} />
 

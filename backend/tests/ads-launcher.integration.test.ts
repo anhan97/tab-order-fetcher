@@ -231,7 +231,8 @@ describe('Ads Launcher routes', { timeout: 60_000 }, () => {
     expect(notJpeg.status).toBe(400);
     const viewerUpload = await call('/api/creatives', 'POST', viewerId, uploadForm('Nope'));
     expect(viewerUpload.status).toBe(403);
-    expect((await call('/api/creatives', 'GET', viewerId)).status).toBe(200);
+    // A store viewer has no creatives permission at all (store-permissions.integration covers the grants).
+    expect((await call('/api/creatives', 'GET', viewerId)).status).toBe(403);
 
     const edited = await call(`/api/creatives/${created[2]}`, 'PUT', ownerId, { angle: 'Gift box', headline: 'New head' });
     expect(edited.json.data).toMatchObject({ angle: 'Gift box', headline: 'New head' });

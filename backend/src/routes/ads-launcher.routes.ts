@@ -10,12 +10,13 @@
  *   GET  /api/ads-launcher/posts                 posts the launcher's ads run
  *   POST /api/ads-launcher/posts/refresh         ask Meta for missing post ids
  *
- * "ads_launcher.use" maps to the store's `manage` capability (owner/manager),
- * the same gate the existing campaign builder uses; admins may use any ad
- * account (`ads_manager.view_all_users`).
+ * "ads_launcher.use" is the store's `ads.launch` permission — granted per
+ * member, never part of a role (owners and system admins always have it).
+ * The posts list only needs `creatives.view`. Admins may use any ad account
+ * (`ads_manager.view_all_users`).
  */
 import express, { type Request, type Response } from 'express';
-import { listAccessibleStores } from '../lib/store-access';
+import { can, listAccessibleStores } from '../lib/store-access';
 import { z } from 'zod';
 import {
   type LaunchHistoryPage,
@@ -55,7 +56,7 @@ function accessFail(res: Response, e: unknown): boolean {
 
 const digits = (v: unknown) => (typeof v === 'string' && /^\d{1,30}$/.test(v.replace(/^act_/, '')) ? v.replace(/^act_/, '') : null);
 
-router.get('/accounts', ...storeChain('manage'), handle(async (req, res) => {
+router.get('/accounts', ...storeChain('ads.launch'), handle(async (req, res) => {
   ok(res, { items: await listLauncherAccounts(await callerOf(req)) });
 }));
 
@@ -86,7 +87,7 @@ function forgetCampaigns(adAccountId: string): void {
   for (const [key, entry] of optionsCache) if (key.endsWith(`:${adAccountId}`)) entry.campaigns = null;
 }
 
-router.get('/options', ...storeChain('manage'), handle(async (req, res) => {
+router.get('/options', ...storeChain('ads.launch'), handle(async (req, res) => {
   const adAccountId = digits(req.query.adAccountId);
   if (!adAccountId) return fail(res, 400, 'invalid_request', 'adAccountId is required');
   const refresh = req.query.refresh === '1';
@@ -174,7 +175,7 @@ async function demoCampaigns(ownerId: string, adAccountId: string): Promise<Laun
   }));
 }
 
-router.get('/interests', ...storeChain('manage'), handle(async (req, res) => {
+router.get('/interests', ...storeChain('ads.launch'), handle(async (req, res) => {
   const adAccountId = digits(req.query.adAccountId);
   const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
   if (!adAccountId) return fail(res, 400, 'invalid_request', 'adAccountId is required');
@@ -194,7 +195,7 @@ const historyQuery = z.object({
 });
 
 /** Campaigns the launcher created in this store, newest first. */
-router.get('/history', ...storeChain('manage'), handle(async (req, res) => {
+router.get('/history', ...storeChain('ads.launch'), handle(async (req, res) => {
   const parsed = historyQuery.safeParse(req.query);
   if (!parsed.success) return zodFail(res, parsed.error);
   const { page, pageSize } = parsed.data;
@@ -242,7 +243,7 @@ router.get('/history', ...storeChain('manage'), handle(async (req, res) => {
   ok(res, data);
 }));
 
-router.get('/landing', ...storeChain('manage'), handle(async (req, res) => {
+router.get('/landing', ...storeChain('ads.launch'), handle(async (req, res) => {
   const productId = typeof req.query.productId === 'string' && /^\d{1,40}$/.test(req.query.productId) ? req.query.productId : null;
   if (!productId) return fail(res, 400, 'invalid_request', 'productId is required');
   const scope = scopeOf(req);
@@ -251,12 +252,15 @@ router.get('/landing', ...storeChain('manage'), handle(async (req, res) => {
     select: { productHandle: true },
     orderBy: { createdAt: 'desc' }
   });
-  const otherStores = (await listAccessibleStores(scope.actorId)).map(s => ({ id: s.id, storeDomain: s.storeDomain, accessToken: s.accessToken, name: s.name }));
+  // Only stores whose products the caller may read anyway.
+  const otherStores = (await listAccessibleStores(scope.actorId))
+    .filter(s => can(s.access, 'read', s.permissions))
+    .map(s => ({ id: s.id, storeDomain: s.storeDomain, accessToken: s.accessToken, name: s.name }));
   const items = await landingFor({ activeStoreId: scope.storeId, productId, knownHandle: known?.productHandle, otherStores });
   ok(res, { items });
 }));
 
-router.post('/launch', ...storeChain('manage'), handle(async (req: Request, res: Response) => {
+router.post('/launch', ...storeChain('ads.launch'), handle(async (req: Request, res: Response) => {
   const parsed = launchRequestSchema.safeParse(req.body);
   if (!parsed.success) return zodFail(res, parsed.error);
   const request = parsed.data;
@@ -302,13 +306,13 @@ router.post('/launch', ...storeChain('manage'), handle(async (req: Request, res:
   }
 }));
 
-router.get('/posts', ...storeChain('read'), handle(async (req, res) => {
+router.get('/posts', ...storeChain('creatives.view'), handle(async (req, res) => {
   const parsed = postsQuerySchema.safeParse(req.query);
   if (!parsed.success) return zodFail(res, parsed.error);
   ok(res, await listPosts(scopeOf(req), parsed.data));
 }));
 
-router.post('/posts/refresh', ...storeChain('manage'), handle(async (req, res) => {
+router.post('/posts/refresh', ...storeChain('ads.launch'), handle(async (req, res) => {
   const parsed = refreshPostsSchema.safeParse(req.body ?? {});
   if (!parsed.success) return zodFail(res, parsed.error);
   const caller = await callerOf(req);

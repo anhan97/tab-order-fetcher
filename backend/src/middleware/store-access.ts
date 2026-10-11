@@ -18,7 +18,8 @@ import { Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { verifyAccessToken } from '../lib/jwt';
 import { decryptToken } from '../lib/token-crypto';
-import { resolveStoreAccess, type StoreAccessLevel } from '../lib/store-access';
+import { can, resolveStoreAccess, type StoreAccessLevel } from '../lib/store-access';
+import { loadRole } from './require-role';
 
 const prisma = new PrismaClient();
 
@@ -67,6 +68,16 @@ export async function requireStoreAccess(req: Request, res: Response, next: Next
           const access = await resolveStoreAccess(claims.id, { storeDomain });
           if (!access) {
             return res.status(404).json({ error: `Store ${storeDomain} not found for this user` });
+          }
+          // Live orders and products are store data: a member without `read`
+          // (a 'creative') may not pull them through this proxy either.
+          if (!can(access.level, 'read', access.permissions) && (await loadRole(claims.id)) !== 'admin') {
+            return res.status(403).json({
+              error: 'Your access to this store does not allow "read"',
+              code: 'store_capability_denied',
+              requires: 'read',
+              access: access.level
+            });
           }
           const store = await prisma.shopifyStore.findUnique({ where: { id: access.storeId } });
           if (!store || !store.isActive) {

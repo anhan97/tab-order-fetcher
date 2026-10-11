@@ -1,6 +1,7 @@
 /**
  * Creative library: one row per uploaded image/video, scoped to a store.
- * Visible to everyone who can open the store; changed by those who can manage it.
+ * Who sees and changes what is decided by the route (creatives.view /
+ * .upload / .manage); `createdBy` narrows a query to one uploader's rows.
  */
 import type { AdCreative, Prisma } from '@prisma/client';
 import { type CreativeDto, creativeName, creatorDisplayName } from './contract';
@@ -52,10 +53,13 @@ export async function listCreatives(scope: StoreScope, q: {
   q?: string;
   page: number;
   pageSize: number;
+  /** Only this uploader's creatives (a member who may not see the whole library). */
+  createdBy?: string;
 }): Promise<{ items: CreativeDto[]; total: number; notLaunched: number }> {
   const base: Prisma.AdCreativeWhereInput = {
     storeId: scope.storeId,
     deletedAt: null,
+    ...(q.createdBy ? { createdBy: q.createdBy } : {}),
     ...(q.ids ? { id: { in: q.ids } } : {}),
     ...(q.productId ? { productId: q.productId } : {}),
     ...(q.status && !q.ids ? { status: q.status } : {}),
@@ -96,8 +100,11 @@ export async function getCreative(scope: StoreScope, id: string): Promise<AdCrea
   return prisma.adCreative.findFirst({ where: { id, storeId: scope.storeId, deletedAt: null } });
 }
 
-export async function getCreativeDto(scope: StoreScope, id: string): Promise<CreativeDto | null> {
-  const row = await prisma.adCreative.findFirst({ where: { id, storeId: scope.storeId, deletedAt: null }, include: withAdsCount });
+export async function getCreativeDto(scope: StoreScope, id: string, createdBy?: string): Promise<CreativeDto | null> {
+  const row = await prisma.adCreative.findFirst({
+    where: { id, storeId: scope.storeId, deletedAt: null, ...(createdBy ? { createdBy } : {}) },
+    include: withAdsCount
+  });
   return row ? toCreativeDto(row) : null;
 }
 
@@ -190,7 +197,11 @@ export async function deleteCreative(scope: StoreScope, id: string): Promise<boo
   return res.count > 0;
 }
 
-export async function creativeCountsByProduct(storeId: string): Promise<Map<string, number>> {
-  const rows = await prisma.adCreative.groupBy({ by: ['productId'], where: { storeId, deletedAt: null, status: 'active' }, _count: { _all: true } });
+export async function creativeCountsByProduct(storeId: string, createdBy?: string): Promise<Map<string, number>> {
+  const rows = await prisma.adCreative.groupBy({
+    by: ['productId'],
+    where: { storeId, deletedAt: null, status: 'active', ...(createdBy ? { createdBy } : {}) },
+    _count: { _all: true }
+  });
   return new Map(rows.map(r => [r.productId, r._count._all]));
 }

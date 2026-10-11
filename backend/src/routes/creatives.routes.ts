@@ -9,7 +9,11 @@
  *   POST   /api/creatives/:id/archive | /restore
  *   DELETE /api/creatives/:id             soft delete
  *
- * Reading needs the store's `read` capability; changing needs `manage`.
+ * Permissions (granted per member, see lib/store-access.ts):
+ *   creatives.view   — the whole library
+ *   creatives.upload — upload; see, edit, archive their OWN creatives, and
+ *                      delete them while no ad uses them
+ *   creatives.manage — edit / archive / delete anyone's
  */
 import crypto from 'crypto';
 import express from 'express';
@@ -27,6 +31,7 @@ import {
   updateCreative
 } from '../ads-launcher/creatives.service';
 import { fail, handle, ok, scopeOf, storeChain, zodFail } from '../ads-launcher/http';
+import { hasStoreCapability } from '../middleware/resolve-store';
 import {
   MAX_IMAGE_BYTES,
   MAX_VIDEO_BYTES,
@@ -61,22 +66,52 @@ const listQuery = z.object({
 
 const uuid = z.string().uuid();
 
-router.get('/products', ...storeChain('read'), handle(async (req, res) => {
+/** Uploaders without creatives.view see only their own creatives. */
+const ownOnly = (req: express.Request): string | undefined =>
+  hasStoreCapability(req, 'creatives.view') ? undefined : req.resolved!.actorId;
+
+/**
+ * creatives.manage may change any creative; creatives.upload only the
+ * caller's own, and may delete it only while no ad uses it. Answers the
+ * request and returns false when the caller may not.
+ */
+async function mayChange(req: express.Request, res: express.Response, id: string, action: 'edit' | 'delete'): Promise<boolean> {
+  if (hasStoreCapability(req, 'creatives.manage')) return true;
+  const row = await getCreativeDto(scopeOf(req), id, ownOnly(req));
+  if (!row) {
+    fail(res, 404, 'not_found', 'Creative not found');
+    return false;
+  }
+  if (row.createdBy !== req.resolved!.actorId) {
+    fail(res, 403, 'not_your_creative', 'You can only change creatives you uploaded');
+    return false;
+  }
+  if (action === 'delete' && row.adsCount > 0) {
+    fail(res, 403, 'creative_in_use', 'This creative is already used in ads. Archive it instead, or ask someone who manages creatives.');
+    return false;
+  }
+  return true;
+}
+
+const SEE = storeChain('creatives.view', 'creatives.upload');
+const CHANGE = storeChain('creatives.manage', 'creatives.upload');
+
+router.get('/products', ...SEE, handle(async (req, res) => {
   const scope = scopeOf(req);
-  const [{ items, source }, counts] = await Promise.all([listProducts(scope.storeId), creativeCountsByProduct(scope.storeId)]);
+  const [{ items, source }, counts] = await Promise.all([listProducts(scope.storeId), creativeCountsByProduct(scope.storeId, ownOnly(req))]);
   res.setHeader('X-Catalog-Source', source);
   ok(res, { items: productOptions(items, counts) });
 }));
 
-router.get('/', ...storeChain('read'), handle(async (req, res) => {
+router.get('/', ...SEE, handle(async (req, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return zodFail(res, parsed.error);
-  ok(res, await listCreatives(scopeOf(req), parsed.data));
+  ok(res, await listCreatives(scopeOf(req), { ...parsed.data, createdBy: ownOnly(req) }));
 }));
 
-router.get('/:id', ...storeChain('read'), handle(async (req, res) => {
+router.get('/:id', ...SEE, handle(async (req, res) => {
   if (!uuid.safeParse(req.params.id).success) return fail(res, 404, 'not_found', 'Creative not found');
-  const dto = await getCreativeDto(scopeOf(req), req.params.id);
+  const dto = await getCreativeDto(scopeOf(req), req.params.id, ownOnly(req));
   if (!dto) return fail(res, 404, 'not_found', 'Creative not found');
   ok(res, dto);
 }));
@@ -88,7 +123,7 @@ const uploadFields = creativeCopySchema.extend({
   height: z.coerce.number().int().positive().max(20000).optional()
 });
 
-router.post('/', ...storeChain('manage'), (req, res, next) => {
+router.post('/', ...storeChain('creatives.upload'), (req, res, next) => {
   upload(req, res, err => {
     if (!err) return next();
     const tooBig = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE';
@@ -145,26 +180,29 @@ router.post('/', ...storeChain('manage'), (req, res, next) => {
   }
 }));
 
-router.put('/:id', ...storeChain('manage'), handle(async (req, res) => {
+router.put('/:id', ...CHANGE, handle(async (req, res) => {
   if (!uuid.safeParse(req.params.id).success) return fail(res, 404, 'not_found', 'Creative not found');
   const parsed = creativeCopySchema.safeParse(req.body);
   if (!parsed.success) return zodFail(res, parsed.error);
+  if (!(await mayChange(req, res, req.params.id, 'edit'))) return;
   const dto = await updateCreative(scopeOf(req), req.params.id, parsed.data);
   if (!dto) return fail(res, 404, 'not_found', 'Creative not found');
   ok(res, dto);
 }));
 
 for (const [action, status] of [['archive', 'archived'], ['restore', 'active']] as const) {
-  router.post(`/:id/${action}`, ...storeChain('manage'), handle(async (req, res) => {
+  router.post(`/:id/${action}`, ...CHANGE, handle(async (req, res) => {
     if (!uuid.safeParse(req.params.id).success) return fail(res, 404, 'not_found', 'Creative not found');
+    if (!(await mayChange(req, res, req.params.id, 'edit'))) return;
     const dto = await setCreativeStatus(scopeOf(req), req.params.id, status);
     if (!dto) return fail(res, 404, 'not_found', 'Creative not found');
     ok(res, dto);
   }));
 }
 
-router.delete('/:id', ...storeChain('manage'), handle(async (req, res) => {
+router.delete('/:id', ...CHANGE, handle(async (req, res) => {
   if (!uuid.safeParse(req.params.id).success) return fail(res, 404, 'not_found', 'Creative not found');
+  if (!(await mayChange(req, res, req.params.id, 'delete'))) return;
   if (!(await deleteCreative(scopeOf(req), req.params.id))) return fail(res, 404, 'not_found', 'Creative not found');
   ok(res, { ok: true });
 }));

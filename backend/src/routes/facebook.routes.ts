@@ -12,7 +12,7 @@ import {
 } from '../services/fb-access.service';
 import { snapshotAccountDay, queryHistoricalSnapshots } from '../services/fb-snapshot.service';
 import { getSchedulerStatus } from '../jobs/fb-adlux-scheduler';
-import { resolveStore, requireStoreOwner, requireStoreCapability } from '../middleware/resolve-store';
+import { resolveStore, resolveStoreAny, requireStoreOwner, requireStoreCapability } from '../middleware/resolve-store';
 import { requireRole } from '../middleware/require-role';
 // requireRole reads req.userId, which only requireAuth sets — resolveStore does not.
 import { requireAuth } from '../middleware/require-auth';
@@ -33,8 +33,21 @@ import fetch from 'node-fetch';
 
 const router = express.Router();
 
+/**
+ * Guards. The Facebook page is granted per member like the rest of the ads
+ * side (lib/store-access.ts): facebook.view to see it, facebook.manage to map
+ * campaigns and recompute spend. Neither needs the store's `read`. Connecting
+ * or disconnecting Facebook and claiming ad accounts stay owner-only.
+ *
+ * adminOnly: global FB plumbing (app config, the system-token pool, BM sync,
+ * the raw Graph proxy). These used to answer anyone, signed in or not.
+ */
+const fbView = [resolveStoreAny, requireStoreCapability('facebook.view')];
+const fbManage = [resolveStoreAny, requireStoreCapability('facebook.manage')];
+const adminOnly = [requireAuth, requireRole(['admin'])];
+
 // Exchange short-lived token for long-lived token
-router.post('/exchange-token', async (req, res) => {
+router.post('/exchange-token', ...adminOnly, async (req, res) => {
   try {
     const { token } = req.body;
 
@@ -66,7 +79,7 @@ router.post('/exchange-token', async (req, res) => {
 });
 
 // Facebook API proxy endpoint
-router.get('/proxy', async (req, res) => {
+router.get('/proxy', ...adminOnly, async (req, res) => {
   try {
     const { url, access_token } = req.query;
 
@@ -114,7 +127,7 @@ router.get('/proxy', async (req, res) => {
  *
  * Query params: accountId (required), since (ISO), until (ISO), accessToken (required)
  */
-router.get('/account-data', resolveStore, async (req, res) => {
+router.get('/account-data', ...fbView, async (req, res) => {
   try {
     if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
     const accountId = String(req.query.accountId || '').replace(/^act_/, '');
@@ -198,7 +211,7 @@ router.get('/account-data', resolveStore, async (req, res) => {
 });
 
 /** Force-refresh an account by clearing its cached entries. */
-router.post('/invalidate', (req, res) => {
+router.post('/invalidate', ...adminOnly, (req, res) => {
   const accountId = String(req.body?.accountId || '').replace(/^act_/, '');
   if (!accountId) return res.status(400).json({ error: 'accountId required' });
   const cleared = invalidateAccount(accountId);
@@ -206,7 +219,7 @@ router.post('/invalidate', (req, res) => {
 });
 
 /** Diagnostics: show current cache size + per-account quota usage. */
-router.get('/sync-status', async (_req, res) => {
+router.get('/sync-status', ...adminOnly, async (_req, res) => {
   res.json({
     cache: cacheStats(),
     quota: getAllUsage(),
@@ -221,7 +234,7 @@ router.get('/sync-status', async (_req, res) => {
  * Trigger an immediate BM sync (admin-style endpoint, no auth check yet).
  * Useful for manual onboarding before the cron tick fires.
  */
-router.post('/sync-bm', async (_req, res) => {
+router.post('/sync-bm', ...adminOnly, async (_req, res) => {
   const cfg = await getAdluxConfig();
   if (!cfg.adluxBmId) return res.status(400).json({ error: 'Adlux BM ID not configured (Settings → Adlux)' });
   await pool.ensureLoaded();
@@ -235,7 +248,7 @@ router.post('/sync-bm', async (_req, res) => {
 });
 
 /** List unclaimed accounts (admin / debugging). */
-router.get('/unclaimed-accounts', async (_req, res) => {
+router.get('/unclaimed-accounts', ...adminOnly, async (_req, res) => {
   try {
     const accounts = await listUnclaimedAccounts();
     res.json({ accounts });
@@ -249,7 +262,7 @@ router.get('/unclaimed-accounts', async (_req, res) => {
  * whether the current user already has access. Powers the onboarding wizard's
  * primary view: "here's what's available, click to add".
  */
-router.get('/adlux-accounts', resolveStore, async (req, res) => {
+router.get('/adlux-accounts', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const userId = req.resolved.userId;
@@ -290,7 +303,7 @@ router.post('/claim-accounts-bulk', resolveStore, requireStoreOwner, async (req,
 });
 
 /** List accounts the resolved user has access to. */
-router.get('/my-accounts', resolveStore, async (req, res) => {
+router.get('/my-accounts', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const accounts = await listUserAccounts(req.resolved.userId);
@@ -346,7 +359,7 @@ router.delete('/unclaim-account', resolveStore, requireStoreOwner, async (req, r
   }
 });
 
-router.put('/account-favorite', resolveStore, requireStoreCapability('manage'), async (req, res) => {
+router.put('/account-favorite', ...fbManage, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { accountId, isFavorite } = req.body || {};
   if (!accountId) return res.status(400).json({ error: 'accountId required' });
@@ -362,7 +375,7 @@ router.put('/account-favorite', resolveStore, requireStoreCapability('manage'), 
  * Historical snapshot query — for date ranges entirely in the past.
  * Reads from FacebookAdInsightSnapshot, no FB call.
  */
-router.get('/historical', resolveStore, async (req, res) => {
+router.get('/historical', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const accountId = String(req.query.accountId || '').replace(/^act_/, '');
   const since = new Date(String(req.query.since || ''));
@@ -386,7 +399,7 @@ router.get('/historical', resolveStore, async (req, res) => {
  * Manual snapshot trigger for a specific account+date. Useful for
  * back-filling after the snapshot cron failed.
  */
-router.post('/snapshot-day', async (req, res) => {
+router.post('/snapshot-day', ...adminOnly, async (req, res) => {
   const { accountId, date } = req.body || {};
   if (!accountId || !date) return res.status(400).json({ error: 'accountId, date required' });
   try {
@@ -426,7 +439,7 @@ router.post('/connect', resolveStore, requireStoreOwner, async (req, res) => {
   }
 });
 
-router.get('/connection-status', resolveStore, async (req, res) => {
+router.get('/connection-status', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const status = await userToken.getStatus(req.resolved.userId);
@@ -488,7 +501,7 @@ router.delete('/disconnect-all', resolveStore, requireStoreOwner, async (req, re
  * The frontend renders this as a matrix table so the user can answer
  * "why does this account work but that one doesn't?" at a glance.
  */
-router.get('/diagnose-accounts', resolveStore, async (req, res) => {
+router.get('/diagnose-accounts', ...fbView, async (req, res) => {
   try {
     if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
     const token = await userToken.getRawToken(req.resolved.userId);
@@ -525,7 +538,7 @@ router.get('/diagnose-accounts', resolveStore, async (req, res) => {
  * with our DB so the frontend can render an enrollment table without a
  * second round-trip.
  */
-router.get('/assets', resolveStore, async (req, res) => {
+router.get('/assets', ...fbView, async (req, res) => {
   try {
     if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
     const token = await userToken.getRawToken(req.resolved.userId);
@@ -576,7 +589,7 @@ router.delete('/assets/ad-accounts/:accountId', resolveStore, requireStoreOwner,
 // and paste the App ID + Secret here.
 
 /** GET own app (masked secret) — used by Settings UI + frontend SDK init. */
-router.get('/my-app', resolveStore, async (req, res) => {
+router.get('/my-app', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     res.json(await userFbApp.getOwnAppSafe(req.resolved.actorId));
@@ -635,7 +648,7 @@ router.delete('/my-app', requireAuth, resolveStore, requireRole(['admin']), asyn
 // endpoints above still work — they operate on the user's "default" app.
 
 /** GET /my-apps — list every app this user has registered (masked secrets). */
-router.get('/my-apps', resolveStore, async (req, res) => {
+router.get('/my-apps', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const apps = await userFbApp.listForUser(req.resolved.actorId);
@@ -781,7 +794,7 @@ router.delete('/my-apps/:fbAppId/users/:userId', requireAuth, resolveStore, requ
  * Used by the Connect flow to render either a single Connect button (one
  * app) or a picker (multiple). Secrets are never echoed back.
  */
-router.get('/available-apps', resolveStore, async (req, res) => {
+router.get('/available-apps', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const apps = await fbAppAccess.listAppsForUser(req.resolved.actorId);
@@ -792,7 +805,7 @@ router.get('/available-apps', resolveStore, async (req, res) => {
 });
 
 /** GET /connections — list every (app, FB nick) connection the user has. */
-router.get('/connections', resolveStore, async (req, res) => {
+router.get('/connections', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const connections = await userToken.listConnections(req.resolved.userId);
@@ -837,7 +850,7 @@ router.delete('/connections/:fbAppId', resolveStore, requireStoreOwner, async (r
  * with grant_type=client_credentials (returns an app token if creds work).
  * Doesn't burn rate limit for the user's account.
  */
-router.post('/my-app/test', resolveStore, async (req, res) => {
+router.post('/my-app/test', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const cfg = await userFbApp.getForUser(req.resolved.actorId);
@@ -876,7 +889,7 @@ router.post('/my-app/test', resolveStore, async (req, res) => {
  * in FacebookAdAccountAccess and the page bounced them to the connect
  * screen on every reload.
  */
-router.get('/connection-accounts', resolveStore, async (req, res) => {
+router.get('/connection-accounts', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const userId = req.resolved.userId;
   try {
@@ -936,7 +949,7 @@ router.get('/connection-accounts', resolveStore, async (req, res) => {
  * GET current config (App ID, App Secret masked, BM ID). Includes source
  * indicator (db/env/none) so admin can see whether DB or env is in effect.
  */
-router.get('/admin/config', async (_req, res) => {
+router.get('/admin/config', ...adminOnly, async (_req, res) => {
   try {
     const cfg = await getAdluxConfig();
     res.json({
@@ -957,7 +970,7 @@ router.get('/admin/config', async (_req, res) => {
  * Returns ok=false with FB's error message if the credentials are bad —
  * lets admins verify without going through a full user OAuth flow.
  */
-router.post('/admin/config/test', async (_req, res) => {
+router.post('/admin/config/test', ...adminOnly, async (_req, res) => {
   try {
     const cfg = await getAdluxConfig();
     if (!cfg.fbAppId || !cfg.fbAppSecret) {
@@ -998,7 +1011,7 @@ router.post('/admin/config/test', async (_req, res) => {
  * PUT config — accepts any of {fbAppId, fbAppSecret, adluxBmId}. Empty
  * string explicitly clears that field; missing field keeps existing value.
  */
-router.put('/admin/config', async (req, res) => {
+router.put('/admin/config', ...adminOnly, async (req, res) => {
   const updates: any = {};
   if ('fbAppId' in req.body)     updates.fbAppId     = String(req.body.fbAppId || '').trim() || null;
   if ('fbAppSecret' in req.body) updates.fbAppSecret = String(req.body.fbAppSecret || '').trim() || null;
@@ -1020,7 +1033,7 @@ router.put('/admin/config', async (req, res) => {
 });
 
 /** GET system token pool — token values are redacted to last 8 chars. */
-router.get('/admin/tokens', async (_req, res) => {
+router.get('/admin/tokens', ...adminOnly, async (_req, res) => {
   try {
     await pool.ensureLoaded();
     const tokens = await pool.listAll();
@@ -1031,7 +1044,7 @@ router.get('/admin/tokens', async (_req, res) => {
 });
 
 /** POST add a new token. Backend validates with /me before storing. */
-router.post('/admin/tokens', async (req, res) => {
+router.post('/admin/tokens', ...adminOnly, async (req, res) => {
   const { name, token } = req.body || {};
   if (!name || !token) return res.status(400).json({ error: 'name + token required' });
   try {
@@ -1042,7 +1055,7 @@ router.post('/admin/tokens', async (req, res) => {
   }
 });
 
-router.delete('/admin/tokens/:id', async (req, res) => {
+router.delete('/admin/tokens/:id', ...adminOnly, async (req, res) => {
   try {
     await pool.removeToken(req.params.id);
     res.json({ ok: true });
@@ -1051,7 +1064,7 @@ router.delete('/admin/tokens/:id', async (req, res) => {
   }
 });
 
-router.put('/admin/tokens/:id/active', async (req, res) => {
+router.put('/admin/tokens/:id/active', ...adminOnly, async (req, res) => {
   const isActive = !!req.body?.isActive;
   try {
     await pool.setActive(req.params.id, isActive);
@@ -1062,7 +1075,7 @@ router.put('/admin/tokens/:id/active', async (req, res) => {
 });
 
 /** POST test a token — calls FB /me; updates lastError on failure. */
-router.post('/admin/tokens/:id/test', async (req, res) => {
+router.post('/admin/tokens/:id/test', ...adminOnly, async (req, res) => {
   try {
     const result = await pool.testToken(req.params.id);
     res.json(result);
@@ -1072,7 +1085,7 @@ router.post('/admin/tokens/:id/test', async (req, res) => {
 });
 
 /** POST refresh debug_token info (expiry, scopes, type) for a single token. */
-router.post('/admin/tokens/:id/refresh-info', async (req, res) => {
+router.post('/admin/tokens/:id/refresh-info', ...adminOnly, async (req, res) => {
   try {
     const result = await pool.refreshTokenInfo(req.params.id);
     res.json(result);
@@ -1082,7 +1095,7 @@ router.post('/admin/tokens/:id/refresh-info', async (req, res) => {
 });
 
 /** POST refresh info for ALL active tokens in one shot. */
-router.post('/admin/tokens/refresh-info-all', async (_req, res) => {
+router.post('/admin/tokens/refresh-info-all', ...adminOnly, async (_req, res) => {
   try {
     const result = await pool.refreshAllTokenInfo();
     res.json(result);
@@ -1094,7 +1107,7 @@ router.post('/admin/tokens/refresh-info-all', async (_req, res) => {
 // ===== Campaign ↔ Store Mapping =====
 
 /** List user's Shopify stores (for the dropdown when assigning campaigns). */
-router.get('/my-stores', resolveStore, async (req, res) => {
+router.get('/my-stores', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const stores = await prismaForRoutes.shopifyStore.findMany({
@@ -1108,7 +1121,7 @@ router.get('/my-stores', resolveStore, async (req, res) => {
 });
 
 /** List all campaigns the user can see, with current mapping decoration. */
-router.get('/campaigns', resolveStore, async (req, res) => {
+router.get('/campaigns', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   try {
     const campaigns = await listCampaignsForUser(req.resolved.userId);
@@ -1126,7 +1139,7 @@ router.get('/campaigns', resolveStore, async (req, res) => {
  * passes the ad-account list it wants campaigns for; backend's user
  * token authorises the FB API calls.
  */
-router.post('/campaigns/bridge', resolveStore, requireStoreCapability('manage'), async (req, res) => {
+router.post('/campaigns/bridge', ...fbManage, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const accounts = Array.isArray(req.body?.accounts) ? req.body.accounts : [];
   if (accounts.length === 0) return res.json({ campaigns: [] });
@@ -1188,7 +1201,7 @@ router.post('/campaigns/bridge', resolveStore, requireStoreCapability('manage'),
 });
 
 /** Upsert mapping for a single campaign. storeId=null clears the mapping. */
-router.put('/campaign-mapping', resolveStore, requireStoreCapability('manage'), async (req, res) => {
+router.put('/campaign-mapping', ...fbManage, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { campaignId, campaignName, accountId, storeId } = req.body || {};
   if (!campaignId || !accountId) {
@@ -1212,7 +1225,7 @@ router.put('/campaign-mapping', resolveStore, requireStoreCapability('manage'), 
  * Set-semantics save for one store: replace the store's mapping with the
  * given campaign list atomically. Used by the Facebook tab's mapping panel.
  */
-router.post('/campaign-mapping/save-for-store', resolveStore, requireStoreCapability('manage'), async (req, res) => {
+router.post('/campaign-mapping/save-for-store', ...fbManage, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, campaigns } = req.body || {};
   if (!storeId || !Array.isArray(campaigns)) {
@@ -1239,7 +1252,7 @@ router.post('/campaign-mapping/save-for-store', resolveStore, requireStoreCapabi
 });
 
 /** Bulk-map every campaign whose name matches the given pattern. */
-router.post('/campaign-mapping/bulk', resolveStore, requireStoreCapability('manage'), async (req, res) => {
+router.post('/campaign-mapping/bulk', ...fbManage, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, pattern, patternType } = req.body || {};
   if (!storeId || !pattern) return res.status(400).json({ error: 'storeId + pattern required' });
@@ -1262,7 +1275,7 @@ router.post('/campaign-mapping/bulk', resolveStore, requireStoreCapability('mana
  * mapping changed and the user wants P&L numbers to update immediately
  * instead of waiting for the daily 00:15 cron.
  */
-router.post('/recompute-store-spend', resolveStore, requireStoreCapability('sync'), async (req, res) => {
+router.post('/recompute-store-spend', ...fbManage, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, since, until } = req.body || {};
   if (!storeId || !since || !until) {
@@ -1284,7 +1297,7 @@ router.post('/recompute-store-spend', resolveStore, requireStoreCapability('sync
 });
 
 /** Quick: today's spend for a single store from mapping (live FB call). */
-router.get('/store-spend-today', resolveStore, async (req, res) => {
+router.get('/store-spend-today', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const storeId = String(req.query.storeId || '');
   if (!storeId) return res.status(400).json({ error: 'storeId required' });
@@ -1306,7 +1319,7 @@ router.get('/store-spend-today', resolveStore, async (req, res) => {
  * Burns N days × M accounts insights reads, sequential — sized for "fix it
  * once" not "background loop".
  */
-router.post('/backfill-store-spend', resolveStore, requireStoreCapability('sync'), async (req, res) => {
+router.post('/backfill-store-spend', ...fbManage, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const { storeId, daysBack } = req.body || {};
   if (!storeId) return res.status(400).json({ error: 'storeId required' });
@@ -1330,7 +1343,7 @@ router.post('/backfill-store-spend', resolveStore, requireStoreCapability('sync'
  * across all campaigns mapped to that store. Snapshot for past dates,
  * live for today.
  */
-router.get('/store-ad-spend', resolveStore, async (req, res) => {
+router.get('/store-ad-spend', ...fbView, async (req, res) => {
   if (!req.resolved?.userId) return res.status(401).json({ error: 'unauthenticated' });
   const storeId = String(req.query.storeId || '');
   const since = new Date(String(req.query.since || ''));

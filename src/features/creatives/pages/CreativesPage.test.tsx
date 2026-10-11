@@ -152,12 +152,28 @@ describe.skipIf(!hasQuickLaunch)('CreativesPage', () => {
     expect(within(screen.getByRole('checkbox', { name: creatives[1].name })).getByText('3')).toBeInTheDocument();
   });
 
-  it('read-only users cannot upload or select', () => {
-    auth.canInStore = (c: string) => c !== 'manage';
+  it('"See all creatives" alone: browse only — no upload, no selecting', () => {
+    auth.canInStore = (c: string) => c === 'creatives.view';
     renderPage();
     expect(screen.getByRole('button', { name: /Upload creatives/ })).toBeDisabled();
     expect(screen.queryByRole('checkbox', { name: creatives[0].name })).toBeNull();
     expect(screen.getByRole('button', { name: creatives[0].name })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Posts/ })).toBeInTheDocument();
+  });
+
+  it('an uploader (creative role) uploads, cannot launch, and has no Posts tab', () => {
+    auth.canInStore = (c: string) => c === 'creatives.upload';
+    renderPage('/creatives?tab=posts');
+    expect(screen.getByRole('button', { name: /Upload creatives/ })).toBeEnabled();
+    expect(screen.queryByRole('tab', { name: /Posts/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: creatives[0].name })).toBeNull();
+    expect(screen.getByText(/You see the creatives you uploaded/)).toBeInTheDocument();
+  });
+
+  it('no creatives permission at all: no library', () => {
+    auth.canInStore = (c: string) => c === 'read' || c === 'manage';
+    renderPage();
+    expect(screen.getByText(/does not include the creative library/)).toBeInTheDocument();
   });
 
   it('upload dialog shows the generated name live', () => {

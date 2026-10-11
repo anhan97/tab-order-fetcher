@@ -5,8 +5,8 @@ import jwt from 'jsonwebtoken';
 import { decryptToken, encryptToken } from '../lib/token-crypto';
 import { loadRole } from './require-role';
 import {
-  resolveStoreAccess, listAccessibleStores, can,
-  type StoreAccessLevel, type StoreCapability
+  resolveStoreAccess, listAccessibleStores, capabilitiesFor, ALL_STORE_CAPABILITIES,
+  type StoreAccessLevel, type StoreCapability, type StorePermission
 } from '../lib/store-access';
 
 const prisma = new PrismaClient();
@@ -27,13 +27,28 @@ declare global {
         actorId: string;
         storeId: string;
         storeDomain: string;
-        /** Caller's access level in THIS store: owner | manager | cs | finance | viewer. */
+        /** Caller's access level in THIS store: owner | manager | cs | finance | viewer | creative. */
         level?: StoreAccessLevel;
         /** Store's owner. Same as userId; kept for readability at call sites. */
         ownerId?: string;
+        /**
+         * What the caller may do here: the role's capabilities plus the
+         * member's extra permissions — or everything, for an owner or a
+         * system admin. requireStoreCapability checks this list.
+         */
+        capabilities?: StoreCapability[];
       };
     }
   }
+}
+
+const EVERYTHING = (): StoreCapability[] => [...ALL_STORE_CAPABILITIES];
+
+/** A system admin can do everything in any store they can open; others get their grant. */
+async function capabilitiesOf(actorId: string, level: StoreAccessLevel, permissions: StorePermission[]): Promise<StoreCapability[]> {
+  if (level === 'owner') return EVERYTHING();
+  if ((await loadRole(actorId)) === 'admin') return EVERYTHING();
+  return capabilitiesFor(level, permissions);
 }
 
 function normalizeDomain(d: string): string {
@@ -69,7 +84,7 @@ function userIdFromAuthHeader(req: Request): string | null {
  *      with no JWT → lazy-create a synthetic user. Kept for back-compat
  *      with the few endpoints / scripts that haven't migrated yet.
  */
-export async function resolveStore(req: Request, res: Response, next: NextFunction) {
+export async function resolveStoreAny(req: Request, res: Response, next: NextFunction) {
   try {
     const rawDomain = (req.headers['x-shopify-store-domain'] || req.headers['x-shopify-store-url']) as string | undefined;
 
@@ -92,7 +107,8 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
           storeId: explicitStore,
           storeDomain: store?.storeDomain || (rawDomain ? normalizeDomain(rawDomain) : ''),
           level: 'owner',
-          ownerId: store?.userId || explicitUser
+          ownerId: store?.userId || explicitUser,
+          capabilities: EVERYTHING()
         };
         return next();
       }
@@ -114,7 +130,7 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       if (!access) {
         const [first] = await listAccessibleStores(authedUserId);
         if (first) {
-          access = { storeId: first.id, storeDomain: first.storeDomain, ownerId: first.ownerId, level: first.access };
+          access = { storeId: first.id, storeDomain: first.storeDomain, ownerId: first.ownerId, level: first.access, permissions: first.permissions };
         }
       }
       if (!access) {
@@ -130,7 +146,8 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
         storeId: access.storeId,
         storeDomain: access.storeDomain,
         level: access.level,
-        ownerId: access.ownerId
+        ownerId: access.ownerId,
+        capabilities: await capabilitiesOf(authedUserId, access.level, access.permissions)
       };
       return next();
     }
@@ -160,7 +177,7 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       decryptToken(s.accessToken) === accessToken && !s.user.email.endsWith('@autocreated.local')
     );
     if (realStore) {
-      req.resolved = { userId: realStore.userId, actorId: realStore.userId, storeId: realStore.id, storeDomain, level: 'owner', ownerId: realStore.userId };
+      req.resolved = { userId: realStore.userId, actorId: realStore.userId, storeId: realStore.id, storeDomain, level: 'owner', ownerId: realStore.userId, capabilities: EVERYTHING() };
       return next();
     }
 
@@ -187,12 +204,28 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
       });
     }
 
-    req.resolved = { userId: user.id, actorId: user.id, storeId: store.id, storeDomain, level: 'owner', ownerId: user.id };
+    req.resolved = { userId: user.id, actorId: user.id, storeId: store.id, storeDomain, level: 'owner', ownerId: user.id, capabilities: EVERYTHING() };
     next();
   } catch (e: any) {
     console.error('resolveStore error:', e);
     res.status(500).json({ error: 'Failed to resolve store', details: e?.message });
   }
+}
+
+/**
+ * resolveStoreAny + the store's `read` capability — the default for every
+ * store-scoped route. Reading orders, P&L and costs used to be implied by
+ * merely being a member; a 'creative' member has no `read`, so it is checked
+ * here once instead of on hundreds of GET handlers.
+ *
+ * Routes a member without `read` must still reach (creatives, the launcher,
+ * the Facebook page) mount resolveStoreAny + requireStoreCapability instead.
+ */
+export function resolveStore(req: Request, res: Response, next: NextFunction): void {
+  void resolveStoreAny(req, res, (err?: unknown) => {
+    if (err) return next(err);
+    requireStoreCapability('read')(req, res, next);
+  });
 }
 
 
@@ -204,26 +237,34 @@ export async function resolveStore(req: Request, res: Response, next: NextFuncti
  * 403 names the capability so the UI can say "you have read-only access to
  * this store" instead of a bare Forbidden.
  */
-export function requireStoreCapability(capability: StoreCapability) {
+export function requireStoreCapability(capability: StoreCapability | readonly StoreCapability[]) {
+  // A list means "any one of these" (e.g. a creative library an uploader and a
+  // viewer both open, each seeing what their grant allows).
+  const anyOf: readonly StoreCapability[] = typeof capability === 'string' ? [capability] : capability;
   return (req: Request, res: Response, next: NextFunction): void => {
     const resolved = req.resolved;
     if (!resolved) {
       res.status(500).json({ error: 'requireStoreCapability used without resolveStore' });
       return;
     }
-    // Legacy header-auth paths set level 'owner'; a missing level would mean
-    // resolveStore was bypassed, so fail closed rather than assuming owner.
-    if (!can(resolved.level, capability)) {
+    // Every resolveStore path sets capabilities; a missing list (or level)
+    // means it was bypassed, so fail closed rather than assuming owner.
+    if (!anyOf.some(c => resolved.capabilities?.includes(c))) {
       res.status(403).json({
-        error: `Your access to this store does not allow "${capability}"`,
+        error: `Your access to this store does not allow "${anyOf.join('" or "')}"`,
         code: 'store_capability_denied',
-        requires: capability,
+        requires: anyOf.length === 1 ? anyOf[0] : anyOf,
         access: resolved.level ?? null
       });
       return;
     }
     next();
   };
+}
+
+/** Does the resolved caller hold this capability? For checks inside a handler. */
+export function hasStoreCapability(req: Request, capability: StoreCapability): boolean {
+  return !!req.resolved?.capabilities?.includes(capability);
 }
 
 /** Only the store's owner (never a granted member) may do this. */

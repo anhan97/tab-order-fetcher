@@ -13,8 +13,12 @@ export interface AuthUser {
 }
 
 /** Mirrors lib/store-access.ts on the backend — keep the two in step. */
-export type StoreAccessLevel = 'owner' | 'manager' | 'cs' | 'finance' | 'viewer';
-export type StoreCapability = 'read' | 'sync' | 'fulfill' | 'costs' | 'manage';
+export type StoreAccessLevel = 'owner' | 'manager' | 'cs' | 'finance' | 'viewer' | 'creative';
+/** Ads-side permissions an admin grants per member, on top of the role. */
+export type StorePermission =
+  | 'creatives.upload' | 'creatives.view' | 'creatives.manage'
+  | 'ads.launch' | 'facebook.view' | 'facebook.manage';
+export type StoreCapability = 'read' | 'sync' | 'fulfill' | 'costs' | 'manage' | StorePermission;
 
 export interface UserStore {
   id: string;
@@ -31,6 +35,8 @@ export interface UserStore {
   defaultSupplier: string | null;
   access?: StoreAccessLevel;
   isOwner?: boolean;
+  /** Extra ads-side permissions granted to this member (already folded into capabilities). */
+  permissions?: StorePermission[];
   capabilities?: StoreCapability[];
 }
 

@@ -61,8 +61,8 @@ export function AdsLauncherPage() {
     );
   }
   if (!activeStore) return <Notice title="Pick a store first">The launcher works on the active store: choose one in the sidebar.</Notice>;
-  if (!canInStore('manage')) {
-    return <Notice title="You cannot launch ads in this store">Launching needs manage access to the active store. Ask its owner, or switch store in the sidebar.</Notice>;
+  if (!canInStore('ads.launch')) {
+    return <Notice title="You cannot launch ads in this store">Launching needs the "Launch ads" permission in the active store. Ask an admin, or switch store in the sidebar.</Notice>;
   }
   // A new store (or user) starts a fresh wizard: pools and options are store-scoped.
   return <AdsLauncherWizard key={`${user.id}:${activeStore.storeDomain}`} userId={user.id} />;

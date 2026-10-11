@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { Search, RefreshCw, Plus, Trash2, CheckCircle2, Loader2, Building2, FileText, Wallet, Instagram, Globe, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CampaignMappingDialog } from './CampaignMappingDialog';
@@ -48,6 +49,11 @@ type SubTab = 'ad-accounts' | 'pages' | 'businesses';
 
 export const FacebookAssetManager = () => {
   const { shopifyConfig } = useAppContext();
+  const { user, activeStore, canInStore } = useAuth();
+  // Adding / removing ad accounts is the owner's (server: requireStoreOwner);
+  // mapping campaigns needs facebook.manage. Others only look.
+  const canEnroll = user?.role === 'admin' || !activeStore?.access || activeStore.access === 'owner';
+  const canMap = canInStore('facebook.manage');
   const { toast } = useToast();
   const [data, setData] = useState<AssetSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -299,27 +305,31 @@ export const FacebookAssetManager = () => {
                               <TableCell className="text-right">
                                 {a.enrolled ? (
                                   <div className="inline-flex items-center gap-1">
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => setMapTarget({ accountId: a.accountId, name: a.name })}
-                                      className="text-blue-700 hover:text-blue-800 border-blue-200 hover:border-blue-300 hover:bg-blue-50"
-                                    >
-                                      <Link2 className="h-3.5 w-3.5 mr-1" />
-                                      Map
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => unenroll(a)}
-                                      disabled={busyId === a.accountId}
-                                      className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5 mr-1" />
-                                      Remove
-                                    </Button>
+                                    {canMap && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => setMapTarget({ accountId: a.accountId, name: a.name })}
+                                        className="text-blue-700 hover:text-blue-800 border-blue-200 hover:border-blue-300 hover:bg-blue-50"
+                                      >
+                                        <Link2 className="h-3.5 w-3.5 mr-1" />
+                                        Map
+                                      </Button>
+                                    )}
+                                    {canEnroll && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => unenroll(a)}
+                                        disabled={busyId === a.accountId}
+                                        className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5 mr-1" />
+                                        Remove
+                                      </Button>
+                                    )}
                                   </div>
-                                ) : (
+                                ) : canEnroll && (
                                   <Button
                                     size="sm"
                                     onClick={() => enroll(a)}

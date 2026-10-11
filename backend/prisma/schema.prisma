@@ -225,18 +225,25 @@ model ShopifyStore {
 //   cs      — read everything, write fulfillment (status, tracking, export)
 //   finance — read everything, write costs (COGS, pricebooks, operating costs)
 //   viewer  — read only
+//   creative — creatives.upload only: no orders, no P&L
+//
+// permissions: ads-side features granted one by one on top of the role
+// (creatives.upload | creatives.view | creatives.manage | ads.launch |
+// facebook.view | facebook.manage). No role includes them, so Creatives,
+// Ads Launcher and Facebook stay hidden until an admin ticks them.
 //
 // Deliberately NOT granted: the store's Shopify access token, adding or
 // removing stores, and changing who else is a member. Those stay with the
 // owner and admins, because the raw token bypasses every check in this table.
 model StoreMember {
-  id        String   @id @default(uuid())
-  userId    String
-  storeId   String
-  role      String   @default("viewer")
-  grantedBy String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid())
+  userId      String
+  storeId     String
+  role        String   @default("viewer")
+  permissions String[] @default([])
+  grantedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   user    User         @relation("StoreMemberUser", fields: [userId], references: [id], onDelete: Cascade)
   store   ShopifyStore @relation(fields: [storeId], references: [id], onDelete: Cascade)

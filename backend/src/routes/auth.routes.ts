@@ -27,7 +27,8 @@ import {
 } from '../middleware/validation.middleware';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 import { encryptToken, decryptToken } from '../lib/token-crypto';
-import { listAccessibleStores, capabilitiesFor } from '../lib/store-access';
+import { listAccessibleStores, capabilitiesFor, ALL_STORE_CAPABILITIES } from '../lib/store-access';
+import { loadRole } from '../middleware/require-role';
 
 const router = Router();
 const authController = new AuthController();
@@ -75,6 +76,9 @@ router.get('/stores', requireAuth, requireActive, async (req: Request, res: Resp
     // would make the whole grant model decorative. Members don't need it:
     // /api/shopify/* resolves the owner's token server-side.
     const rows = await listAccessibleStores(req.userId!);
+    // Same rule as resolveStore: a system admin may do everything in any
+    // store they can open, whatever their membership says.
+    const isAdmin = (await loadRole(req.userId!)) === 'admin';
     res.json({
       stores: rows.map(s => ({
         id: s.id,
@@ -87,7 +91,8 @@ router.get('/stores', requireAuth, requireActive, async (req: Request, res: Resp
         accessToken: s.access === 'owner' ? decryptToken(s.accessToken) : '',
         access: s.access,
         isOwner: s.access === 'owner',
-        capabilities: capabilitiesFor(s.access)
+        permissions: s.permissions,
+        capabilities: isAdmin ? [...ALL_STORE_CAPABILITIES] : capabilitiesFor(s.access, s.permissions)
       }))
     });
   } catch (e: any) {

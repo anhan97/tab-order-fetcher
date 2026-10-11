@@ -6,7 +6,8 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { ZodError } from 'zod';
 import { requireActive, requireAuth } from '../middleware/require-auth';
 import { loadRole } from '../middleware/require-role';
-import { requireStoreCapability, resolveStore } from '../middleware/resolve-store';
+import { requireStoreCapability, resolveStoreAny } from '../middleware/resolve-store';
+import type { StoreCapability } from '../lib/store-access';
 import type { StoreScope } from './creatives.service';
 import type { Caller } from './token-owner';
 
@@ -24,11 +25,13 @@ export function zodFail(res: Response, error: ZodError): void {
 
 /**
  * Store-scoped auth chain: valid JWT, approved account, a store the caller
- * can open, and the capability the route needs. resolveStore answers with the
- * legacy `{ error }` shape; that is fine for these rare paths.
+ * can open, and the capability the route needs — any one of them when several
+ * are given. Not the store's `read`: a 'creative' member reaches the creative
+ * library without seeing orders or P&L. resolveStore answers with the legacy
+ * `{ error }` shape; that is fine for these rare paths.
  */
-export function storeChain(capability: 'read' | 'manage'): RequestHandler[] {
-  return [requireAuth, requireActive, resolveStore, requireStoreCapability(capability)];
+export function storeChain(...anyOf: [StoreCapability, ...StoreCapability[]]): RequestHandler[] {
+  return [requireAuth, requireActive, resolveStoreAny, requireStoreCapability(anyOf)];
 }
 
 export function scopeOf(req: Request): StoreScope {

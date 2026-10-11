@@ -56,9 +56,10 @@ interface PostLibraryProps {
 export function PostLibrary({ productId, creativeId }: PostLibraryProps) {
   const { toast } = useToast();
   const { canInStore } = useAuth();
-  const canManage = canInStore('manage');
+  // Refreshing post ids asks Meta, and launching is launching: both are ads.launch.
+  const canLaunch = canInStore('ads.launch');
   const storeKey = useStoreKey();
-  const accounts = useLauncherAccounts();
+  const accounts = useLauncherAccounts(canLaunch);
   const refresh = useRefreshPosts();
 
   const [qDraft, setQDraft] = useState('');
@@ -197,7 +198,7 @@ export function PostLibrary({ productId, creativeId }: PostLibraryProps) {
           size="sm"
           className="h-9 lg:ml-auto"
           onClick={() => void runRefresh()}
-          disabled={!canManage || refresh.isPending || missing === 0}
+          disabled={!canLaunch || refresh.isPending || missing === 0}
           title={missing === 0 ? 'Every ad in this view already has a post ID (or was checked in the last 6 hours)' : 'Ask Meta for the post IDs of ads that do not have one yet'}
         >
           {refresh.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1.5 h-4 w-4" />}
@@ -389,7 +390,7 @@ export function PostLibrary({ productId, creativeId }: PostLibraryProps) {
         <Button variant="outline" size="sm" onClick={() => void copyIds()}>
           <ClipboardCopy className="mr-1.5 h-4 w-4" /> Copy post IDs
         </Button>
-        <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={() => setLaunchOpen(true)} disabled={mixed || !canManage}>
+        <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={() => setLaunchOpen(true)} disabled={mixed || !canLaunch}>
           <Rocket className="mr-1.5 h-4 w-4" /> Launch ads
         </Button>
       </SelectionBar>

@@ -14,6 +14,7 @@ import {
     DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { canOpenPage, type AppRole } from '@/lib/permissions';
 import {
     ShoppingBag,
     Settings,
@@ -60,7 +61,7 @@ export const Layout = () => {
         setTimezone
     } = useAppContext();
 
-    const { user, stores, activeStore, setActiveStoreByDomain, logout } = useAuth();
+    const { user, stores, activeStore, setActiveStoreByDomain, logout, canInStore } = useAuth();
 
     const location = useLocation();
     const navigate = useNavigate();
@@ -76,30 +77,26 @@ export const Layout = () => {
         : '';
     const userInitials = (user?.firstName?.[0] || user?.email?.[0] || '?').toUpperCase();
 
-    // Role-aware nav. Each item tags which roles can SEE it; the menu is
-    // filtered at render time. Server endpoints are still the source of
-    // truth — hiding a link only cleans up the UI, it doesn't grant access.
-    //
-    //   admin    — all
-    //   user     — merchant (their stores + ads)
-    //   cs       — fulfillment only (orders + tracking)
-    //   finance  — money only (P&L / COGS, no ads management)
-    const role = (user?.role || 'user') as 'admin' | 'user' | 'cs' | 'finance';
-    const ALL_ROLES = ['admin', 'user', 'cs', 'finance'] as const;
-    type NavRole = typeof ALL_ROLES[number];
-    const navCatalog: Array<{ path: string; label: string; icon: typeof LayoutDashboard; roles: NavRole[] }> = [
-        { path: '/orders',      label: 'Dashboard',   icon: LayoutDashboard, roles: ['admin', 'user', 'cs', 'finance'] },
-        { path: '/fulfillment', label: 'Fulfillment', icon: PackageOpen,     roles: ['admin', 'user', 'cs'] },
-        { path: '/tracking',    label: 'Tracking',    icon: Upload,          roles: ['admin', 'user', 'cs'] },
-        { path: '/connect',     label: 'Stores',      icon: StoreIcon,       roles: ['admin', 'user', 'cs', 'finance'] },
-        { path: '/cogs',     label: 'COGS',      icon: DollarSign,      roles: ['admin', 'user', 'finance'] },
-        { path: '/facebook', label: 'Facebook',  icon: BarChart3,       roles: ['admin', 'user'] },
-        { path: '/creatives', label: 'Creatives', icon: Images,         roles: ['admin', 'user'] },
-        { path: '/ads-launcher', label: 'Ads Launcher', icon: Rocket,   roles: ['admin', 'user'] },
-        { path: '/content',  label: 'Content',   icon: PieChartIcon,    roles: ['admin', 'user'] },
-        { path: '/admin',    label: 'Admin',     icon: ShieldCheck,     roles: ['admin'] }
+    // Role- and store-aware nav (rules in lib/permissions.ts). An item shows
+    // when the system role may see the page AND the active store grants what
+    // it needs — so a store manager sees no Creatives / Ads Launcher /
+    // Facebook until an admin grants them, and a 'creative' member sees only
+    // Creatives. Server endpoints are still the source of truth — hiding a
+    // link only cleans up the UI, it doesn't grant access.
+    const role = (user?.role || 'user') as AppRole;
+    const navCatalog: Array<{ path: string; label: string; icon: typeof LayoutDashboard }> = [
+        { path: '/orders',       label: 'Dashboard',    icon: LayoutDashboard },
+        { path: '/fulfillment',  label: 'Fulfillment',  icon: PackageOpen },
+        { path: '/tracking',     label: 'Tracking',     icon: Upload },
+        { path: '/connect',      label: 'Stores',       icon: StoreIcon },
+        { path: '/cogs',         label: 'COGS',         icon: DollarSign },
+        { path: '/facebook',     label: 'Facebook',     icon: BarChart3 },
+        { path: '/creatives',    label: 'Creatives',    icon: Images },
+        { path: '/ads-launcher', label: 'Ads Launcher', icon: Rocket },
+        { path: '/content',      label: 'Content',      icon: PieChartIcon },
+        { path: '/admin',        label: 'Admin',        icon: ShieldCheck }
     ];
-    const navItems = navCatalog.filter(i => i.roles.includes(role));
+    const navItems = navCatalog.filter(i => canOpenPage(i.path, role, canInStore));
 
     const activeNavItem = navItems.find(i => i.path === location.pathname);
     const subtitle = activeNavItem ? PAGE_SUBTITLES[activeNavItem.label] : '';
@@ -223,12 +220,15 @@ export const Layout = () => {
                         accent="teal"
                         onDisconnect={handleDisconnectShopify}
                     />
-                    <ConnectionPill
-                        label="Facebook"
-                        connected={isFacebookConnected}
-                        accent="blue"
-                        onDisconnect={handleDisconnectFacebook}
-                    />
+                    {/* Only for whoever may see the Facebook page in this store. */}
+                    {(role === 'admin' || !activeStore || canInStore('facebook.view')) && (
+                        <ConnectionPill
+                            label="Facebook"
+                            connected={isFacebookConnected}
+                            accent="blue"
+                            onDisconnect={handleDisconnectFacebook}
+                        />
+                    )}
                 </div>
             </aside>
 

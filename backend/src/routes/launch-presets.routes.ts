@@ -14,7 +14,7 @@ import { fail, handle, ok, storeChain, zodFail } from '../ads-launcher/http';
 import { createPreset, deletePreset, listPresets, restoreStarters, updatePreset } from '../ads-launcher/presets.service';
 
 const router = express.Router();
-const chain = storeChain('manage');
+const chain = storeChain('ads.launch');
 const actor = (req: express.Request) => req.resolved!.actorId;
 
 router.get('/', ...chain, handle(async (req, res) => {

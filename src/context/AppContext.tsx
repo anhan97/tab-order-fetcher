@@ -66,7 +66,7 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     // shopifyConfig from `shopify_store_url` / `shopify_access_token`, which
     // logout never cleared, so the next account on that browser opened the
     // dashboard on the previous merchant's store.
-    const { user, activeStore } = useAuth();
+    const { user, activeStore, canInStore } = useAuth();
     const [isShopifyConnected, setIsShopifyConnected] = useState(false);
     const [shopifyConfig, setShopifyConfig] = useState<{ storeUrl: string; accessToken: string } | null>(null);
 
@@ -239,11 +239,23 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     // it when activeStore resolves. Previously this probe only ran once at
     // mount and only for legacy-localStorage sessions, so JWT users lost
     // "connected" on every reload — the "connect again" loop.
+    //
+    // A member without "See Facebook" in the active store would only collect
+    // a 403: skip the probe, and drop what a previous store loaded. A signed-in
+    // session waits for its active store (and its grants) before asking;
+    // legacy header sessions have none and probe as before.
+    const canSeeFacebook = activeStore ? canInStore('facebook.view') : !auth.getToken();
     useEffect(() => {
         if (!shopifyConfig && !auth.getToken()) return;
+        if (!canSeeFacebook) {
+            setFacebookAccounts([]);
+            setSelectedAccount(null);
+            setIsFacebookConnected(false);
+            return;
+        }
         void refreshFacebookConnection();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [shopifyConfig]);
+    }, [shopifyConfig, canSeeFacebook]);
 
     // Load Facebook Data for Selected Account
     useEffect(() => {
@@ -266,9 +278,15 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
         }
     }, [selectedAccount, dateRange]);
 
-    // Load Orders
+    // Load Orders — not for a member without `read` (a 'creative'): the
+    // server answers 403 and there is nothing of theirs to show anyway.
+    const canReadOrders = !activeStore || canInStore('read');
     useEffect(() => {
         const loadOrders = async () => {
+            if (!canReadOrders) {
+                setOrders([]);
+                return;
+            }
             try {
                 // No env fallback: VITE_SHOPIFY_SHOP_DOMAIN / _ACCESS_TOKEN
                 // baked a single "default store" into the bundle that every
@@ -295,7 +313,7 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
             }
         };
         loadOrders();
-    }, [dateRange, shopifyConfig]);
+    }, [dateRange, shopifyConfig, canReadOrders]);
 
     // Save Timezone — coerce just in case some legacy code calls setTimezone
     // with an invalid value, so the persisted state stays self-healing.

@@ -13,7 +13,9 @@ interface CreativeCardProps {
   order: number;
   /** Clicking toggles selection (else it opens the details). */
   selectable: boolean;
-  canManage: boolean;
+  /** Edit copy, archive, restore. */
+  canEdit: boolean;
+  canDelete: boolean;
   onToggle: () => void;
   onDetails: () => void;
   onEdit: () => void;
@@ -23,7 +25,7 @@ interface CreativeCardProps {
 }
 
 export function CreativeCard({
-  creative: c, order, selectable, canManage, onToggle, onDetails, onEdit, onArchive, onRestore, onDelete
+  creative: c, order, selectable, canEdit, canDelete, onToggle, onDetails, onEdit, onArchive, onRestore, onDelete
 }: CreativeCardProps) {
   const selected = order > 0;
   const activate = selectable ? onToggle : onDetails;
@@ -82,20 +84,20 @@ export function CreativeCard({
             <DropdownMenuItem onSelect={onDetails}>
               <Eye className="mr-2 h-4 w-4" /> View details
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={onEdit} disabled={!canManage}>
+            <DropdownMenuItem onSelect={onEdit} disabled={!canEdit}>
               <Pencil className="mr-2 h-4 w-4" /> Edit
             </DropdownMenuItem>
             {c.status === 'active' ? (
-              <DropdownMenuItem onSelect={onArchive} disabled={!canManage}>
+              <DropdownMenuItem onSelect={onArchive} disabled={!canEdit}>
                 <Archive className="mr-2 h-4 w-4" /> Archive
               </DropdownMenuItem>
             ) : (
-              <DropdownMenuItem onSelect={onRestore} disabled={!canManage}>
+              <DropdownMenuItem onSelect={onRestore} disabled={!canEdit}>
                 <ArchiveRestore className="mr-2 h-4 w-4" /> Restore
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={onDelete} disabled={!canManage} className="text-rose-600 focus:text-rose-700">
+            <DropdownMenuItem onSelect={onDelete} disabled={!canDelete} className="text-rose-600 focus:text-rose-700">
               <Trash2 className="mr-2 h-4 w-4" /> Delete
             </DropdownMenuItem>
           </DropdownMenuContent>

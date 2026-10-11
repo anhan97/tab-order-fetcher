@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/context/AuthContext';
 import { useProducts } from '@/features/ads-launcher/hooks/queries';
 import { useUploadQueue } from '../hooks/use-upload-queue';
+import { useCreativePerms } from '../hooks/use-creative-perms';
 import { CreativeLibrary } from '../components/CreativeLibrary';
 import { PostLibrary } from '../components/PostLibrary';
 import { UploadCreativesDialog } from '../components/UploadCreativesDialog';
@@ -19,9 +20,11 @@ import { UploadCreativesDialog } from '../components/UploadCreativesDialog';
 type Tab = 'creatives' | 'posts';
 
 export function CreativesPage() {
-  const { activeStore, canInStore } = useAuth();
+  const { activeStore } = useAuth();
+  const perms = useCreativePerms();
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab: Tab = searchParams.get('tab') === 'posts' ? 'posts' : 'creatives';
+  // Posts need the whole library (creatives.view); an uploader only has their own creatives.
+  const tab: Tab = searchParams.get('tab') === 'posts' && perms.viewAll ? 'posts' : 'creatives';
   const setTab = (t: Tab) =>
     setSearchParams(prev => {
       const next = new URLSearchParams(prev);
@@ -53,18 +56,17 @@ export function CreativesPage() {
     );
   }
 
-  if (!canInStore('read')) {
+  if (!perms.viewAll && !perms.upload) {
     return (
       <div className="mx-auto mt-8 max-w-2xl">
         <Card className="p-10 text-center">
           <h2 className="mb-2 text-xl font-bold text-slate-900">No access</h2>
-          <p className="text-slate-600">Your role in this store does not include the creative library. Ask the store owner for access.</p>
+          <p className="text-slate-600">Your access to this store does not include the creative library. Ask an admin to grant it.</p>
         </Card>
       </div>
     );
   }
 
-  const canManage = canInStore('manage');
   const uploading = queue.running;
 
   return (
@@ -84,8 +86,8 @@ export function CreativesPage() {
           size="sm"
           className="bg-teal-600 hover:bg-teal-700"
           onClick={() => setUploadOpen(true)}
-          disabled={!canManage}
-          title={canManage ? undefined : 'Needs manage access to this store'}
+          disabled={!perms.upload}
+          title={perms.upload ? undefined : 'Needs the "Upload creatives" permission'}
         >
           {uploading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-1.5 h-4 w-4" />}
           {uploading ? `Uploading ${queue.counts.done}/${queue.counts.total}…` : 'Upload creatives'}
@@ -97,9 +99,11 @@ export function CreativesPage() {
           <TabsTrigger value="creatives" className="gap-1.5">
             <Images className="h-4 w-4" /> Creatives
           </TabsTrigger>
-          <TabsTrigger value="posts" className="gap-1.5">
-            <Megaphone className="h-4 w-4" /> Posts
-          </TabsTrigger>
+          {perms.viewAll && (
+            <TabsTrigger value="posts" className="gap-1.5">
+              <Megaphone className="h-4 w-4" /> Posts
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {visited.has('creatives') && (
@@ -107,12 +111,12 @@ export function CreativesPage() {
             <CreativeLibrary
               productId={productId}
               onProductChange={setProductId}
-              canManage={canManage}
+              perms={perms}
               onUpload={() => setUploadOpen(true)}
             />
           </TabsContent>
         )}
-        {visited.has('posts') && (
+        {visited.has('posts') && perms.viewAll && (
           <TabsContent value="posts" forceMount className="mt-3 data-[state=inactive]:hidden">
             <PostLibrary />
           </TabsContent>

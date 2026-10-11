@@ -23,6 +23,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useCreativeMutations, useCreatives, useProducts, useStoreKey } from '@/features/ads-launcher/hooks/queries';
 import { QuickLaunchDialog } from '@/features/ads-launcher/components/QuickLaunchDialog';
 import { useDebounced } from '../hooks/use-debounced';
+import type { CreativePerms } from '../hooks/use-creative-perms';
 import {
   addAllInOrder, distinctProducts, errorMessage, refreshSelection, selectionOrder, toggleInOrder
 } from '../lib/library';
@@ -38,11 +39,11 @@ const byId = (c: CreativeDto) => c.id;
 interface CreativeLibraryProps {
   productId: string | null;
   onProductChange: (productId: string | null) => void;
-  canManage: boolean;
+  perms: CreativePerms;
   onUpload: () => void;
 }
 
-export function CreativeLibrary({ productId, onProductChange, canManage, onUpload }: CreativeLibraryProps) {
+export function CreativeLibrary({ productId, onProductChange, perms, onUpload }: CreativeLibraryProps) {
   const navigate = useNavigate();
   const { toast } = useToast();
   const storeKey = useStoreKey();
@@ -84,7 +85,8 @@ export function CreativeLibrary({ productId, onProductChange, canManage, onUploa
   const selected = useMemo(() => refreshSelection(selectedRaw, items, byId), [selectedRaw, items]);
   useEffect(() => setSelected([]), [storeKey]);
 
-  const selectable = canManage && status === 'active';
+  // Selecting is for launching.
+  const selectable = perms.launch && status === 'active';
   const shownSelectable = selectable ? items.filter(c => c.status === 'active') : [];
   const allShownSelected = shownSelectable.length > 0 && shownSelectable.every(c => selected.some(s => s.id === c.id));
   const productIds = distinctProducts(selected.map(c => c.productId));
@@ -238,14 +240,14 @@ export function CreativeLibrary({ productId, onProductChange, canManage, onUploa
               </p>
               <div className="flex flex-wrap justify-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setLaunched('all')}>Show all creatives</Button>
-                {canManage && <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={onUpload}>Upload creatives</Button>}
+                {perms.upload && <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={onUpload}>Upload creatives</Button>}
               </div>
             </>
           ) : (
             <>
               <div className="font-medium text-slate-900">{hasFilters ? 'No creatives for this product' : 'No creatives yet'}</div>
               <p className="text-sm text-slate-500">Upload images or videos, then launch them as Meta ads.</p>
-              {canManage && <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={onUpload}>Upload creatives</Button>}
+              {perms.upload && <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={onUpload}>Upload creatives</Button>}
             </>
           )}
         </Card>
@@ -257,7 +259,8 @@ export function CreativeLibrary({ productId, onProductChange, canManage, onUploa
               creative={c}
               order={selectionOrder(selected, c.id, byId)}
               selectable={selectable && c.status === 'active'}
-              canManage={canManage}
+              canEdit={perms.canChange(c)}
+              canDelete={perms.canDelete(c)}
               onToggle={() => setSelected(prev => toggleInOrder(prev, c, byId))}
               onDetails={() => setDetails(c)}
               onEdit={() => setEditing(c)}
@@ -290,9 +293,13 @@ export function CreativeLibrary({ productId, onProductChange, canManage, onUploa
         </div>
       )}
 
-      {!canManage && (
-        <p className="text-xs text-slate-500">You have view access to this store — uploading, editing and launching need manage access.</p>
-      )}
+      {!perms.viewAll ? (
+        <p className="text-xs text-slate-500">
+          You see the creatives you uploaded. You can edit and archive them, and delete them until they are used in ads.
+        </p>
+      ) : !perms.upload && !perms.launch ? (
+        <p className="text-xs text-slate-500">You can browse the library. Uploading and launching ads need more access — ask an admin.</p>
+      ) : null}
 
       {/* Bulk actions */}
       <SelectionBar
@@ -315,12 +322,12 @@ export function CreativeLibrary({ productId, onProductChange, canManage, onUploa
           </div>
         ) : null}
       >
-        <Button variant="outline" size="sm" onClick={customise} disabled={mixed || !canManage}>
+        <Button variant="outline" size="sm" onClick={customise} disabled={mixed || !perms.launch}>
           <SlidersHorizontal className="mr-1.5 h-4 w-4" />
           <span className="hidden sm:inline">Customise in Ads Launcher</span>
           <span className="sm:hidden">Customise</span>
         </Button>
-        <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={() => setLaunchOpen(true)} disabled={mixed || !canManage}>
+        <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={() => setLaunchOpen(true)} disabled={mixed || !perms.launch}>
           <Rocket className="mr-1.5 h-4 w-4" /> Launch ads
         </Button>
       </SelectionBar>
@@ -328,7 +335,8 @@ export function CreativeLibrary({ productId, onProductChange, canManage, onUploa
       <CreativeDetailsDialog
         creative={details}
         onOpenChange={o => !o && setDetails(null)}
-        canManage={canManage}
+        canEdit={perms.canChange}
+        showPosts={perms.viewAll}
         onEdit={c => {
           setDetails(null);
           setEditing(c);

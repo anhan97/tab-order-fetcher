@@ -135,13 +135,13 @@ export const AdluxApi = {
 
   /** Force a BM sync immediately (admin / manual onboarding). */
   async syncBm(): Promise<AdluxSyncReport> {
-    const res = await fetch('/api/facebook/sync-bm', { method: 'POST' });
+    const res = await fetch('/api/facebook/sync-bm', { method: 'POST', headers: storeHeaders(null) });
     return jsonOrThrow(res);
   },
 
   /** Diagnostics + scheduler status. */
   async syncStatus(): Promise<AdluxSyncStatus> {
-    const res = await fetch('/api/facebook/sync-status');
+    const res = await fetch('/api/facebook/sync-status', { headers: storeHeaders(null) });
     return jsonOrThrow(res);
   }
 };

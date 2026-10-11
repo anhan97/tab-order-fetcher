@@ -13,7 +13,9 @@ import { MediaThumb } from './MediaThumb';
 interface CreativeDetailsDialogProps {
   creative: CreativeDto | null;
   onOpenChange: (open: boolean) => void;
-  canManage: boolean;
+  canEdit: (c: CreativeDto) => boolean;
+  /** The posts list needs the whole library (creatives.view). */
+  showPosts: boolean;
   onEdit: (c: CreativeDto) => void;
 }
 
@@ -83,7 +85,7 @@ function CreativePosts({ creativeId }: { creativeId: string }) {
   );
 }
 
-export function CreativeDetailsDialog({ creative: target, onOpenChange, canManage, onEdit }: CreativeDetailsDialogProps) {
+export function CreativeDetailsDialog({ creative: target, onOpenChange, canEdit, showPosts, onEdit }: CreativeDetailsDialogProps) {
   // Keep the last creative while the dialog animates closed.
   const [c, setC] = useState<CreativeDto | null>(target);
   useEffect(() => {
@@ -146,14 +148,14 @@ export function CreativeDetailsDialog({ creative: target, onOpenChange, canManag
                   <CopyField label="Primary text" value={c.primaryText} />
                   <CopyField label="Headline" value={c.headline} />
                   <CopyField label="Description" value={c.description} />
-                  {canManage && (
+                  {canEdit(c) && (
                     <Button variant="outline" size="sm" onClick={() => onEdit(c)}>
                       <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit copy
                     </Button>
                   )}
                 </div>
 
-                <CreativePosts creativeId={c.id} />
+                {showPosts && <CreativePosts creativeId={c.id} />}
               </div>
             </div>
           </div>

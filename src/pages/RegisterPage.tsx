@@ -40,7 +40,7 @@ export const RegisterPage = () => {
         lastName: form.lastName || undefined
       });
       toast({ title: 'Account created', description: 'You\'re signed in.' });
-      navigate('/orders', { replace: true });
+      navigate('/', { replace: true });
     } catch (err: any) {
       toast({ title: 'Registration failed', description: err?.message || 'Try again', variant: 'destructive' });
     } finally {

@@ -41,8 +41,14 @@ export const FacebookPage = () => {
     facebookAccounts
   } = useAppContext();
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, activeStore, canInStore } = useAuth();
   const isAdmin = user?.role === 'admin';
+  // Connecting / disconnecting Facebook is the store owner's (the server
+  // enforces it); members granted "See Facebook" only look.
+  const isOwner = !activeStore || activeStore.access === undefined || activeStore.access === 'owner';
+  const canConnect = isOwner || isAdmin;
+  const canLaunch = canInStore('ads.launch');
+  const canMap = canInStore('facebook.manage');
   const [disconnecting, setDisconnecting] = useState(false);
 
   if (!isShopifyConnected) {
@@ -66,6 +72,17 @@ export const FacebookPage = () => {
   // ad accounts (or a transient account-list failure) got bounced back to
   // the connect screen — the "already connected but asked to connect
   // again" loop.
+  if (!isFacebookConnected && !canConnect) {
+    return (
+      <div className="max-w-2xl mx-auto mt-8">
+        <Card className="p-10 text-center">
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Facebook is not connected for this store</h2>
+          <p className="text-slate-600">Only the store owner can connect Facebook. Ask them to connect it, then come back.</p>
+        </Card>
+      </div>
+    );
+  }
+
   if (!isFacebookConnected) {
     return (
       <div className="max-w-2xl mx-auto mt-8 space-y-4">
@@ -122,22 +139,26 @@ export const FacebookPage = () => {
               {facebookAccounts.length} ad account{facebookAccounts.length === 1 ? '' : 's'} accessible · 60-day token (auto-refresh)
             </div>
           </div>
-          <Button asChild size="sm" className="bg-teal-600 hover:bg-teal-700 ml-auto">
-            <Link to={selectedAccount ? `/ads-launcher?account=${selectedAccount.id}` : '/ads-launcher'}>
-              <Rocket className="h-3.5 w-3.5 mr-1" />
-              Create ads
-            </Link>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDisconnect}
-            disabled={disconnecting}
-            className="text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50"
-          >
-            <LogOut className="h-3.5 w-3.5 mr-1" />
-            {disconnecting ? 'Signing out...' : 'Disconnect Facebook'}
-          </Button>
+          {canLaunch && (
+            <Button asChild size="sm" className="bg-teal-600 hover:bg-teal-700 ml-auto">
+              <Link to={selectedAccount ? `/ads-launcher?account=${selectedAccount.id}` : '/ads-launcher'}>
+                <Rocket className="h-3.5 w-3.5 mr-1" />
+                Create ads
+              </Link>
+            </Button>
+          )}
+          {canConnect && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+              className={`text-rose-600 hover:text-rose-700 border-rose-200 hover:border-rose-300 hover:bg-rose-50 ${canLaunch ? '' : 'ml-auto'}`}
+            >
+              <LogOut className="h-3.5 w-3.5 mr-1" />
+              {disconnecting ? 'Signing out...' : 'Disconnect Facebook'}
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -155,10 +176,12 @@ export const FacebookPage = () => {
             <Stethoscope className="h-4 w-4" />
             Diagnostics
           </TabsTrigger>
-          <TabsTrigger value="mapping" className="gap-2">
-            <Link2 className="h-4 w-4" />
-            Mapping
-          </TabsTrigger>
+          {canMap && (
+            <TabsTrigger value="mapping" className="gap-2">
+              <Link2 className="h-4 w-4" />
+              Mapping
+            </TabsTrigger>
+          )}
           {isAdmin && (
             <TabsTrigger value="app" className="gap-2">
               <Settings className="h-4 w-4" />
@@ -197,9 +220,11 @@ export const FacebookPage = () => {
           <FacebookDiagnostics />
         </TabsContent>
 
-        <TabsContent value="mapping" className="m-0">
-          <CampaignMappingPanel />
-        </TabsContent>
+        {canMap && (
+          <TabsContent value="mapping" className="m-0">
+            <CampaignMappingPanel />
+          </TabsContent>
+        )}
 
         {isAdmin && (
           <TabsContent value="app" className="m-0">

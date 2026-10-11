@@ -47,9 +47,10 @@ export function useStoreKey(): string {
 
 // ─── Launcher ───────────────────────────────────────────────────────────────
 
-export function useLauncherAccounts() {
+/** Off for callers without ads.launch: the endpoint would only answer 403. */
+export function useLauncherAccounts(enabled = true) {
   const store = useStoreKey();
-  return useQuery({ queryKey: launcherKeys.accounts(store), queryFn: () => launcherApi.accounts().then(r => r.items), staleTime: 60_000 });
+  return useQuery({ queryKey: launcherKeys.accounts(store), queryFn: () => launcherApi.accounts().then(r => r.items), staleTime: 60_000, enabled });
 }
 
 export function useLauncherOptions(adAccountId: string | null | undefined) {

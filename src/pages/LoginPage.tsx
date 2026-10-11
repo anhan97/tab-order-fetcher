@@ -26,7 +26,7 @@ export const LoginPage = () => {
   }
   if (user) {
     // Already logged in — go where they were trying to reach, or default home.
-    const target = (location.state as any)?.from?.pathname || '/orders';
+    const target = (location.state as any)?.from?.pathname || '/';
     return <Navigate to={target} replace />;
   }
 
@@ -36,7 +36,7 @@ export const LoginPage = () => {
     setSubmitting(true);
     try {
       await login(email, password);
-      const target = (location.state as any)?.from?.pathname || '/orders';
+      const target = (location.state as any)?.from?.pathname || '/';
       navigate(target, { replace: true });
     } catch (err: any) {
       toast({ title: 'Login failed', description: err?.message || 'Check email + password', variant: 'destructive' });

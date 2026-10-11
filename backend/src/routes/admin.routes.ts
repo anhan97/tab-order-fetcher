@@ -14,7 +14,9 @@ import { requireAuth } from '../middleware/require-auth';
 import { requireAdmin } from '../middleware/require-admin';
 import { encryptToken, decryptToken } from '../lib/token-crypto';
 import { backendBaseUrl } from './shopify-oauth.routes';
-import { GRANTABLE_STORE_ROLES, isGrantableStoreRole, capabilitiesFor } from '../lib/store-access';
+import {
+  GRANTABLE_STORE_ROLES, STORE_PERMISSIONS, isGrantableStoreRole, isStorePermission, normalizePermissions, capabilitiesFor
+} from '../lib/store-access';
 import { audit } from '../lib/audit';
 
 const router = Router();
@@ -414,11 +416,13 @@ router.get('/stores/:id/members', async (req: Request, res: Response) => {
         lastName: m.user.lastName,
         status: m.user.status,
         role: m.role,
-        capabilities: capabilitiesFor(m.role as any),
+        permissions: normalizePermissions(m.permissions),
+        capabilities: capabilitiesFor(m.role as any, m.permissions),
         grantedBy: m.grantedBy,
         createdAt: m.createdAt
       })),
-      grantableRoles: GRANTABLE_STORE_ROLES
+      grantableRoles: GRANTABLE_STORE_ROLES,
+      grantablePermissions: STORE_PERMISSIONS
     });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to list store members' });
@@ -426,17 +430,23 @@ router.get('/stores/:id/members', async (req: Request, res: Response) => {
 });
 
 /**
- * PUT /api/admin/stores/:id/members  body: { email | userId, role }
+ * PUT /api/admin/stores/:id/members  body: { email | userId, role, permissions? }
  *
  * Idempotent: re-granting the same person changes their role rather than
  * erroring, so the admin UI can use one button for add and for edit.
+ * `permissions` (ads-side features) replaces the member's list when given and
+ * is left alone when omitted, so changing only the role keeps them.
  */
 router.put('/stores/:id/members', async (req: Request, res: Response) => {
   try {
-    const { email, userId, role } = req.body ?? {};
+    const { email, userId, role, permissions } = req.body ?? {};
     if (!isGrantableStoreRole(role)) {
       return res.status(400).json({ error: `role must be one of: ${GRANTABLE_STORE_ROLES.join(', ')}` });
     }
+    if (permissions !== undefined && (!Array.isArray(permissions) || !permissions.every(isStorePermission))) {
+      return res.status(400).json({ error: `permissions must be a list of: ${STORE_PERMISSIONS.join(', ')}` });
+    }
+    const granted = permissions === undefined ? undefined : normalizePermissions(permissions);
     const store = await prisma.shopifyStore.findUnique({ where: { id: req.params.id } });
     if (!store) return res.status(404).json({ error: 'Store not found' });
 
@@ -455,8 +465,8 @@ router.put('/stores/:id/members', async (req: Request, res: Response) => {
 
     const member = await prisma.storeMember.upsert({
       where: { userId_storeId: { userId: target.id, storeId: store.id } },
-      create: { userId: target.id, storeId: store.id, role, grantedBy: req.userId ?? null },
-      update: { role, grantedBy: req.userId ?? null }
+      create: { userId: target.id, storeId: store.id, role, permissions: granted ?? [], grantedBy: req.userId ?? null },
+      update: { role, ...(granted ? { permissions: granted } : {}), grantedBy: req.userId ?? null }
     });
 
     await audit({
@@ -464,7 +474,7 @@ router.put('/stores/:id/members', async (req: Request, res: Response) => {
       actorUserId: req.userId,
       action: 'store_member.grant',
       target: store.id,
-      metadata: { storeDomain: store.storeDomain, role }
+      metadata: { storeDomain: store.storeDomain, role, permissions: member.permissions }
     });
 
     res.json({
@@ -472,7 +482,8 @@ router.put('/stores/:id/members', async (req: Request, res: Response) => {
         userId: member.userId,
         email: target.email,
         role: member.role,
-        capabilities: capabilitiesFor(member.role as any)
+        permissions: normalizePermissions(member.permissions),
+        capabilities: capabilitiesFor(member.role as any, member.permissions)
       }
     });
   } catch (e: any) {
@@ -519,7 +530,7 @@ router.get('/users/:id/stores', async (req: Request, res: Response) => {
       owned,
       granted: granted
         .filter(g => g.store?.isActive)
-        .map(g => ({ id: g.store.id, storeDomain: g.store.storeDomain, name: g.store.name, role: g.role }))
+        .map(g => ({ id: g.store.id, storeDomain: g.store.storeDomain, name: g.store.name, role: g.role, permissions: normalizePermissions(g.permissions) }))
     });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to list user stores' });
