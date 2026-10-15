@@ -62,6 +62,7 @@ export function initialWizardState(memory: SetupMemory = {}, extra: Partial<Wiza
       adAccountId: memory.adAccountId ?? '',
       pixelId: memory.pixelId ?? '',
       pageId: memory.pageId ?? '',
+      instagramUserId: memory.instagramUserId ?? '',
       storeId: memory.storeId ?? '',
       displayLink: memory.displayLink ?? '',
       urlTags: memory.urlTags ?? DEFAULT_URL_TAGS
@@ -103,8 +104,12 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
   switch (action.type) {
     case 'step':
       return { ...state, step: Math.max(0, Math.min(WIZARD_STEPS.length - 1, action.step)) };
-    case 'setup':
-      return { ...state, setup: { ...state.setup, ...action.patch } };
+    case 'setup': {
+      // Another page → its own linked Instagram account, unless one is picked too.
+      const pageChanged = action.patch.pageId !== undefined && action.patch.pageId !== state.setup.pageId;
+      const reset = pageChanged && action.patch.instagramUserId === undefined ? { instagramUserId: '' } : {};
+      return { ...state, setup: { ...state.setup, ...reset, ...action.patch } };
+    }
     case 'account':
       if (action.adAccountId === state.setup.adAccountId) return state;
       // Pixel / page are re-validated against the new account's options; an
@@ -201,6 +206,7 @@ export function memoryOf(state: WizardState): SetupMemory {
     adAccountId: state.setup.adAccountId,
     pixelId: state.setup.pixelId,
     pageId: state.setup.pageId,
+    instagramUserId: state.setup.instagramUserId,
     storeId: state.setup.storeId,
     displayLink: state.setup.displayLink,
     urlTags: state.setup.urlTags,

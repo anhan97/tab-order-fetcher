@@ -5,7 +5,7 @@
  *
  * Ad account ids are passed as digits; adapters add `act_` themselves.
  */
-import type { BidStrategy, ExistingCampaign, InterestOption, LauncherAudience, LauncherPage } from './contract';
+import type { BidStrategy, ExistingCampaign, InterestOption, LauncherAudience, LauncherInstagramAccount, LauncherPage } from './contract';
 import type { MetaFields } from './meta-params';
 
 /** One element of a Graph batch: exactly one of id / error is set. */
@@ -65,9 +65,11 @@ export interface MetaAdsWriter {
   /**
    * Every page this connection can advertise with: pages linked to the ad
    * account first, then the user's own pages and the ad account business's
-   * owned + client pages. `warnings` = sources that failed (non-fatal).
+   * owned + client pages — and every Instagram account the ads can run as
+   * (connected to the ad account, or linked to one of those pages).
+   * `warnings` = sources that failed (non-fatal).
    */
-  listPages(adAccountId: string): Promise<{ pages: LauncherPage[]; warnings: string[] }>;
+  listPages(adAccountId: string): Promise<{ pages: LauncherPage[]; instagramAccounts: LauncherInstagramAccount[]; warnings: string[] }>;
   listPixels(adAccountId: string): Promise<Array<{ externalId: string; name: string }>>;
   listCampaigns(adAccountId: string): Promise<ExistingCampaign[]>;
   listCustomAudiences(adAccountId: string): Promise<LauncherAudience[]>;

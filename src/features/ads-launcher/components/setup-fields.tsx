@@ -8,9 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import type { LauncherAdAccount, LauncherOptions, ProductOption } from '@contract/ads-launcher';
+import type { LauncherAdAccount, LauncherInstagramAccount, LauncherOptions, ProductOption } from '@contract/ads-launcher';
 import { CUSTOM_LANDING, type LandingGroup } from '../lib/landing';
 import { actId } from '../lib/format';
+import { IG_PAGE_ONLY } from '../lib/structure';
+import { SearchPicker, type SearchPickerItem } from './SearchPicker';
 
 export function Field({
   label,
@@ -53,13 +55,31 @@ const Spinner = () => <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-40
 
 // ─── Ad account ─────────────────────────────────────────────────────────────
 
+/** Meta account_status values other than 1 (active), as a short label. */
+const ACCOUNT_STATUS: Record<number, string> = {
+  2: 'Disabled',
+  3: 'Unsettled',
+  7: 'Risk review',
+  8: 'Pending settlement',
+  9: 'Grace period',
+  100: 'Closing',
+  101: 'Closed'
+};
+
+/**
+ * Searchable: a Business Manager can hold dozens of ad accounts with long
+ * names. The list keeps the trigger's width and scrolls; search matches the
+ * name or the id.
+ */
 export function AdAccountSelect({
   accounts,
   value,
   onChange,
   loading,
   disabled,
-  className
+  className,
+  modal,
+  align
 }: {
   accounts: LauncherAdAccount[];
   value: string;
@@ -67,24 +87,46 @@ export function AdAccountSelect({
   loading?: boolean;
   disabled?: boolean;
   className?: string;
+  /** Inside a Dialog. */
+  modal?: boolean;
+  align?: 'start' | 'end';
 }) {
+  const items: SearchPickerItem[] = accounts.map(a => {
+    const status = a.accountStatus != null ? ACCOUNT_STATUS[a.accountStatus] : undefined;
+    return {
+      value: a.id,
+      label: a.name,
+      keywords: [a.id, actId(a.id)],
+      sub: (
+        <>
+          <span className="font-mono">{actId(a.id)}</span>
+          {a.currency && <> · {a.currency}</>}
+          {status && <span className="text-amber-600"> · {status}</span>}
+        </>
+      ),
+      trailing: a.isDemo ? <DemoBadge /> : undefined
+    };
+  });
   return (
-    <Select value={value || undefined} onValueChange={onChange} disabled={disabled || loading}>
-      <SelectTrigger className={cn('h-9 w-full text-sm', className)} aria-label="Ad account">
-        <SelectValue placeholder={loading ? 'Loading ad accounts…' : accounts.length ? 'Pick an ad account' : 'No ad account available'} />
-      </SelectTrigger>
-      <SelectContent>
-        {accounts.map(a => (
-          <SelectItem key={a.id} value={a.id}>
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate">{a.name}</span>
-              <span className="shrink-0 font-mono text-[10px] text-slate-400">{actId(a.id)}</span>
-              {a.isDemo && <DemoBadge />}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <SearchPicker
+      items={items}
+      value={value}
+      onChange={onChange}
+      ariaLabel="Ad account"
+      placeholder={loading ? 'Loading ad accounts…' : accounts.length ? 'Pick an ad account' : 'No ad account available'}
+      searchPlaceholder="Search name or account ID…"
+      emptyText="No ad account matches."
+      disabled={disabled || loading}
+      modal={modal}
+      align={align}
+      className={className}
+      renderValue={item => (
+        <>
+          <span className="truncate">{item.label}</span>
+          {item.trailing}
+        </>
+      )}
+    />
   );
 }
 
@@ -156,16 +198,26 @@ export function PageField({
   value,
   onChange,
   loading,
-  disabled
+  disabled,
+  modal
 }: {
   options: LauncherOptions | null;
   value: string;
   onChange: (id: string) => void;
   loading?: boolean;
   disabled?: boolean;
+  /** Inside a Dialog. */
+  modal?: boolean;
 }) {
   const pages = options?.pages ?? [];
   const manual = !!options && pages.length === 0;
+  const items: SearchPickerItem[] = pages.map(p => ({
+    value: p.externalId,
+    label: p.name,
+    keywords: [p.externalId],
+    leading: <PageAvatar name={p.name} pictureUrl={p.pictureUrl} />,
+    sub: <>{p.linked ? 'In this ad account · ' : ''}<span className="font-mono">{p.externalId}</span></>
+  }));
   return (
     <Field
       label={<>Facebook page<span className="text-rose-500"> *</span></>}
@@ -175,22 +227,82 @@ export function PageField({
       {manual ? (
         <Input value={value} onChange={e => onChange(e.target.value.trim())} placeholder="Page ID" inputMode="numeric" disabled={disabled} className="h-9" />
       ) : (
-        <Select value={value || undefined} onValueChange={onChange} disabled={disabled || !options}>
-          <SelectTrigger className="h-9 w-full text-sm" aria-label="Facebook page">
-            <SelectValue placeholder={options ? 'Pick a page' : 'Pick an ad account first'} />
-          </SelectTrigger>
-          <SelectContent>
-            {pages.map(p => (
-              <SelectItem key={p.externalId} value={p.externalId}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <PageAvatar name={p.name} pictureUrl={p.pictureUrl} />
-                  <span className="truncate">{p.name}</span>
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchPicker
+          items={items}
+          value={value}
+          onChange={onChange}
+          ariaLabel="Facebook page"
+          placeholder={options ? 'Pick a page' : 'Pick an ad account first'}
+          searchPlaceholder="Search page name or ID…"
+          emptyText="No page matches."
+          disabled={disabled || !options}
+          modal={modal}
+        />
       )}
+    </Field>
+  );
+}
+
+// ─── Instagram account ──────────────────────────────────────────────────────
+
+/**
+ * Who the ads show as on Instagram: an account connected to the ad account
+ * (Business Manager) or linked to a page, or none — then Instagram shows the
+ * Facebook page. The page's own account comes first and is the default.
+ */
+export function InstagramField({
+  options,
+  pageId,
+  value,
+  onChange,
+  loading,
+  disabled
+}: {
+  options: LauncherOptions | null;
+  pageId: string;
+  /** Setup value: '' = the page's linked account, IG_PAGE_ONLY = none, else an id. */
+  value: string;
+  onChange: (instagramUserId: string) => void;
+  loading?: boolean;
+  disabled?: boolean;
+}) {
+  const page = options?.pages?.find(p => p.externalId === pageId) ?? null;
+  const linkedId = page?.instagramUserId ?? null;
+  const accounts: LauncherInstagramAccount[] = [...(options?.instagramAccounts ?? [])];
+  // Options cached before the account list existed still carry the page's link.
+  if (linkedId && !accounts.some(a => a.externalId === linkedId)) {
+    accounts.unshift({ externalId: linkedId, username: null, pictureUrl: null, pageIds: [pageId] });
+  }
+  const ofPage = (a: LauncherInstagramAccount) => a.externalId === linkedId || (!!pageId && a.pageIds.includes(pageId));
+  const sorted = [...accounts].sort((a, b) => Number(ofPage(b)) - Number(ofPage(a)));
+  const selected = value === IG_PAGE_ONLY ? IG_PAGE_ONLY : value || linkedId || IG_PAGE_ONLY;
+  const hint = !options
+    ? undefined
+    : accounts.length === 0
+      ? 'No Instagram account is connected to this ad account or its pages: ads on Instagram show as the Facebook page. Connect one in Meta Business Settings, then reload.'
+      : selected === IG_PAGE_ONLY
+        ? 'Ads on Instagram show as the Facebook page.'
+        : undefined;
+  return (
+    <Field label="Instagram account" aside={loading ? <Spinner /> : null} hint={hint}>
+      <Select value={selected} onValueChange={onChange} disabled={disabled || !options}>
+        <SelectTrigger className="h-9 w-full text-sm" aria-label="Instagram account">
+          <SelectValue placeholder="Pick an ad account first" />
+        </SelectTrigger>
+        <SelectContent>
+          {sorted.map(a => (
+            <SelectItem key={a.externalId} value={a.externalId}>
+              <span className="flex min-w-0 items-center gap-2">
+                <PageAvatar name={a.username ?? 'I'} pictureUrl={a.pictureUrl} className="bg-pink-600" />
+                <span className="truncate">{a.username ? `@${a.username}` : `Instagram ${a.externalId}`}</span>
+                {ofPage(a) && <span className="shrink-0 text-[10px] text-slate-400">this page</span>}
+              </span>
+            </SelectItem>
+          ))}
+          {sorted.length > 0 && <SelectSeparator />}
+          <SelectItem value={IG_PAGE_ONLY}>No Instagram account (use the Facebook page)</SelectItem>
+        </SelectContent>
+      </Select>
     </Field>
   );
 }

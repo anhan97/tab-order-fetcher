@@ -485,6 +485,19 @@ export interface LauncherPage {
   linked: boolean;
 }
 
+/**
+ * An Instagram account ads can run as (Meta: instagram_user_id): the ones
+ * connected to the ad account (usually through Business Manager) and the
+ * ones linked to a page.
+ */
+export interface LauncherInstagramAccount {
+  externalId: string;
+  username: string | null;
+  pictureUrl: string | null;
+  /** Pages this account is the linked Instagram of. */
+  pageIds: string[];
+}
+
 export interface LauncherAudience {
   externalId: string;
   name: string;
@@ -496,6 +509,8 @@ export interface LauncherAudience {
 export interface LauncherOptions {
   adAccount: LauncherAdAccount;
   pages: LauncherPage[];
+  /** Instagram accounts the ads can run as (any page may be paired with them). */
+  instagramAccounts: LauncherInstagramAccount[];
   pixels: Array<{ externalId: string; name: string }>;
   campaigns: ExistingCampaign[];
   /** Custom + lookalike audiences of the ad account. */

@@ -80,6 +80,17 @@ describe('wizardReducer', () => {
     expect(initialWizardState().setup.urlTags).toBe(DEFAULT_URL_TAGS);
   });
 
+  it("another page goes back to that page's Instagram account; the pick is remembered", () => {
+    let s = wizardReducer(s0, { type: 'setup', patch: { pageId: '1' } });
+    s = wizardReducer(s, { type: 'setup', patch: { instagramUserId: '178' } });
+    expect(memoryOf(s).instagramUserId).toBe('178');
+    expect(wizardReducer(s, { type: 'setup', patch: { pixelId: '9' } }).setup.instagramUserId).toBe('178');
+    expect(wizardReducer(s, { type: 'setup', patch: { pageId: '1' } }).setup.instagramUserId).toBe('178');
+    expect(wizardReducer(s, { type: 'setup', patch: { pageId: '2' } }).setup.instagramUserId).toBe('');
+    expect(wizardReducer(s, { type: 'setup', patch: { pageId: '2', instagramUserId: '179' } }).setup.instagramUserId).toBe('179');
+    expect(initialWizardState({ pageId: '1', instagramUserId: '178' }).setup.instagramUserId).toBe('178');
+  });
+
   it('toggles pool items in selection order and prunes overrides', () => {
     const a = creativeToPoolItem(creativeDto('a'));
     const b = creativeToPoolItem(creativeDto('b'));
@@ -134,7 +145,7 @@ describe('wizardReducer', () => {
   });
 
   it('remembers only the setup fields', () => {
-    expect(Object.keys(memoryOf(s0)).sort()).toEqual(['adAccountId', 'displayLink', 'pageId', 'pixelId', 'presetId', 'storeId', 'urlTags']);
+    expect(Object.keys(memoryOf(s0)).sort()).toEqual(['adAccountId', 'displayLink', 'instagramUserId', 'pageId', 'pixelId', 'presetId', 'storeId', 'urlTags']);
   });
 });
 

@@ -348,6 +348,11 @@ export interface LaunchSetup {
   adAccountId: string;
   pixelId: string;
   pageId: string;
+  /**
+   * Instagram account the ads run as: '' = the page's linked one (if any),
+   * IG_PAGE_ONLY = none (Instagram shows the Facebook page), else its id.
+   */
+  instagramUserId: string;
   storeId: string;
   landingUrl: string;
   displayLink: string;
@@ -358,11 +363,24 @@ export const EMPTY_SETUP: LaunchSetup = {
   adAccountId: '',
   pixelId: '',
   pageId: '',
+  instagramUserId: '',
   storeId: '',
   landingUrl: '',
   displayLink: '',
   urlTags: '',
 };
+
+/** Setup value for "no Instagram account: ads on Instagram show as the Facebook page". */
+export const IG_PAGE_ONLY = 'page';
+
+/** The instagram_user_id the launch sends: the one picked, else the page's linked one; null = the page. */
+export function effectiveInstagramUserId(
+  setup: Pick<LaunchSetup, 'instagramUserId'>,
+  page: { instagramUserId: string | null } | null | undefined
+): string | null {
+  if (setup.instagramUserId === IG_PAGE_ONLY) return null;
+  return setup.instagramUserId || page?.instagramUserId || null;
+}
 
 export type LaunchTarget =
   | { mode: 'new' }

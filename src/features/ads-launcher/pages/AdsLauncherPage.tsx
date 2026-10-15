@@ -208,6 +208,7 @@ function AdsLauncherWizard({ userId }: { userId: string }) {
               loading={model.accountsLoading}
               disabled={locked}
               className="w-full"
+              align="end"
             />
           </div>
         </div>

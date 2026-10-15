@@ -1,7 +1,7 @@
 /**
- * Per-user memory of the launch setup (§3.2): ad account, pixel, page, store,
- * display link, URL parameters and preset. NEVER the pool, copy edits, or an
- * existing campaign / ad set.
+ * Per-user memory of the launch setup (§3.2): ad account, pixel, page,
+ * Instagram account, store, display link, URL parameters and preset. NEVER the
+ * pool, copy edits, or an existing campaign / ad set.
  *
  * localStorage can throw (private mode, quota, blocked storage) — every read
  * and write is wrapped so the launcher works without it.
@@ -12,13 +12,14 @@ export interface SetupMemory {
   adAccountId?: string;
   pixelId?: string;
   pageId?: string;
+  instagramUserId?: string;
   storeId?: string;
   displayLink?: string;
   urlTags?: string;
   presetId?: string;
 }
 
-export const SETUP_MEMORY_FIELDS = ['adAccountId', 'pixelId', 'pageId', 'storeId', 'displayLink', 'urlTags', 'presetId'] as const;
+export const SETUP_MEMORY_FIELDS = ['adAccountId', 'pixelId', 'pageId', 'instagramUserId', 'storeId', 'displayLink', 'urlTags', 'presetId'] as const;
 export const SETUP_MEMORY_DEBOUNCE_MS = 300;
 
 export const setupMemoryKey = (userId: string) => `ads-launcher:setup:${userId}`;

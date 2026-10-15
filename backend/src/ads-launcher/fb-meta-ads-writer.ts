@@ -9,7 +9,7 @@
  */
 import { FACEBOOK_CONFIG } from '../config/facebook';
 import { recordUsageFromHeaders, shouldBackoff } from '../services/fb-rate-limit.service';
-import type { ExistingCampaign, InterestOption, LauncherAudience, LauncherPage } from './contract';
+import type { ExistingCampaign, InterestOption, LauncherAudience, LauncherInstagramAccount, LauncherPage } from './contract';
 import { LIMITS } from './contract';
 import * as breaker from './meta-breaker';
 import { actId, encodeForm, type MetaFields } from './meta-params';
@@ -385,24 +385,35 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
    *   4. <business>/client_pages   — pages shared with that business
    * This used to stop at (1) whenever it returned anything, so an ad account
    * with one linked page showed exactly one page out of a whole BM.
+   *
+   * Instagram accounts come from act_X/instagram_accounts and
+   * act_X/connected_instagram_accounts (IG accounts the ad account may run
+   * ads as — typically assigned in Business Manager), plus each page's own
+   * linked account. Since v22 all three return IGUser ids, the value
+   * instagram_user_id takes. Reading only the page link used to hide every
+   * account connected through Business Manager.
+   *
    * Each source is best effort; failures come back as warnings.
    */
   async listPages(adAccountId: string) {
     const warnings: string[] = [];
-    const withIg = 'id,name,picture{url},instagram_business_account';
-    const plain = 'id,name,picture{url}';
+    // Richest first. Some tokens may read the page's Instagram id but not the
+    // account itself, some not even the link: fall back field set by field set.
+    const pageFields = [
+      'id,name,picture{url},instagram_business_account{id,username,profile_picture_url}',
+      'id,name,picture{url},instagram_business_account',
+      'id,name,picture{url}'
+    ];
     const source = async (label: string, path: string): Promise<any[]> => {
-      try {
-        return await this.listAll(path, { fields: withIg });
-      } catch (e) {
-        if (e instanceof MetaUnavailableError) throw e;
-        // Some tokens may list pages but not read their Instagram link.
+      for (let i = 0; ; i++) {
         try {
-          return await this.listAll(path, { fields: plain });
-        } catch (e2) {
-          if (e2 instanceof MetaUnavailableError) throw e2;
-          warnings.push(`${label}: ${(e2 as Error).message}`);
-          return [];
+          return await this.listAll(path, { fields: pageFields[i] });
+        } catch (e) {
+          if (e instanceof MetaUnavailableError) throw e;
+          if (i === pageFields.length - 1) {
+            warnings.push(`${label}: ${(e as Error).message}`);
+            return [];
+          }
         }
       }
     };
@@ -414,12 +425,43 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
         return null;
       });
 
-    const [linked, mine, owned, client] = await Promise.all([
+    const igSource = async (label: string, path: string): Promise<any[]> => {
+      try {
+        return await this.listAll(path, { fields: 'id,username,profile_picture_url' });
+      } catch (e) {
+        if (e instanceof MetaUnavailableError) throw e;
+        try {
+          return await this.listAll(path, { fields: 'id,username' });
+        } catch (e2) {
+          if (e2 instanceof MetaUnavailableError) throw e2;
+          warnings.push(`${label}: ${(e2 as Error).message}`);
+          return [];
+        }
+      }
+    };
+
+    const [linked, mine, owned, client, igAccount, igConnected] = await Promise.all([
       source('Pages linked to the ad account', `${actId(adAccountId)}/promote_pages`),
       source('Your pages', 'me/accounts'),
       businessId ? source('Business pages', `${businessId}/owned_pages`) : Promise.resolve([]),
-      businessId ? source('Client pages', `${businessId}/client_pages`) : Promise.resolve([])
+      businessId ? source('Client pages', `${businessId}/client_pages`) : Promise.resolve([]),
+      igSource('Instagram accounts of the ad account', `${actId(adAccountId)}/instagram_accounts`),
+      igSource('Connected Instagram accounts', `${actId(adAccountId)}/connected_instagram_accounts`)
     ]);
+
+    const igById = new Map<string, LauncherInstagramAccount>();
+    const addIg = (a: any, pageId?: string) => {
+      if (!a?.id) return;
+      const id = String(a.id);
+      const prev = igById.get(id);
+      igById.set(id, {
+        externalId: id,
+        username: a.username || prev?.username || null,
+        pictureUrl: a.profile_picture_url || prev?.pictureUrl || null,
+        pageIds: pageId && !prev?.pageIds.includes(pageId) ? [...(prev?.pageIds ?? []), pageId] : prev?.pageIds ?? []
+      });
+    };
+    [...igAccount, ...igConnected].forEach(a => addIg(a));
 
     const byId = new Map<string, LauncherPage>();
     const add = (p: any, isLinked: boolean) => {
@@ -436,9 +478,11 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
     };
     linked.forEach(p => add(p, true));
     [...mine, ...owned, ...client].forEach(p => add(p, false));
+    for (const p of [...linked, ...mine, ...owned, ...client]) addIg(p.instagram_business_account, String(p.id));
 
     const pages = [...byId.values()].sort((a, b) => Number(b.linked) - Number(a.linked) || a.name.localeCompare(b.name));
-    return { pages, warnings };
+    const instagramAccounts = [...igById.values()].sort((a, b) => (a.username ?? a.externalId).localeCompare(b.username ?? b.externalId));
+    return { pages, instagramAccounts, warnings };
   }
 
   async listCustomAudiences(adAccountId: string): Promise<LauncherAudience[]> {

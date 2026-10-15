@@ -29,7 +29,7 @@ import { IssuesList } from './IssuesList';
 import { LaunchResults } from './LaunchResults';
 import { PoolThumb } from './PoolThumb';
 import { StructureDiagram } from './StructureDiagram';
-import { AdAccountSelect, Field, LandingSelect, PageField, PixelField } from './setup-fields';
+import { AdAccountSelect, Field, InstagramField, LandingSelect, PageField, PixelField } from './setup-fields';
 
 export interface QuickLaunchDialogProps {
   open: boolean;
@@ -178,7 +178,7 @@ function QuickLaunchBody({
           </Field>
 
           <Field label={<>Ad account<span className="text-rose-500"> *</span></>} className="sm:col-span-2">
-            <AdAccountSelect accounts={model.accounts} value={setup.adAccountId} onChange={handlers.onAccount} loading={model.accountsLoading} disabled={locked} />
+            <AdAccountSelect accounts={model.accounts} value={setup.adAccountId} onChange={handlers.onAccount} loading={model.accountsLoading} disabled={locked} modal />
           </Field>
           {model.accountsError && <p className="text-xs text-rose-600 sm:col-span-2">Could not load ad accounts: {model.accountsError}</p>}
           {model.optionsError && <p className="text-xs text-rose-600 sm:col-span-2">Could not load this ad account: {model.optionsError}</p>}
@@ -189,12 +189,20 @@ function QuickLaunchBody({
               onClick={model.reloadOptions}
               disabled={locked || model.optionsReloading || model.optionsLoading}
             >
-              {model.optionsReloading ? 'Reloading pages & pixels…' : 'Reload pages & pixels'}
+              {model.optionsReloading ? 'Reloading pages, Instagram & pixels…' : 'Reload pages, Instagram & pixels'}
             </button>
           )}
 
           <PixelField options={model.options} value={setup.pixelId} onChange={pixelId => handlers.onSetup({ pixelId })} required={pixelRequired} loading={model.optionsLoading} disabled={locked} />
-          <PageField options={model.options} value={setup.pageId} onChange={pageId => handlers.onSetup({ pageId })} loading={model.optionsLoading} disabled={locked} />
+          <PageField options={model.options} value={setup.pageId} onChange={pageId => handlers.onSetup({ pageId })} loading={model.optionsLoading} disabled={locked} modal />
+          <InstagramField
+            options={model.options}
+            pageId={setup.pageId}
+            value={setup.instagramUserId}
+            onChange={instagramUserId => handlers.onSetup({ instagramUserId })}
+            loading={model.optionsLoading}
+            disabled={locked}
+          />
 
           {!postsOnly && (
             <Field

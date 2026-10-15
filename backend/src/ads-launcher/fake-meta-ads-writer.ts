@@ -6,7 +6,7 @@
  * call so tests can assert on sharing / caching. Failure hooks let tests make
  * one element of a batch fail.
  */
-import type { ExistingCampaign, InterestOption, LauncherAudience, LauncherPage } from './contract';
+import type { ExistingCampaign, InterestOption, LauncherAudience, LauncherInstagramAccount, LauncherPage } from './contract';
 import type { MetaFields } from './meta-params';
 import type { BatchResult, MetaAdsWriter, RemoteAdSet, RemoteCampaign, VideoStatus } from './meta-ads-writer';
 import { knownBidStrategy } from './meta-ads-writer';
@@ -18,6 +18,12 @@ export const DEMO_PAGES: LauncherPage[] = [
   DEMO_PAGE,
   { externalId: '900000000000102', name: 'Demo Brand Two', pictureUrl: null, instagramUserId: null, linked: false },
   { externalId: '900000000000103', name: 'Demo Outlet', pictureUrl: null, instagramUserId: '900000000000303', linked: false }
+];
+/** Two linked to pages, one connected only to the ad account (as through Business Manager). */
+export const DEMO_INSTAGRAM_ACCOUNTS: LauncherInstagramAccount[] = [
+  { externalId: '900000000000304', username: 'demo.brand', pictureUrl: null, pageIds: [] },
+  { externalId: '900000000000301', username: 'demo.page', pictureUrl: null, pageIds: ['900000000000101'] },
+  { externalId: '900000000000303', username: 'demo.outlet', pictureUrl: null, pageIds: ['900000000000103'] }
 ];
 export const DEMO_AUDIENCES: LauncherAudience[] = [
   { externalId: '900000000000401', name: 'Purchasers 180d', subtype: 'WEBSITE', approximateCount: 12000 },
@@ -186,7 +192,7 @@ export class FakeMetaAdsWriter implements MetaAdsWriter {
   }
 
   async listPages() {
-    return { pages: DEMO_PAGES, warnings: [] };
+    return { pages: DEMO_PAGES, instagramAccounts: DEMO_INSTAGRAM_ACCOUNTS, warnings: [] };
   }
 
   async listCustomAudiences() {

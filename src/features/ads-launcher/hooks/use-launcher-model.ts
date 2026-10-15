@@ -23,6 +23,8 @@ import { poolProduct } from '../lib/pool';
 import {
   audienceRefIssues,
   buildStructureRequests,
+  effectiveInstagramUserId,
+  IG_PAGE_ONLY,
   planStructure,
   setupIssues,
   targetIssues,
@@ -46,6 +48,8 @@ export interface LauncherModel {
   options: LauncherOptions | null;
   /** The selected Facebook page, when it is in the options. */
   page: LauncherPage | null;
+  /** The Instagram account the ads will run as; null = the Facebook page. */
+  instagramUserId: string | null;
   optionsLoading: boolean;
   optionsError: string | null;
   /** Fresh pages / pixels / audiences / campaigns from Meta, skipping the server's 10-min cache. */
@@ -158,6 +162,15 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
     if (pageId !== setup.pageId) dispatch({ type: 'setup', patch: { pageId } });
   }, [options, setup.pageId, dispatch]);
 
+  // A picked (or remembered) Instagram account this ad account cannot run
+  // ads as goes back to the page's own.
+  useEffect(() => {
+    const ig = setup.instagramUserId;
+    if (!options || !ig || ig === IG_PAGE_ONLY) return;
+    const known = (options.instagramAccounts ?? []).some(a => a.externalId === ig) || (options.pages ?? []).some(p => p.instagramUserId === ig);
+    if (!known) dispatch({ type: 'setup', patch: { instagramUserId: '' } });
+  }, [options, setup.instagramUserId, dispatch]);
+
   // Product: nothing in the pool tells and the store sells exactly one → that one.
   useEffect(() => {
     if (!inferred && !state.productId && products.length === 1) dispatch({ type: 'product', productId: products[0].id });
@@ -255,7 +268,7 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
   const all = [...setupProblems, ...planProblems, ...targetProblems];
   const blocked = all.length > 0;
   const page = options?.pages?.find(p => p.externalId === setup.pageId) ?? null;
-  const instagramUserId = page?.instagramUserId ?? null;
+  const instagramUserId = effectiveInstagramUserId(setup, page);
 
   const requests = useMemo(
     () =>
@@ -281,6 +294,7 @@ export function useLauncherModel(state: WizardState, dispatch: Dispatch<WizardAc
     account,
     options,
     page,
+    instagramUserId,
     optionsLoading: !!setup.adAccountId && optionsQ.isLoading,
     optionsError: reloadQ.isError ? errorMessage(reloadQ.error) : optionsQ.isError ? errorMessage(optionsQ.error) : null,
     /** Fresh pages / pixels / audiences / campaigns from Meta (skips the 10-min cache). */

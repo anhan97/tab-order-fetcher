@@ -133,6 +133,7 @@ describe('pages', () => {
         return { status: 200, body: { data: [{ id: '3', name: 'Brand' }], paging: { next: 'https://graph.facebook.com/v23.0/B1/owned_pages?cursor=2&access_token=tok' } } };
       }
       if (path.endsWith('/B1/client_pages')) return { status: 200, body: { data: [{ id: '4', name: 'Client', instagram_business_account: { id: 'IG4' } }] } };
+      if (path.endsWith('instagram_accounts')) return { status: 200, body: { data: [] } };
       return { status: 404, body: { error: { message: 'unexpected ' + path, code: 100 } } };
     });
     const w = new FbMetaAdsWriter('tok', { fetch: fn });
@@ -154,7 +155,49 @@ describe('pages', () => {
     });
     const { pages, warnings } = await new FbMetaAdsWriter('tok', { fetch: fn }).listPages('9');
     expect(pages.map(p => p.externalId)).toEqual(['2']);
-    expect(warnings[0]).toMatch(/linked to the ad account/);
+    expect(warnings.some(w => /linked to the ad account/.test(w))).toBe(true);
+  });
+
+  it('lists Instagram accounts connected to the ad account, not only the ones linked to a page', async () => {
+    const { fn, calls } = fakeFetch(url => {
+      const path = new URL(url).pathname;
+      if (path.endsWith('/act_9')) return { status: 200, body: { id: 'act_9' } };
+      if (path.endsWith('/promote_pages')) {
+        return { status: 200, body: { data: [{ id: '1', name: 'Linked', instagram_business_account: { id: 'IG1', username: 'shop.one', profile_picture_url: 'https://cdn/ig1.jpg' } }] } };
+      }
+      if (path.endsWith('/me/accounts')) return { status: 200, body: { data: [{ id: '2', name: 'No IG' }] } };
+      if (path.endsWith('/act_9/instagram_accounts')) return { status: 200, body: { data: [{ id: 'IG7', username: 'bm.brand' }, { id: 'IG1', username: 'shop.one' }] } };
+      if (path.endsWith('/act_9/connected_instagram_accounts')) return { status: 200, body: { data: [{ id: 'IG8', username: 'another' }] } };
+      return { status: 404, body: { error: { message: 'unexpected ' + path, code: 100 } } };
+    });
+    const { pages, instagramAccounts, warnings } = await new FbMetaAdsWriter('tok', { fetch: fn }).listPages('9');
+    expect(warnings).toEqual([]);
+    expect(instagramAccounts).toEqual([
+      { externalId: 'IG8', username: 'another', pictureUrl: null, pageIds: [] },
+      { externalId: 'IG7', username: 'bm.brand', pictureUrl: null, pageIds: [] },
+      { externalId: 'IG1', username: 'shop.one', pictureUrl: 'https://cdn/ig1.jpg', pageIds: ['1'] }
+    ]);
+    expect(pages.find(p => p.externalId === '1')!.instagramUserId).toBe('IG1');
+    expect(new URL(calls.find(c => c.url.includes('/act_9/instagram_accounts'))!.url).searchParams.get('fields')).toBe('id,username,profile_picture_url');
+  });
+
+  it('a token that cannot read the Instagram account still gets its id from the page link', async () => {
+    const { fn } = fakeFetch(url => {
+      const u = new URL(url);
+      const fields = u.searchParams.get('fields') ?? '';
+      if (u.pathname.endsWith('/act_9')) return { status: 200, body: { id: 'act_9' } };
+      if (u.pathname.endsWith('/promote_pages')) {
+        return fields.includes('instagram_business_account{')
+          ? { status: 400, body: { error: { message: '(#10) Needs instagram_basic', code: 10 } } }
+          : { status: 200, body: { data: [{ id: '1', name: 'Linked', instagram_business_account: { id: 'IG1' } }] } };
+      }
+      if (u.pathname.endsWith('/me/accounts')) return { status: 200, body: { data: [] } };
+      if (u.pathname.endsWith('instagram_accounts')) return { status: 200, body: { data: [] } };
+      return { status: 404, body: { error: { message: 'unexpected', code: 100 } } };
+    });
+    const { pages, instagramAccounts } = await new FbMetaAdsWriter('tok', { fetch: fn }).listPages('9');
+    expect(pages[0].instagramUserId).toBe('IG1');
+    expect(instagramAccounts).toEqual([{ externalId: 'IG1', username: null, pictureUrl: null, pageIds: ['1'] }]);
   });
 });
 

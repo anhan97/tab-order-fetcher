@@ -13,7 +13,9 @@ import {
   cleanName,
   configIssues,
   dateToken,
+  effectiveInstagramUserId,
   fillTemplate,
+  IG_PAGE_ONLY,
   fillTo,
   numberDuplicateNames,
   planStructure,
@@ -95,6 +97,7 @@ const SETUP: LaunchSetup = {
   adAccountId: '900000000000001',
   pixelId: '2000000002',
   pageId: '1000000001',
+  instagramUserId: '',
   storeId: 'store-1',
   landingUrl: 'https://shop-a.com/products/comb',
   displayLink: 'shop-a.com',
@@ -494,9 +497,30 @@ describe('issues', () => {
 
 // ─── Requests (§7.3, §8.4) ──────────────────────────────────────────────────
 
+describe('Instagram account', () => {
+  const linked = { instagramUserId: '17841400000000001' };
+  it("defaults to the page's linked account, none when the page has none", () => {
+    expect(effectiveInstagramUserId({ instagramUserId: '' }, linked)).toBe('17841400000000001');
+    expect(effectiveInstagramUserId({ instagramUserId: '' }, { instagramUserId: null })).toBeNull();
+    expect(effectiveInstagramUserId({ instagramUserId: '' }, null)).toBeNull();
+  });
+  it('a picked account (e.g. from Business Manager) wins; "none" means the Facebook page', () => {
+    expect(effectiveInstagramUserId({ instagramUserId: '17841499999999999' }, linked)).toBe('17841499999999999');
+    expect(effectiveInstagramUserId({ instagramUserId: IG_PAGE_ONLY }, linked)).toBeNull();
+  });
+});
+
 describe('buildStructureRequests', () => {
   const build = (config: LaunchPresetConfig, items: PoolItem[], extra: Partial<Parameters<typeof buildStructureRequests>[0]> = {}) =>
     buildStructureRequests({ plan: plan(config, items), config, setup: SETUP, ...extra });
+
+  it('every request runs as the chosen Instagram account; none → no instagramUserId', () => {
+    const config = cfg(2, 1, 1);
+    const withIg = build(config, pool(1), { instagramUserId: '17841499999999999' });
+    expectAllValid(withIg);
+    expect(withIg.every(r => r.instagramUserId === '17841499999999999')).toBe(true);
+    expect(build(config, pool(1), { instagramUserId: null }).every(r => !('instagramUserId' in r))).toBe(true);
+  });
 
   it('CBO, Highest volume: one request per campaign, ads on every ad set, budget on the campaign only', () => {
     const config = cfg(3, 1, 'n');

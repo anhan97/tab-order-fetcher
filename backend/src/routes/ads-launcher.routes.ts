@@ -123,7 +123,7 @@ router.get('/options', ...storeChain('ads.launch'), handle(async (req, res) => {
         const warnings: string[] = [];
         const [account, pageList, pixels, audiences] = await Promise.all([
           settle(warnings, 'Ad account', writer.getAdAccount(adAccountId), { id: adAccountId, name: adAccountId, currency: null, accountStatus: null }),
-          settle(warnings, 'Pages', writer.listPages(adAccountId), { pages: [], warnings: [] }),
+          settle(warnings, 'Pages', writer.listPages(adAccountId), { pages: [], instagramAccounts: [], warnings: [] }),
           settle(warnings, 'Pixels', writer.listPixels(adAccountId), []),
           settle(warnings, 'Audiences', writer.listCustomAudiences(adAccountId), [])
         ]);
@@ -131,6 +131,7 @@ router.get('/options', ...storeChain('ads.launch'), handle(async (req, res) => {
         entry.base = {
           adAccount: { id: account.id || adAccountId, name: account.name, currency: account.currency, accountStatus: account.accountStatus, isDemo },
           pages: pageList.pages,
+          instagramAccounts: pageList.instagramAccounts,
           pixels: isDemo ? [DEMO_PIXEL] : pixels,
           audiences
         };

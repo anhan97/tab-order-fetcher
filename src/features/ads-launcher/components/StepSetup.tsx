@@ -11,7 +11,7 @@ import type { LandingGroup } from '../lib/landing';
 import { CUSTOM_LANDING, displayLinkFor } from '../lib/landing';
 import type { LaunchSetup } from '../lib/structure';
 import type { LauncherProduct } from '../hooks/use-launcher-model';
-import { Field, LandingSelect, PageField, PixelField, ProductSelect } from './setup-fields';
+import { Field, InstagramField, LandingSelect, PageField, PixelField, ProductSelect } from './setup-fields';
 import { IssuesList } from './IssuesList';
 
 export interface StepSetupProps {
@@ -99,10 +99,10 @@ export function StepSetup(props: StepSetupProps) {
               className="h-7 gap-1 px-2 text-xs text-slate-600"
               onClick={props.onReloadOptions}
               disabled={disabled || props.optionsReloading || props.optionsLoading}
-              title="Pages, pixels and audiences are kept for 10 minutes to spare Meta's rate limit"
+              title="Pages, Instagram accounts, pixels and audiences are kept for 10 minutes to spare Meta's rate limit"
             >
               <RotateCcw className={props.optionsReloading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-              {props.optionsReloading ? 'Reloading…' : 'Reload pages & pixels'}
+              {props.optionsReloading ? 'Reloading…' : 'Reload pages, Instagram & pixels'}
             </Button>
           </div>
         )}
@@ -130,6 +130,14 @@ export function StepSetup(props: StepSetupProps) {
             options={options}
             value={setup.pageId}
             onChange={pageId => props.onSetup({ pageId })}
+            loading={props.optionsLoading}
+            disabled={disabled}
+          />
+          <InstagramField
+            options={options}
+            pageId={setup.pageId}
+            value={setup.instagramUserId}
+            onChange={instagramUserId => props.onSetup({ instagramUserId })}
             loading={props.optionsLoading}
             disabled={disabled}
           />
