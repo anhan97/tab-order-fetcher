@@ -95,7 +95,7 @@ router.get('/options', ...storeChain('ads.launch'), handle(async (req, res) => {
   let writer;
   let isDemo: boolean;
   try {
-    ({ writer, isDemo } = await resolveWriter(caller, adAccountId));
+    ({ writer, isDemo } = await resolveWriter(caller, adAccountId, { fresh: refresh }));
   } catch (e) {
     if (accessFail(res, e)) return;
     throw e;

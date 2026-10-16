@@ -276,10 +276,14 @@ export function InstagramField({
   const ofPage = (a: LauncherInstagramAccount) => a.externalId === linkedId || (!!pageId && a.pageIds.includes(pageId));
   const sorted = [...accounts].sort((a, b) => Number(ofPage(b)) - Number(ofPage(a)));
   const selected = value === IG_PAGE_ONLY ? IG_PAGE_ONLY : value || linkedId || IG_PAGE_ONLY;
+  // Why the list is empty, when Meta said (missing permission, a failed read).
+  const metaSays = (options?.warnings ?? []).filter(w => /instagram/i.test(w));
   const hint = !options
     ? undefined
     : accounts.length === 0
-      ? 'No Instagram account is connected to this ad account or its pages: ads on Instagram show as the Facebook page. Connect one in Meta Business Settings, then reload.'
+      ? metaSays.length
+        ? <span className="text-amber-700">{metaSays.join(' · ')}</span>
+        : 'No Instagram account is connected to this ad account or its pages: ads on Instagram show as the Facebook page. Connect one in Meta Business Settings, then reload.'
       : selected === IG_PAGE_ONLY
         ? 'Ads on Instagram show as the Facebook page.'
         : undefined;

@@ -425,17 +425,18 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
         return null;
       });
 
+    // Same idea for the Instagram accounts: the id alone is enough to launch.
+    const igFields = ['id,username,profile_picture_url', 'id,username', 'id'];
     const igSource = async (label: string, path: string): Promise<any[]> => {
-      try {
-        return await this.listAll(path, { fields: 'id,username,profile_picture_url' });
-      } catch (e) {
-        if (e instanceof MetaUnavailableError) throw e;
+      for (let i = 0; ; i++) {
         try {
-          return await this.listAll(path, { fields: 'id,username' });
-        } catch (e2) {
-          if (e2 instanceof MetaUnavailableError) throw e2;
-          warnings.push(`${label}: ${(e2 as Error).message}`);
-          return [];
+          return await this.listAll(path, { fields: igFields[i] });
+        } catch (e) {
+          if (e instanceof MetaUnavailableError) throw e;
+          if (i === igFields.length - 1) {
+            warnings.push(`${label}: ${(e as Error).message}`);
+            return [];
+          }
         }
       }
     };
@@ -482,7 +483,30 @@ export class FbMetaAdsWriter implements MetaAdsWriter {
 
     const pages = [...byId.values()].sort((a, b) => Number(b.linked) - Number(a.linked) || a.name.localeCompare(b.name));
     const instagramAccounts = [...igById.values()].sort((a, b) => (a.username ?? a.externalId).localeCompare(b.username ?? b.externalId));
+    if (instagramAccounts.length === 0) {
+      const why = await this.missingInstagramPermission();
+      if (why) warnings.push(why);
+    }
     return { pages, instagramAccounts, warnings };
+  }
+
+  /**
+   * Without instagram_basic Meta does not fail the Instagram reads, it just
+   * returns nothing — and "no Instagram account" then looks like a setup
+   * problem. One read of me/permissions (only when no account came back)
+   * names the real cause. Null when granted or when it cannot tell.
+   */
+  private async missingInstagramPermission(): Promise<string | null> {
+    try {
+      const r = await this.call<any>('GET', 'me/permissions', {});
+      const granted = (r?.data ?? []).some((p: any) => p.permission === 'instagram_basic' && p.status === 'granted');
+      return granted
+        ? null
+        : 'Instagram: this Facebook connection has not granted the instagram_basic permission, so Meta returns no Instagram account. Reconnect Facebook and allow Instagram access.';
+    } catch (e) {
+      if (e instanceof MetaUnavailableError) throw e;
+      return null;
+    }
   }
 
   async listCustomAudiences(adAccountId: string): Promise<LauncherAudience[]> {

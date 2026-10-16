@@ -181,6 +181,41 @@ describe('pages', () => {
     expect(new URL(calls.find(c => c.url.includes('/act_9/instagram_accounts'))!.url).searchParams.get('fields')).toBe('id,username,profile_picture_url');
   });
 
+  it('no Instagram account at all: says when the connection lacks instagram_basic', async () => {
+    const run = (permissions: Array<{ permission: string; status: string }>) => {
+      const { fn, calls } = fakeFetch(url => {
+        const path = new URL(url).pathname;
+        if (path.endsWith('/act_9')) return { status: 200, body: { id: 'act_9' } };
+        if (path.endsWith('/promote_pages')) return { status: 200, body: { data: [{ id: '1', name: 'Linked' }] } };
+        if (path.endsWith('/me/accounts')) return { status: 200, body: { data: [] } };
+        if (path.endsWith('instagram_accounts')) return { status: 200, body: { data: [] } };
+        if (path.endsWith('/me/permissions')) return { status: 200, body: { data: permissions } };
+        return { status: 404, body: { error: { message: 'unexpected ' + path, code: 100 } } };
+      });
+      return new FbMetaAdsWriter('tok', { fetch: fn }).listPages('9').then(r => ({ ...r, calls }));
+    };
+    const missing = await run([{ permission: 'ads_management', status: 'granted' }, { permission: 'instagram_basic', status: 'declined' }]);
+    expect(missing.instagramAccounts).toEqual([]);
+    expect(missing.warnings).toEqual([expect.stringMatching(/instagram_basic/)]);
+    const granted = await run([{ permission: 'instagram_basic', status: 'granted' }]);
+    expect(granted.warnings).toEqual([]);
+  });
+
+  it('accounts found: no permission check (one call less against the rate limit)', async () => {
+    const { fn, calls } = fakeFetch(url => {
+      const path = new URL(url).pathname;
+      if (path.endsWith('/act_9')) return { status: 200, body: { id: 'act_9' } };
+      if (path.endsWith('/promote_pages')) return { status: 200, body: { data: [] } };
+      if (path.endsWith('/me/accounts')) return { status: 200, body: { data: [] } };
+      if (path.endsWith('/act_9/instagram_accounts')) return { status: 200, body: { data: [{ id: 'IG7' }] } };
+      if (path.endsWith('instagram_accounts')) return { status: 200, body: { data: [] } };
+      return { status: 404, body: { error: { message: 'unexpected ' + path, code: 100 } } };
+    });
+    const { instagramAccounts } = await new FbMetaAdsWriter('tok', { fetch: fn }).listPages('9');
+    expect(instagramAccounts.map(a => a.externalId)).toEqual(['IG7']);
+    expect(calls.some(c => c.url.includes('/me/permissions'))).toBe(false);
+  });
+
   it('a token that cannot read the Instagram account still gets its id from the page link', async () => {
     const { fn } = fakeFetch(url => {
       const u = new URL(url);

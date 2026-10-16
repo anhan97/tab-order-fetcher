@@ -87,9 +87,11 @@ async function canRead(token: string, adAccountId: string): Promise<boolean> {
 
 /**
  * The writer for this launch, or AccessError (403: no access / no token;
- * 502: Meta breaker open for the chosen token).
+ * 502: Meta breaker open for the chosen token). `fresh` skips the 10-minute
+ * token choice — "Reload" after reconnecting Facebook (e.g. to grant
+ * Instagram access) must use the new token.
  */
-export async function resolveWriter(c: Caller, adAccountId: string): Promise<{ writer: MetaAdsWriter; isDemo: boolean }> {
+export async function resolveWriter(c: Caller, adAccountId: string, opts: { fresh?: boolean } = {}): Promise<{ writer: MetaAdsWriter; isDemo: boolean }> {
   if (isDemoAccount(adAccountId)) {
     if (!demoEnabled()) throw new AccessError(403, 'demo_disabled', 'The demo account is disabled on this server');
     return { writer: new FakeMetaAdsWriter(), isDemo: true };
@@ -97,7 +99,7 @@ export async function resolveWriter(c: Caller, adAccountId: string): Promise<{ w
 
   const cacheKey = `${c.actorId}:${c.ownerId}:${adAccountId}`;
   const hit = resolved.get(cacheKey);
-  let token: string | null = hit && Date.now() - hit.at < RESOLVE_TTL_MS ? hit.token : null;
+  let token: string | null = hit && !opts.fresh && Date.now() - hit.at < RESOLVE_TTL_MS ? hit.token : null;
 
   if (!token) {
     const personal = await personalTokens(c);
