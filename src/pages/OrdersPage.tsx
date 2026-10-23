@@ -5,7 +5,8 @@
  * Dashboard / Daily P&L / Analytics all share the same URL, store
  * resolution, and (where each tab supports it) the global date range:
  *
- *   • Overview  — at-a-glance charts (Net Profit, ROAS, Cost pie)
+ *   • Overview  — ecom KPIs (MER, profit %, CPA…), the same day by day,
+ *                 and at-a-glance charts (Net Profit, ROAS, Cost pie)
  *   • Daily P&L — full ProfitView (breakdown table + ops costs + sync)
  *   • Orders    — full OrdersTable (KPIs + filterable order list)
  *
@@ -29,6 +30,17 @@ import { useAuth } from '@/context/AuthContext';
 import { LayoutDashboard, BarChart3, ListOrdered, Store } from 'lucide-react';
 import { GlobalDateRange } from '@/components/GlobalDateRange';
 
+type Tab = 'overview' | 'pl' | 'orders';
+const TAB_KEY = 'dashboard_tab';
+const readSavedTab = (): Tab | null => {
+  try {
+    const v = localStorage.getItem(TAB_KEY);
+    return v === 'overview' || v === 'pl' || v === 'orders' ? v : null;
+  } catch {
+    return null;
+  }
+};
+
 export const OrdersPage = () => {
   const {
     shopifyConfig,
@@ -48,17 +60,23 @@ export const OrdersPage = () => {
   // Which tabs this role gets to see. CS is fulfillment-only so they jump
   // straight to the order list; Finance is read-only on money so they get
   // Overview + Daily P&L. Admin/user see everything.
-  const visibleTabs = useMemo(() => {
-    if (role === 'cs')      return ['orders'] as const;
-    if (role === 'finance') return ['overview', 'pl'] as const;
-    return ['overview', 'pl', 'orders'] as const;
+  const visibleTabs = useMemo((): Tab[] => {
+    if (role === 'cs')      return ['orders'];
+    if (role === 'finance') return ['overview', 'pl'];
+    return ['overview', 'pl', 'orders'];
   }, [role]);
 
-  // Default tab — pick the first one this role can see, but prefer the
-  // role's natural landing page (cs→orders, finance→pl, others→orders).
-  const defaultTab: 'overview' | 'pl' | 'orders' =
-    role === 'cs' ? 'orders' : role === 'finance' ? 'pl' : 'orders';
-  const [tab, setTab] = useState<'overview' | 'pl' | 'orders'>(defaultTab);
+  // The tab used last (per browser), else the role's natural landing page:
+  // cs → orders, everyone else → the Overview numbers.
+  const [tab, setTabState] = useState<Tab>(() => {
+    const saved = readSavedTab();
+    if (saved && visibleTabs.includes(saved)) return saved;
+    return role === 'cs' ? 'orders' : 'overview';
+  });
+  const setTab = (t: Tab) => {
+    setTabState(t);
+    try { localStorage.setItem(TAB_KEY, t); } catch { /* convenience only */ }
+  };
 
   // No active store yet → guide the user to connect one instead of a blank
   // page. They reached here freely (no forced redirect); the CTA + sidebar
@@ -84,25 +102,25 @@ export const OrdersPage = () => {
   }
 
   return (
-    <Tabs value={tab} onValueChange={v => setTab(v as typeof tab)} className="space-y-4">
+    <Tabs value={tab} onValueChange={v => setTab(v as Tab)} className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
       <TabsList
-        className="grid w-full max-w-md"
+        className="grid w-full md:max-w-md"
         style={{ gridTemplateColumns: `repeat(${visibleTabs.length}, minmax(0, 1fr))` }}
       >
         {visibleTabs.includes('overview') && (
-          <TabsTrigger value="overview" className="flex items-center gap-2">
-            <LayoutDashboard className="h-4 w-4" /> Overview
+          <TabsTrigger value="overview" className="flex items-center gap-1.5 px-2">
+            <LayoutDashboard className="h-4 w-4 shrink-0" /> Overview
           </TabsTrigger>
         )}
         {visibleTabs.includes('pl') && (
-          <TabsTrigger value="pl" className="flex items-center gap-2">
-            <BarChart3 className="h-4 w-4" /> Daily P&amp;L
+          <TabsTrigger value="pl" className="flex items-center gap-1.5 px-2">
+            <BarChart3 className="h-4 w-4 shrink-0" /> Daily P&amp;L
           </TabsTrigger>
         )}
         {visibleTabs.includes('orders') && (
-          <TabsTrigger value="orders" className="flex items-center gap-2">
-            <ListOrdered className="h-4 w-4" /> Orders
+          <TabsTrigger value="orders" className="flex items-center gap-1.5 px-2">
+            <ListOrdered className="h-4 w-4 shrink-0" /> Orders
           </TabsTrigger>
         )}
       </TabsList>

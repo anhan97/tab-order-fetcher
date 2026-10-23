@@ -48,6 +48,9 @@ const fmtUSD = (n: string | number) => {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v);
 };
 
+/** Net profit ÷ net revenue; null without revenue. */
+const marginOf = (b: { netProfit: number; netRevenue: number }) => (b.netRevenue > 0 ? b.netProfit / b.netRevenue : null);
+
 interface PeriodBucket {
   periodKey: string;
   periodStart: string;
@@ -453,7 +456,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
   // --- CSV export ---
 
   const exportCsv = () => {
-    const header = ['Period', 'Orders', 'Net revenue', 'Refunds', 'Basecost', 'Fees', 'FB ads', 'Other ads', 'App fees', 'OpEx', 'Gross profit', 'Net profit'];
+    const header = ['Period', 'Orders', 'Net revenue', 'Refunds', 'Basecost', 'Fees', 'FB ads', 'Other ads', 'App fees', 'OpEx', 'Gross profit', 'Net profit', 'Margin %'];
     const rows = sortedBuckets.map(b => [
       b.periodKey,
       b.orderCount,
@@ -466,7 +469,8 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       b.appFees.toFixed(2),
       b.operatingCost.toFixed(2),
       b.grossProfit.toFixed(2),
-      b.netProfit.toFixed(2)
+      b.netProfit.toFixed(2),
+      marginOf(b) == null ? '' : (marginOf(b)! * 100).toFixed(1)
     ]);
     const csv = [header, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -764,14 +768,15 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                     <TableHead className="text-right">OpEx</TableHead>
                     <TableHead className="text-right">Gross profit</TableHead>
                     <TableHead className="text-right">Net profit</TableHead>
+                    <TableHead className="text-right" title="Net profit ÷ net revenue">Margin</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loading && (
-                    <TableRow><TableCell colSpan={12} className="text-center text-slate-400">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={13} className="text-center text-slate-400">Loading…</TableCell></TableRow>
                   )}
                   {!loading && sortedBuckets.length === 0 && (
-                    <TableRow><TableCell colSpan={12} className="text-center text-slate-400">No data — hit <em>Sync + recompute</em> to get started.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={13} className="text-center text-slate-400">No data — hit <em>Sync + recompute</em> to get started.</TableCell></TableRow>
                   )}
                   {sortedBuckets.map(b => (
                     <TableRow key={b.periodKey}>
@@ -788,6 +793,9 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.grossProfit)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums font-medium", b.netProfit < 0 ? 'text-rose-600' : 'text-emerald-700')}>
                         {fmtUSD(b.netProfit)}
+                      </TableCell>
+                      <TableCell className={cn("text-right tabular-nums font-semibold", (marginOf(b) ?? 0) < 0 ? 'text-rose-600' : (marginOf(b) ?? 0) < 0.1 ? 'text-amber-600' : 'text-emerald-700')}>
+                        {marginOf(b) == null ? '—' : `${(marginOf(b)! * 100).toFixed(1)}%`}
                       </TableCell>
                     </TableRow>
                   ))}

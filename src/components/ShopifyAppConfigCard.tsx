@@ -133,7 +133,7 @@ export function ShopifyAppConfigCard() {
             {redirectUri && (
               <p>Khai <strong>Allowed redirection URL</strong> trong app: <code className="bg-white px-1 rounded break-all">{redirectUri}</code></p>
             )}
-            {scopes && <p>Required scopes: <code className="bg-white px-1 rounded">{scopes}</code></p>}
+            {scopes && <p>Required scopes: <code className="bg-white px-1 rounded break-all">{scopes}</code></p>}
             <p className="text-amber-700">
               Note: to read customer names, addresses and phone numbers, the app must be approved by Shopify
               <strong> Protected customer data access</strong> (Partner Dashboard → API access).

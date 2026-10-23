@@ -171,7 +171,7 @@ export function ShopifyOAuthConnect() {
                 {copied ? <Check className="h-3.5 w-3.5 text-teal-600" /> : <Copy className="h-3.5 w-3.5" />}
               </button>
             </div>
-            <p>Required scopes: <code className="rounded bg-white px-1 border border-slate-200 text-[11px]">{scopes || 'read_orders,write_orders,read_products,read_customers'}</code></p>
+            <p>Required scopes: <code className="break-all rounded bg-white px-1 border border-slate-200 text-[11px]">{scopes || 'read_orders,write_orders,read_products,read_customers'}</code></p>
           </div>
 
           <Input

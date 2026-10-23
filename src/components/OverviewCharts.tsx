@@ -1,5 +1,6 @@
 /**
- * Three at-a-glance charts that live in the Overview tab on /orders:
+ * The Overview tab on /orders: ecommerce KPIs (MER, profit %, CPA…), the
+ * same numbers day by day, then three at-a-glance charts:
  *
  *   1. Net Profit by day (bar, red bars when negative)
  *   2. ROAS by day (line, with a 1.0× breakeven reference line)
@@ -20,6 +21,8 @@ import {
 import { TrendingUp, Loader2 } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
 import { storeHeaders } from '@/utils/apiClient';
+import { toDayPL, type DayPL } from '@/lib/ecom-metrics';
+import { DailyPerformanceTable, EcomKpiGrid } from '@/components/DailyPerformance';
 
 interface DailyRow {
   date: string;
@@ -59,7 +62,7 @@ interface OverviewChartsProps {
 
 export const OverviewCharts = ({ from, to }: OverviewChartsProps) => {
   const { shopifyConfig, timezone } = useAppContext();
-  const [rows, setRows] = useState<DailyRow[]>([]);
+  const [days, setDays] = useState<DayPL[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -75,27 +78,15 @@ export const OverviewCharts = ({ from, to }: OverviewChartsProps) => {
         });
         const res = await fetch(`/api/pl/daily?${q}`, { headers, signal: ctrl.signal });
         if (!res.ok) {
-          setRows([]);
+          setDays([]);
           return;
         }
         const j = await res.json();
-        const list: DailyRow[] = (j?.snapshots || []).map((s: any) => ({
-          date: typeof s.date === 'string' ? s.date.slice(0, 10) : new Date(s.date).toISOString().slice(0, 10),
-          netProfit:    num(s.netProfit),
-          fbAdSpend:    num(s.fbAdSpend),
-          otherAdSpend: num(s.otherAdSpend),
-          netRevenue:   num(s.netRevenue),
-          basecost:     num(s.basecost),
-          paymentFees:  num(s.paymentFees),
-          appFees:      num(s.appFees),
-          operatingCost: num(s.operatingCost),
-          fbPurchaseValue: num(s.fbPurchaseValue)
-        })).sort((a: DailyRow, b: DailyRow) => a.date.localeCompare(b.date));
-        setRows(list);
+        setDays((j?.snapshots || []).map(toDayPL).sort((a: DayPL, b: DayPL) => a.date.localeCompare(b.date)));
       } catch (e: any) {
         if (e?.name !== 'AbortError') {
           console.warn('OverviewCharts: failed to load /daily', e?.message || e);
-          setRows([]);
+          setDays([]);
         }
       } finally {
         setLoading(false);
@@ -103,6 +94,8 @@ export const OverviewCharts = ({ from, to }: OverviewChartsProps) => {
     })();
     return () => ctrl.abort();
   }, [shopifyConfig?.storeUrl, shopifyConfig?.accessToken, from, to, timezone]);
+
+  const rows: DailyRow[] = useMemo(() => days.map(d => ({ ...d, fbPurchaseValue: d.fbPurchaseValue ?? 0 })), [days]);
 
   // ROAS = revenue attributed to FB / FB ad spend. Use fbPurchaseValue when
   // present (live recompute days), else fallback to netRevenue / total spend
@@ -160,8 +153,11 @@ export const OverviewCharts = ({ from, to }: OverviewChartsProps) => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="space-y-4 sm:space-y-6">
+      <EcomKpiGrid days={days} />
+      <DailyPerformanceTable days={days} loading={loading} />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Net Profit by day */}
         <Card>
           <CardHeader>

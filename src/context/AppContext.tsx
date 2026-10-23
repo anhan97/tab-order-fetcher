@@ -8,6 +8,7 @@ import { CogsConfig } from '@/types/minimalCogs';
 import { FacebookAdAccount, FacebookCampaign, FacebookAdSet, FacebookAd } from '@/types/facebook';
 import { DatePreset } from "@/components/ui/date-range-picker";
 import { safeTimezone, isValidTimezone, DEFAULT_TZ, todayInTz, tzDayBoundsUtc } from '@/utils/dateUtils';
+import { quickRangeBounds, readRememberedQuickRange, rememberQuickRange, type QuickRange } from '@/lib/quick-ranges';
 import { useAuth } from '@/context/AuthContext';
 
 interface AppContextType {
@@ -50,6 +51,9 @@ interface AppContextType {
     setSelectedDatePreset: (preset: DatePreset) => void;
     dateRange: { from: Date; to: Date };
     setDateRange: (range: { from: Date; to: Date }) => void;
+    /** The dashboard's relative range (Today, 7d…), null for a custom one. Remembered per browser. */
+    quickRange: QuickRange | null;
+    setQuickRange: (range: QuickRange | null) => void;
 
     // Bumped every time campaign↔store mapping is saved. Dashboards put
     // it in their useEffect deps to auto-refetch fbAdSpend without F5.
@@ -122,21 +126,31 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
     // the STORE timezone (read from localStorage at boot), NOT the browser
     // tz, so a VN merchant viewing a US store sees the same calendar day
     // the store would. This keeps the dashboard, P&L and Shopify aligned.
-    const [selectedDatePreset, setSelectedDatePreset] = useState<DatePreset>("today");
+    //
+    // The dashboard's quick range (7d, 30d…) is remembered per browser, so
+    // someone who works off "last 7 days" doesn't land on a single day again.
+    const [quickRange, setQuickRangeState] = useState<QuickRange | null>(readRememberedQuickRange);
+    const setQuickRange = (q: QuickRange | null) => {
+        setQuickRangeState(q);
+        rememberQuickRange(q);
+    };
+    const [selectedDatePreset, setSelectedDatePreset] = useState<DatePreset>(() => (quickRange === 'today' ? 'today' : 'custom'));
     const [dateRange, setDateRange] = useState(() => {
         const tz = safeTimezone(localStorage.getItem('preferred_timezone'));
-        const today = todayInTz(tz);
-        return tzDayBoundsUtc(today, tz);
+        return quickRangeBounds(quickRange ?? 'today', tz);
     });
 
-    // When the user changes timezone, re-anchor the "today" range so KPIs
-    // refetch in the new tz. Only auto-shift if the picked preset is "today"
-    // — custom ranges they explicitly chose should be preserved.
+    // When the user changes timezone, re-anchor a relative range (the quick
+    // range, or "today" set from another page) so KPIs refetch in the new tz
+    // — custom ranges they explicitly chose are preserved.
     useEffect(() => {
-        if (selectedDatePreset !== 'today') return;
-        const today = todayInTz(timezone);
-        setDateRange(tzDayBoundsUtc(today, timezone));
-    }, [timezone, selectedDatePreset]);
+        if (quickRange) {
+            setDateRange(quickRangeBounds(quickRange, timezone));
+        } else if (selectedDatePreset === 'today') {
+            const today = todayInTz(timezone);
+            setDateRange(tzDayBoundsUtc(today, timezone));
+        }
+    }, [timezone, selectedDatePreset, quickRange]);
 
     // --- Effects ---
 
@@ -508,6 +522,8 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
             setSelectedDatePreset,
             dateRange,
             setDateRange,
+            quickRange,
+            setQuickRange,
             mappingVersion,
             bumpMappingVersion,
         }}>

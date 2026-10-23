@@ -7,6 +7,10 @@
  *
  * Days are calendar days in the STORE timezone (AppContext.timezone), not the
  * browser's: "Today" for a US store viewed from Vietnam is the store's today.
+ *
+ * The common ranges are one tap (chips, not hidden in the popover), and the
+ * last one picked is remembered — looking at several days used to mean
+ * opening a two-month calendar that did not even fit on a phone.
  */
 import { useState } from 'react';
 import { format } from 'date-fns';
@@ -15,39 +19,12 @@ import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAppContext } from '@/context/AppContext';
-import { addDaysToDateString, formatInTz, todayInTz, tzDayBoundsUtc } from '@/utils/dateUtils';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { formatInTz, todayInTz } from '@/utils/dateUtils';
+import { daysToRange, matchQuickRange, QUICK_RANGES, quickRangeBounds, type QuickRange } from '@/lib/quick-ranges';
 import { cn } from '@/lib/utils';
 
-export type QuickRange = 'today' | 'yesterday' | '7d' | '30d' | '90d' | 'mtd' | 'ytd';
-
-export const QUICK_RANGES: Array<{ key: QuickRange; label: string }> = [
-  { key: 'today', label: 'Today' },
-  { key: 'yesterday', label: 'Yesterday' },
-  { key: '7d', label: '7d' },
-  { key: '30d', label: '30d' },
-  { key: '90d', label: '90d' },
-  { key: 'mtd', label: 'MTD' },
-  { key: 'ytd', label: 'YTD' }
-];
-
-/** Calendar-day bounds (YYYY-MM-DD, store tz) for a quick range. */
-export function quickRangeDays(key: QuickRange, tz: string): { from: string; to: string } {
-  const today = todayInTz(tz);
-  switch (key) {
-    case 'today': return { from: today, to: today };
-    case 'yesterday': { const y = addDaysToDateString(today, -1); return { from: y, to: y }; }
-    case '7d': return { from: addDaysToDateString(today, -6), to: today };
-    case '30d': return { from: addDaysToDateString(today, -29), to: today };
-    case '90d': return { from: addDaysToDateString(today, -89), to: today };
-    case 'mtd': return { from: today.slice(0, 7) + '-01', to: today };
-    case 'ytd': return { from: today.slice(0, 4) + '-01-01', to: today };
-  }
-}
-
-/** UTC instants spanning whole store-tz days. */
-export function daysToRange(fromDay: string, toDay: string, tz: string): { from: Date; to: Date } {
-  return { from: tzDayBoundsUtc(fromDay, tz).from, to: tzDayBoundsUtc(toDay, tz).to };
-}
+export { daysToRange, quickRangeDays, QUICK_RANGES, type QuickRange } from '@/lib/quick-ranges';
 
 interface Props {
   from: Date;
@@ -62,6 +39,7 @@ interface Props {
 export const DateRangeControl = ({ from, to, timezone, onChange, className, align = 'end' }: Props) => {
   const [open, setOpen] = useState(false);
   const [temp, setTemp] = useState<{ from?: Date; to?: Date }>({});
+  const isMobile = useIsMobile();
 
   const fromDay = formatInTz(from, timezone, 'yyyy-MM-dd');
   const toDay = formatInTz(to, timezone, 'yyyy-MM-dd');
@@ -71,8 +49,7 @@ export const DateRangeControl = ({ from, to, timezone, onChange, className, alig
     : `${formatInTz(from, timezone, 'MMM d')} – ${formatInTz(to, timezone, 'MMM d, yyyy')}`;
 
   const pickQuick = (key: QuickRange) => {
-    const d = quickRangeDays(key, timezone);
-    onChange(daysToRange(d.from, d.to, timezone), key);
+    onChange(quickRangeBounds(key, timezone), key);
     setOpen(false);
   };
 
@@ -89,12 +66,12 @@ export const DateRangeControl = ({ from, to, timezone, onChange, className, alig
   return (
     <Popover open={open} onOpenChange={o => { setOpen(o); if (!o) setTemp({}); }}>
       <PopoverTrigger asChild>
-        <Button variant="outline" className={cn('justify-start font-normal min-w-[220px]', className)}>
-          <CalendarIcon className="h-4 w-4 mr-2 text-slate-500" />
-          {label}
+        <Button variant="outline" className={cn('justify-start font-normal sm:min-w-[220px]', className)}>
+          <CalendarIcon className="h-4 w-4 mr-2 shrink-0 text-slate-500" />
+          <span className="truncate">{label}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-3 space-y-3" align={align}>
+      <PopoverContent className="w-auto max-w-[calc(100vw-1rem)] p-3 space-y-3" align={align}>
         <div className="flex flex-wrap gap-1">
           {QUICK_RANGES.map(r => (
             <Button key={r.key} size="sm" variant="ghost" onClick={() => pickQuick(r.key)}>{r.label}</Button>
@@ -104,11 +81,11 @@ export const DateRangeControl = ({ from, to, timezone, onChange, className, alig
           mode="range"
           selected={temp.from ? { from: temp.from, to: temp.to } : undefined}
           onSelect={r => setTemp({ from: r?.from, to: r?.to })}
-          numberOfMonths={2}
+          numberOfMonths={isMobile ? 1 : 2}
           defaultMonth={new Date(`${fromDay}T12:00:00`)}
           className="rounded-md border"
         />
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-slate-500">
             {temp.from
               ? <>From <b>{format(temp.from, 'MMM dd')}</b>{temp.to ? <> to <b>{format(temp.to, 'MMM dd')}</b></> : ' (single day)'}</>
@@ -124,21 +101,39 @@ export const DateRangeControl = ({ from, to, timezone, onChange, className, alig
   );
 };
 
+/** One tap away on the dashboard; the rest are in the picker. */
+const CHIPS: QuickRange[] = ['today', 'yesterday', '7d', '30d', 'mtd'];
+
 /** Bound to the shared dashboard range. */
 export const GlobalDateRange = ({ className }: { className?: string }) => {
-  const { dateRange, setDateRange, setSelectedDatePreset, timezone } = useAppContext();
+  const { dateRange, setDateRange, setSelectedDatePreset, setQuickRange, timezone } = useAppContext();
+  const active = matchQuickRange(dateRange, timezone);
+  const pick = (range: { from: Date; to: Date }, quick: QuickRange | null) => {
+    setDateRange(range);
+    setQuickRange(quick);
+    // AppContext re-anchors a relative range when the timezone changes;
+    // anything else is a fixed range.
+    setSelectedDatePreset(quick === 'today' ? 'today' : 'custom');
+  };
   return (
-    <DateRangeControl
-      from={dateRange.from}
-      to={dateRange.to}
-      timezone={timezone}
-      className={className}
-      onChange={(range, quick) => {
-        setDateRange(range);
-        // AppContext re-anchors "today" at midnight / on tz change only while
-        // the preset says today; anything else is a fixed range.
-        setSelectedDatePreset(quick === 'today' ? 'today' : 'custom');
-      }}
-    />
+    <div className={cn('flex min-w-0 flex-wrap items-center gap-2', className)}>
+      <div role="group" aria-label="Date range" className="flex flex-wrap gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5">
+        {CHIPS.map(key => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={active === key}
+            onClick={() => pick(quickRangeBounds(key, timezone), key)}
+            className={cn(
+              'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+              active === key ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+            )}
+          >
+            {QUICK_RANGES.find(r => r.key === key)!.label}
+          </button>
+        ))}
+      </div>
+      <DateRangeControl from={dateRange.from} to={dateRange.to} timezone={timezone} onChange={pick} className="h-9 min-w-0 max-w-full" />
+    </div>
   );
 };

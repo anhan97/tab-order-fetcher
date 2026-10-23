@@ -1014,9 +1014,9 @@ export const OrdersTable = ({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div className="flex items-center space-x-4">
+    <div className="min-w-0 space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Own range controls only when used standalone — on the dashboard
               the shared picker above the tabs owns the range. */}
           {!globalDateRange && (<>
@@ -1130,16 +1130,16 @@ export const OrdersTable = ({
       {/* Metrics Cards — moved to top of dashboard so the most-watched
           numbers are above the fold. Trend charts live below the table. */}
       <TooltipProvider>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-4">
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <ShoppingBag className="h-4 w-4 text-blue-500" />
-                    <p className="text-sm text-slate-600">Order Count</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">Order Count</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">{currentMetrics.orderCount}</h3>
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">{currentMetrics.orderCount}</h3>
                 </CardContent>
               </Card>
             </TooltipTrigger>
@@ -1151,12 +1151,12 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <DollarSign className="h-4 w-4 text-green-500" />
-                    <p className="text-sm text-slate-600">Net Profit</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">Net Profit</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     ${currentMetrics.netProfit.toFixed(2)}
                   </h3>
                 </CardContent>
@@ -1170,12 +1170,12 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <Target className="h-4 w-4 text-purple-500" />
-                    <p className="text-sm text-slate-600">Net Profit Margin</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">Net Profit Margin</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     {currentMetrics.netProfitMargin.toFixed(2)}%
                   </h3>
                 </CardContent>
@@ -1189,12 +1189,12 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <Calculator className="h-4 w-4 text-red-500" />
-                    <p className="text-sm text-slate-600">Total Cost</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">Total Cost</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     ${currentMetrics.totalCost.toFixed(2)}
                   </h3>
                 </CardContent>
@@ -1208,12 +1208,12 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <TrendingUp className="h-4 w-4 text-yellow-500" />
-                    <p className="text-sm text-slate-600">Revenue</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">Revenue</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     ${currentMetrics.revenue.toFixed(2)}
                   </h3>
                 </CardContent>
@@ -1225,15 +1225,15 @@ export const OrdersTable = ({
           </Tooltip>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-4 mt-4">
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
+                <CardContent className="p-3 sm:p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-x-1">
                     <div className="flex items-center space-x-2">
                       <DollarSign className="h-4 w-4 text-orange-500" />
-                      <p className="text-sm text-slate-600">Ad Spend Per Order</p>
+                      <p className="truncate text-xs text-slate-600 sm:text-sm">Ad Spend Per Order</p>
                     </div>
                     {!isFacebookConnected && (
                       <Button
@@ -1249,7 +1249,7 @@ export const OrdersTable = ({
                       </Button>
                     )}
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     ${currentMetrics.adSpendPerOrder.toFixed(2)}
                   </h3>
                 </CardContent>
@@ -1263,12 +1263,12 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <Package className="h-4 w-4 text-indigo-500" />
-                    <p className="text-sm text-slate-600">Avg. Order Value</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">Avg. Order Value</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     ${currentMetrics.avgOrderValue.toFixed(2)}
                   </h3>
                 </CardContent>
@@ -1282,11 +1282,11 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
+                <CardContent className="p-3 sm:p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-x-1">
                     <div className="flex items-center space-x-2">
                       <DollarSign className="h-4 w-4 text-pink-500" />
-                      <p className="text-sm text-slate-600">Total Ad Spend</p>
+                      <p className="truncate text-xs text-slate-600 sm:text-sm">Total Ad Spend</p>
                     </div>
                     {!isFacebookConnected && (
                       <Button
@@ -1302,7 +1302,7 @@ export const OrdersTable = ({
                       </Button>
                     )}
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     {isLoadingAdSpend ? (
                       <div className="flex items-center space-x-2">
                         <RefreshCw className="h-4 w-4 animate-spin" />
@@ -1323,12 +1323,12 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <Calculator className="h-4 w-4 text-cyan-500" />
-                    <p className="text-sm text-slate-600">COGS</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">COGS</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     ${currentMetrics.cogs.toFixed(2)}
                   </h3>
                 </CardContent>
@@ -1342,12 +1342,12 @@ export const OrdersTable = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <Truck className="h-4 w-4 text-teal-500" />
-                    <p className="text-sm text-slate-600">Shipping Cost</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">Shipping Cost</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     ${currentMetrics.shippingCost.toFixed(2)}
                   </h3>
                 </CardContent>
@@ -1359,16 +1359,16 @@ export const OrdersTable = ({
           </Tooltip>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-4 mt-4">
           <Tooltip>
             <TooltipTrigger asChild>
               <Card className="cursor-help hover:bg-slate-50 transition-colors">
-                <CardContent className="p-6">
+                <CardContent className="p-3 sm:p-6">
                   <div className="flex items-center space-x-2">
                     <TrendingUp className="h-4 w-4 text-emerald-500" />
-                    <p className="text-sm text-slate-600">ROAS</p>
+                    <p className="truncate text-xs text-slate-600 sm:text-sm">ROAS</p>
                   </div>
-                  <h3 className="text-2xl font-bold mt-2">
+                  <h3 className="mt-2 truncate text-lg font-bold sm:text-2xl">
                     {currentMetrics.roas.toFixed(2)}x
                   </h3>
                 </CardContent>
@@ -1400,9 +1400,9 @@ export const OrdersTable = ({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex items-center space-x-4">
-              <div className="relative w-64">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              <div className="relative w-full sm:w-64">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
                 <Input
                   placeholder="Search orders..."
@@ -1418,7 +1418,7 @@ export const OrdersTable = ({
                 onValueChange={setStatusFilter}
                 aria-label="Filter by status"
               >
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="min-w-[140px] flex-1 sm:w-[180px] sm:flex-none">
                   <SelectValue placeholder="Filter by status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1439,7 +1439,7 @@ export const OrdersTable = ({
                 onValueChange={setSelectedShippingProvider}
                 aria-label="Select Shipping Provider"
               >
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="min-w-[140px] flex-1 sm:w-[180px] sm:flex-none">
                   <SelectValue placeholder="Shipping Provider" />
                 </SelectTrigger>
                 <SelectContent>
