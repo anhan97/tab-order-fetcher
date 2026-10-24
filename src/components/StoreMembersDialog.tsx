@@ -84,7 +84,7 @@ function PermissionPicker({ idPrefix, role, value, onChange, disabled }: {
   const toggle = (p: StorePermission, on: boolean) =>
     onChange(on ? [...value.filter(v => v !== p), p] : value.filter(v => v !== p));
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {PERMISSION_GROUPS.map(group => (
         <div key={group.label} className="space-y-1.5">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{group.label}</p>
@@ -233,7 +233,7 @@ export const StoreMembersDialog = ({ storeId, storeLabel, onClose }: Props) => {
           <p className="text-[11px] text-slate-500">{ROLE_HELP[role]}</p>
           <div className="rounded-md bg-slate-50 p-2.5">
             <p className="mb-2 text-[11px] font-medium text-slate-600">
-              Ads features — off unless ticked, whatever the role
+              Extra permissions — off unless ticked, whatever the role
             </p>
             <PermissionPicker idPrefix="grant" role={role} value={permissions} onChange={setPermissions} disabled={busy === 'grant'} />
           </div>
@@ -335,7 +335,7 @@ function MemberRows({ member: m, role, permissions, open, busy, onToggle, onRole
             onClick={onToggle}
           >
             {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-            Ads features
+            Permissions
           </button>
         </td>
         <td className="px-3 py-2 text-right">

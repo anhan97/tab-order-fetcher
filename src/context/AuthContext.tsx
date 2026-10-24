@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
-import { apiFetch, auth as authStore, ApiError } from '@/utils/apiClient';
+import { apiFetch, auth as authStore, ApiError, keepSessionFresh } from '@/utils/apiClient';
 
 export interface AuthUser {
   id: string;
@@ -14,10 +14,11 @@ export interface AuthUser {
 
 /** Mirrors lib/store-access.ts on the backend — keep the two in step. */
 export type StoreAccessLevel = 'owner' | 'manager' | 'cs' | 'finance' | 'viewer' | 'creative';
-/** Ads-side permissions an admin grants per member, on top of the role. */
+/** Feature permissions an admin grants per member, on top of the role. */
 export type StorePermission =
   | 'creatives.upload' | 'creatives.view' | 'creatives.manage'
-  | 'ads.launch' | 'facebook.view' | 'facebook.manage';
+  | 'ads.launch' | 'facebook.view' | 'facebook.manage'
+  | 'fees.view';
 export type StoreCapability = 'read' | 'sync' | 'fulfill' | 'costs' | 'manage' | StorePermission;
 
 export interface UserStore {
@@ -96,6 +97,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       return [];
     }
   }, []);
+
+  // Renew the access token before it expires while someone is signed in, so
+  // the session lasts as long as its refresh token (30 days, renewed on use).
+  useEffect(() => {
+    if (!user) return;
+    return keepSessionFresh();
+  }, [user?.id]);
 
   // Bootstrap on mount — verify any stored token by calling /auth/me, then load stores.
   useEffect(() => {

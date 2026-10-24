@@ -24,7 +24,9 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAppContext } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { ProfitApiClient, PLSnapshot, OperatingCostItem } from '@/utils/profitApi';
+import { FeeStatusCard } from '@/components/FeeStatusCard';
 import { formatInTimeZone } from 'date-fns-tz';
 import { format } from 'date-fns';
 import { detectMarginAlerts, computeMargins, MarginAlert } from '@/utils/marginAlerts';
@@ -131,6 +133,10 @@ interface ProfitViewProps {
 export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
   const { shopifyConfig, isShopifyConnected, timezone, mappingVersion } = useAppContext();
   const { toast } = useToast();
+  // Payment fees only with fees.view: without it the server sends none and
+  // reports profit before payment fees, so the Fees column is left out.
+  const { canInStore } = useAuth();
+  const canSeeFees = canInStore('fees.view');
 
   const client = useMemo(() => {
     if (!isShopifyConnected || !shopifyConfig) return null;
@@ -372,7 +378,9 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
       const syncSince = opts.deep ? new Date(toD.getTime() - 90 * 86400000) : fromD;
       const sync = await client.syncOrders({ since: syncSince, until: toD, pullTransactions: true, syncBalances: true });
       toast({ title: 'Orders synced', description: `${sync.ordersCreated} new, ${sync.ordersUpdated} updated, ${sync.transactionsSynced} fees` });
-      const r = await client.recompute(fromD, toD);
+      // A deep re-sync pulled fees for the whole window: recompute all of it,
+      // not just the days on screen, or older days keep their pre-fee profit.
+      const r = await client.recompute(syncSince, toD);
       toast({ title: 'P&L recomputed', description: `${r.days} days` });
       await load();
     } catch (e: any) {
@@ -456,14 +464,14 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
   // --- CSV export ---
 
   const exportCsv = () => {
-    const header = ['Period', 'Orders', 'Net revenue', 'Refunds', 'Basecost', 'Fees', 'FB ads', 'Other ads', 'App fees', 'OpEx', 'Gross profit', 'Net profit', 'Margin %'];
+    const header = ['Period', 'Orders', 'Net revenue', 'Refunds', 'Basecost', ...(canSeeFees ? ['Fees'] : []), 'FB ads', 'Other ads', 'App fees', 'OpEx', 'Gross profit', 'Net profit', 'Margin %'];
     const rows = sortedBuckets.map(b => [
       b.periodKey,
       b.orderCount,
       b.netRevenue.toFixed(2),
       b.refunds.toFixed(2),
       b.basecost.toFixed(2),
-      b.paymentFees.toFixed(2),
+      ...(canSeeFees ? [b.paymentFees.toFixed(2)] : []),
       b.fbAdSpend.toFixed(2),
       b.otherAdSpend.toFixed(2),
       b.appFees.toFixed(2),
@@ -722,6 +730,8 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
           <KPI title="Orders" value={totals.orderCount.toString()} icon={<Wallet className="h-4 w-4 text-violet-500" />} />
         </div>
 
+        {canSeeFees && client && <FeeStatusCard client={client} from={dateAtUTC(from, false)} to={dateAtUTC(to, true)} />}
+
         {/* Trend chart */}
         {chartData.length > 0 && (
           <Card>
@@ -761,7 +771,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                     <TableHead className="text-right">Net rev</TableHead>
                     <TableHead className="text-right">Refunds</TableHead>
                     <TableHead className="text-right">Basecost</TableHead>
-                    <TableHead className="text-right">Fees</TableHead>
+                    {canSeeFees && <TableHead className="text-right">Fees</TableHead>}
                     <TableHead className="text-right">FB ads</TableHead>
                     <TableHead className="text-right">Other ads</TableHead>
                     <TableHead className="text-right">App fees</TableHead>
@@ -773,10 +783,10 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                 </TableHeader>
                 <TableBody>
                   {loading && (
-                    <TableRow><TableCell colSpan={13} className="text-center text-slate-400">Loading…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={canSeeFees ? 13 : 12} className="text-center text-slate-400">Loading…</TableCell></TableRow>
                   )}
                   {!loading && sortedBuckets.length === 0 && (
-                    <TableRow><TableCell colSpan={13} className="text-center text-slate-400">No data — hit <em>Sync + recompute</em> to get started.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={canSeeFees ? 13 : 12} className="text-center text-slate-400">No data — hit <em>Sync + recompute</em> to get started.</TableCell></TableRow>
                   )}
                   {sortedBuckets.map(b => (
                     <TableRow key={b.periodKey}>
@@ -785,7 +795,7 @@ export const ProfitView = ({ externalRange }: ProfitViewProps = {}) => {
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.netRevenue)}</TableCell>
                       <TableCell className="text-right tabular-nums text-rose-600">{fmtUSD(b.refunds)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.basecost)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmtUSD(b.paymentFees)}</TableCell>
+                      {canSeeFees && <TableCell className="text-right tabular-nums">{fmtUSD(b.paymentFees)}</TableCell>}
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.fbAdSpend)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.otherAdSpend)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtUSD(b.appFees)}</TableCell>

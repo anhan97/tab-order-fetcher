@@ -13,6 +13,8 @@ interface DashboardInsightsProps {
   revenue: number;
   netProfit: number;
   totalFees?: number;
+  /** The "Effective Fee" card needs the fees.view permission. */
+  showFees?: boolean;
 }
 
 /**
@@ -20,7 +22,7 @@ interface DashboardInsightsProps {
  * Pure derivation off the same orders the dashboard already has, so adding
  * this section does not trigger any extra fetches.
  */
-export function DashboardInsights({ orders, revenue, netProfit, totalFees = 0 }: DashboardInsightsProps) {
+export function DashboardInsights({ orders, revenue, netProfit, totalFees = 0, showFees = true }: DashboardInsightsProps) {
   const insights = useMemo(
     () => computeDashboardInsights({ orders, revenue, netProfit, totalFees }),
     [orders, revenue, netProfit, totalFees]
@@ -68,12 +70,14 @@ export function DashboardInsights({ orders, revenue, netProfit, totalFees = 0 }:
             value={`${insights.fulfillmentRate.toFixed(1)}%`}
             tooltip="Paid orders that are marked fulfilled"
           />
-          <InsightStat
-            icon={<Wallet className="h-4 w-4 text-amber-500" />}
-            label="Effective Fee"
-            value={`${insights.effectiveFeeRate.toFixed(2)}%`}
-            tooltip="Shopify Payments fee as a % of revenue"
-          />
+          {showFees && (
+            <InsightStat
+              icon={<Wallet className="h-4 w-4 text-amber-500" />}
+              label="Effective Fee"
+              value={`${insights.effectiveFeeRate.toFixed(2)}%`}
+              tooltip="Shopify Payments fee as a % of revenue"
+            />
+          )}
           <InsightStat
             icon={<Boxes className="h-4 w-4 text-teal-500" />}
             label="Items / Order"

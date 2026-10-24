@@ -119,7 +119,8 @@ export const FulfillmentPage = () => {
   const { activeStore, user, canInStore } = useAuth();
   const { timezone } = useAppContext();
   const { toast } = useToast();
-  const canSeePaymentFee = user?.role === 'admin';
+  // Payment fees: owners, admins and members granted fees.view (server-enforced).
+  const canSeePaymentFee = canInStore('fees.view');
   const canSync = canInStore('sync');
   const canPay = canInStore('costs');
 

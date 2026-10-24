@@ -22,6 +22,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 import { resolveStore } from '../middleware/resolve-store';
 import { requireStoreCapability } from '../middleware/resolve-store';
+import { canSeeFees } from '../lib/fee-visibility';
 import { canTransition, isFulfillStatus, ORDER_FULFILL_TRANSITIONS } from '../lib/order-lifecycle';
 import {
   EXPORT_FIELDS, EXPORT_FIELD_MAP, DEFAULT_EXPORT_COLUMNS,
@@ -156,11 +157,14 @@ router.get('/', async (req: Request, res: Response) => {
       tabs.ALL += row._count._all;
     }
 
+    // Payment fees only for fees.view (lib/fee-visibility.ts).
+    const fees = canSeeFees(req);
     res.json({
       orders: orders.map(o => {
         const shipped = daysSinceShipped(o, now);
         return {
           ...o,
+          paymentFee: fees ? o.paymentFee : null,
           // BigInt is not JSON-serializable; the client only needs a flag.
           lineItems: o.lineItems.map(({ variantId, ...li }) => ({ ...li, hasVariant: variantId !== null })),
           supplierCost: orderCost(o),
@@ -223,7 +227,14 @@ router.get('/sync-status', async (req: Request, res: Response) => {
         select: { processedAt: true }
       })
     ]);
-    res.json({ ...store, orderCount, firstOrderAt: firstOrder?.processedAt ?? null });
+    const fees = canSeeFees(req);
+    res.json({
+      ...store,
+      feeSyncAt: fees ? store?.feeSyncAt ?? null : null,
+      feeSyncError: fees ? store?.feeSyncError ?? null : null,
+      orderCount,
+      firstOrderAt: firstOrder?.processedAt ?? null
+    });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to load sync status' });
   }
@@ -423,7 +434,10 @@ router.get('/:id', async (req: Request, res: Response) => {
       }
     });
     if (!order) return res.status(404).json({ error: 'Order not found' });
-    res.json({ order, allowedTransitions: ORDER_FULFILL_TRANSITIONS[order.fulfillStatus as keyof typeof ORDER_FULFILL_TRANSITIONS] ?? [] });
+    const visible = canSeeFees(req)
+      ? order
+      : { ...order, paymentFee: null, transactions: order.transactions.map(t => ({ ...t, fee: null, net: null })) };
+    res.json({ order: visible, allowedTransitions: ORDER_FULFILL_TRANSITIONS[order.fulfillStatus as keyof typeof ORDER_FULFILL_TRANSITIONS] ?? [] });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Failed to load order' });
   }

@@ -18,6 +18,9 @@ import { seedDefaultPricebooks } from '../services/pricebook-seed.service';
 import { aggregateByPeriod, compareTwoPeriods, PeriodKind } from '../services/period-aggregation.service';
 import { importCostCsv } from '../services/cost-csv-import.service';
 import { resolveStore, requireStoreCapability } from '../middleware/resolve-store';
+import { canSeeFees, feesFor } from '../lib/fee-visibility';
+import { fetchGrantedScopes } from '../services/shopify.service';
+import { decryptToken } from '../lib/token-crypto';
 import { requireAuth, requireActive } from '../middleware/require-auth';
 
 const router = Router();
@@ -27,6 +30,15 @@ const prisma = new PrismaClient();
 // router mounts them, and without them the approval gate (PENDING/SUSPENDED)
 // simply did not apply to P&L.
 router.use(requireAuth, requireActive, resolveStore);
+
+// Payment fees only for `fees.view` (lib/fee-visibility.ts): every response
+// of this router goes through feesFor, so no P&L figure — snapshot, live
+// breakdown, period bucket, recompute result — leaks the fee to anyone else.
+router.use((req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = (body: unknown) => json(feesFor(req, body));
+  next();
+});
 
 function parseDate(s: any, fallback?: Date): Date {
   if (!s) return fallback ?? new Date();
@@ -61,7 +73,7 @@ router.get('/order-fees', async (req, res) => {
         lineItems: { select: { quantity: true, variantId: true, unitBasecost: true } }
       }
     });
-    const fees: Record<string, { fee: number; gateway: string | null; cogs: number | null; missingCost: boolean }> = {};
+    const fees: Record<string, { fee: number | null; gateway: string | null; cogs: number | null; missingCost: boolean }> = {};
     for (const o of orders) {
       let cogs: number | null = null;
       let missingCost = false;
@@ -74,13 +86,57 @@ router.get('/order-fees', async (req, res) => {
         cogs = (cogs ?? 0) + Number(li.unitBasecost) * (li.quantity || 0);
       }
       fees[o.shopifyOrderId] = {
-        fee: o.paymentFee ? Number(o.paymentFee) : 0,
+        fee: !canSeeFees(req) ? null : o.paymentFee ? Number(o.paymentFee) : 0,
         gateway: o.paymentGateway,
         cogs: cogs === null ? null : Math.round(cogs * 100) / 100,
         missingCost
       };
     }
     res.json({ fees, count: orders.length });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Internal error' });
+  }
+});
+
+/**
+ * GET /api/pl/fee-status?from=...&to=... — why payment fees are (or are not)
+ * deducted. Shopify reports fees only through the Shopify Payments balance
+ * ledger, which needs the read_shopify_payments_payouts scope; the P&L
+ * scheduler pulls it every 30 min and records failures on the store. This
+ * answers: does the token carry the scope, what did the last fee sync say,
+ * and how do the range's orders split by gateway (PayPal & co. have no fee
+ * in Shopify at all).
+ */
+router.get('/fee-status', requireStoreCapability('fees.view'), async (req, res) => {
+  try {
+    const { storeId } = req.resolved!;
+    const to = parseDate(req.query.to, new Date());
+    const from = parseDate(req.query.from, new Date(to.getTime() - 30 * 86400000));
+    const store = await prisma.shopifyStore.findUnique({
+      where: { id: storeId },
+      select: { storeDomain: true, accessToken: true, feeSyncAt: true, feeSyncError: true }
+    });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    const where = { storeId, processedAt: { gte: from, lt: to } };
+    const [scopes, byGateway, withFee] = await Promise.all([
+      fetchGrantedScopes(store.storeDomain, decryptToken(store.accessToken)),
+      prisma.order.groupBy({ by: ['paymentGateway'], where, _count: { _all: true }, _sum: { paymentFee: true } }),
+      prisma.order.groupBy({ by: ['paymentGateway'], where: { ...where, paymentFee: { gt: 0 } }, _count: { _all: true } })
+    ]);
+    res.json({
+      feeSyncAt: store.feeSyncAt,
+      feeSyncError: store.feeSyncError,
+      // null: Shopify would not list the token's scopes, so we cannot tell.
+      payoutsScope: scopes.length ? scopes.includes('read_shopify_payments_payouts') : null,
+      gateways: byGateway
+        .map(g => ({
+          gateway: g.paymentGateway,
+          orders: g._count._all,
+          withFee: withFee.find(w => w.paymentGateway === g.paymentGateway)?._count._all ?? 0,
+          fees: Math.round(Number(g._sum.paymentFee ?? 0) * 100) / 100
+        }))
+        .sort((a, b) => b.orders - a.orders)
+    });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Internal error' });
   }

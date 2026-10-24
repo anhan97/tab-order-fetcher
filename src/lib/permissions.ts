@@ -58,6 +58,12 @@ export const PERMISSION_GROUPS: Array<{ label: string; items: PermissionInfo[] }
       { id: 'facebook.view', label: 'See Facebook', help: 'Ad accounts, campaigns, spend and the Content page' },
       { id: 'facebook.manage', label: 'Map campaigns', help: 'Assign campaigns to this store and recompute its ad spend' }
     ]
+  },
+  {
+    label: 'Finance',
+    items: [
+      { id: 'fees.view', label: 'See payment fees', help: 'Gateway fees and profit after them. Without it, profit is shown before payment fees.' }
+    ]
   }
 ];
 

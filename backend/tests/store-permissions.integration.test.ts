@@ -45,11 +45,13 @@ const DEMO = '900000000000001';
 const PAGE = '900000000000101';
 const PIXEL = '900000000000201';
 const PRODUCT_ID = `${Date.now()}`.slice(-11) + '7';
+/** An old, finalized P&L day (outside the live-recomputed last days). */
+const PL_DAY = new Date(Date.UTC(2026, 0, 10));
 
 process.env.MEDIA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'perm-media-'));
 
 const ids = {
-  owner: '', manager: '', creative: '', creative2: '', buyer: '', curator: '', admin: '', plain: ''
+  owner: '', manager: '', creative: '', creative2: '', buyer: '', curator: '', admin: '', plain: '', fin: '', book: ''
 };
 let storeId = '';
 let server: Server;
@@ -146,6 +148,12 @@ beforeAll(async () => {
   await grant(ids.buyer, 'viewer', ['ads.launch', 'facebook.view']);
   await grant(ids.curator, 'viewer', ['creatives.manage']);
   await grant(ids.admin, 'viewer');
+  await grant(ids.fin, 'finance');
+  await grant(ids.book, 'finance', ['fees.view']);
+  await db.dailyPLSnapshot.create({ data: {
+    userId: ids.owner, storeId, date: PL_DAY, netRevenue: 1000, grossRevenue: 1000, basecost: 300,
+    paymentFees: 35, grossProfit: 665, netProfit: 200, orderCount: 20, isFinalized: true
+  } });
   await db.productVariant.create({
     data: { variantId: BigInt(`8${PRODUCT_ID}`), userId: ids.owner, storeId, productId: BigInt(PRODUCT_ID), title: 'Comb', sku: 'PERM01-S' }
   });
@@ -159,6 +167,7 @@ beforeAll(async () => {
     import('../src/routes/auth.routes'),
     import('../src/routes/admin.routes')
   ]);
+  const { default: pl } = await import('../src/routes/pl.routes');
   const app = express();
   app.use(express.json({ limit: '5mb' }));
   app.use('/api/ads-launcher', launcher.default);
@@ -168,6 +177,7 @@ beforeAll(async () => {
   app.use('/api/orders', orders.default);
   app.use('/api/auth', auth.default);
   app.use('/api/admin', admin.default);
+  app.use('/api/pl', pl);
   await new Promise<void>(r => { server = app.listen(0, '127.0.0.1', r); });
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }, 60_000);
@@ -180,6 +190,7 @@ afterAll(async () => {
     await db.adCreative.deleteMany({ where: { storeId } });
     await db.productVariant.deleteMany({ where: { storeId } });
     await db.storeMember.deleteMany({ where: { storeId } });
+    await db.dailyPLSnapshot.deleteMany({ where: { storeId } });
     await db.shopifyStore.deleteMany({ where: { id: storeId } });
     await db.adLaunchRequest.deleteMany({ where: { key: { contains: ids.owner } } });
     await db.launchPreset.deleteMany({ where: { userId: { in: users } } });
@@ -309,5 +320,33 @@ describe('store permissions', { timeout: 60_000 }, () => {
       expect(await status(p, m, ids.owner)).toBe(403);
     }
     expect(await status('/api/facebook/sync-status', 'GET', ids.admin)).toBe(200);
+  });
+
+  maybe()('payment fees: only with "See payment fees"; others get profit before fees', async () => {
+    const q = `from=${new Date(PL_DAY.getTime() - 86400000).toISOString()}&to=${new Date(PL_DAY.getTime() + 86400000).toISOString()}`;
+    const day = async (who: string) => (await call(`/api/pl/daily?${q}`, 'GET', who)).json.snapshots.find((s: any) => String(s.date).startsWith('2026-01-10'));
+
+    const owner = await day(ids.owner);
+    expect(Number(owner.paymentFees)).toBe(35);
+    expect(Number(owner.netProfit)).toBe(200);
+
+    // Finance member without the permission: no fee, profit before it.
+    const fin = await day(ids.fin);
+    expect(fin.paymentFees).toBeNull();
+    expect(fin).toMatchObject({ grossProfit: 700, netProfit: 235 });
+    expect(await status(`/api/pl/fee-status?${q}`, 'GET', ids.fin)).toBe(403);
+    expect((await call('/api/orders/sync-status', 'GET', ids.fin)).json.feeSyncError).toBeNull();
+
+    // Granted: same numbers as the owner.
+    const book = await day(ids.book);
+    expect(Number(book.paymentFees)).toBe(35);
+    expect(Number(book.netProfit)).toBe(200);
+    const fs = await call(`/api/pl/fee-status?${q}`, 'GET', ids.book);
+    expect(fs.status).toBe(200);
+    expect(fs.json).toHaveProperty('payoutsScope');
+    expect(Array.isArray(fs.json.gateways)).toBe(true);
+
+    expect(await capsOf(ids.fin)).not.toContain('fees.view');
+    expect(await capsOf(ids.owner)).toContain('fees.view');
   });
 });

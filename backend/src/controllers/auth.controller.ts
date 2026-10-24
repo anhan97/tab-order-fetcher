@@ -27,6 +27,9 @@ function publicUser(user: DbUser) {
 }
 
 /** Issue a short-lived access JWT + a rotating refresh token (hash stored). */
+/** How long a rotated refresh token keeps working (seconds → ms). */
+const REFRESH_REUSE_GRACE_MS = parseInt(process.env.REFRESH_REUSE_GRACE_SECONDS || '60', 10) * 1000;
+
 async function issueTokens(user: DbUser): Promise<{ token: string; refreshToken: string }> {
   const token = signAccessToken({ id: user.id, status: user.status, role: user.role });
   const { token: refreshToken, hash } = generateRefreshToken();
@@ -175,10 +178,17 @@ export class AuthController {
       if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
         return res.status(401).json({ error: 'Invalid refresh token', code: 'invalid_refresh' });
       }
-      await prisma.refreshToken.update({
-        where: { id: stored.id },
-        data: { revokedAt: new Date() }
-      });
+      // Rotation retires the old token after a short grace instead of on the
+      // spot: a refresh whose answer never reached the browser (tab closed,
+      // phone locked, navigation mid-request) left it holding a dead token
+      // and signed the person out. Logout and suspend still revoke at once.
+      const graceEnd = new Date(Date.now() + REFRESH_REUSE_GRACE_MS);
+      if (stored.expiresAt > graceEnd) {
+        await prisma.refreshToken.update({
+          where: { id: stored.id },
+          data: { expiresAt: graceEnd }
+        });
+      }
       const tokens = await issueTokens(stored.user as DbUser);
       res.json({ ...tokens, user: publicUser(stored.user as DbUser) });
     } catch (error: any) {

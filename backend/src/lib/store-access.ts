@@ -29,6 +29,9 @@
  *   ads.launch       — Ads Launcher + presets (needs to see the library)
  *   facebook.view    — Facebook page: ad accounts, campaigns, spend
  *   facebook.manage  — map campaigns to the store, recompute store spend
+ *   fees.view        — payment gateway fees, and profit after them. Without
+ *                      it the API strips every fee figure and reports profit
+ *                      BEFORE payment fees (lib/fee-visibility.ts)
  *
  * The 'creative' role is creatives.upload and nothing else — no orders, no
  * P&L — for staff who only produce creatives.
@@ -45,10 +48,11 @@ const prisma = new PrismaClient();
 /** 'owner' is not a StoreMember role — it is what ownership resolves to. */
 export type StoreAccessLevel = 'owner' | 'manager' | 'cs' | 'finance' | 'viewer' | 'creative';
 
-/** Ads-side permissions, granted one by one on top of the role. */
+/** Feature permissions, granted one by one on top of the role. */
 export const STORE_PERMISSIONS = [
   'creatives.upload', 'creatives.view', 'creatives.manage',
-  'ads.launch', 'facebook.view', 'facebook.manage'
+  'ads.launch', 'facebook.view', 'facebook.manage',
+  'fees.view'
 ] as const;
 export type StorePermission = (typeof STORE_PERMISSIONS)[number];
 

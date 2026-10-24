@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { FacebookAdAccount } from '@/types/facebook';
 import { DashboardInsights } from '@/components/DashboardInsights';
 import { useAppContext } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { apiFetch, storeHeaders } from '@/utils/apiClient';
 import {
   getShopifyDateRange,
@@ -99,6 +100,10 @@ export const OrdersTable = ({
   // Mapping version — bumps when CampaignStoreMapping changes; we re-fetch
   // mapped fbAdSpend so the KPI strip reflects the new mapping without F5.
   const { mappingVersion } = useAppContext();
+  // Payment fees only with the fees.view permission; the server sends none
+  // otherwise, and per-order profit is then shown before payment fees.
+  const { canInStore } = useAuth();
+  const canSeeFees = canInStore('fees.view');
 
   const [isLoading, setIsLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1387,6 +1392,7 @@ export const OrdersTable = ({
         revenue={currentMetrics.revenue}
         netProfit={currentMetrics.netProfit}
         totalFees={Object.values(orderFees).reduce((s, v) => s + (v || 0), 0)}
+        showFees={canSeeFees}
       />
 
       {/* Orders Table */}
@@ -1478,7 +1484,7 @@ export const OrdersTable = ({
                   <TableHead>Products</TableHead>
                   <TableHead>Quantity</TableHead>
                   <TableHead>Total</TableHead>
-                  <TableHead>Fees</TableHead>
+                  {canSeeFees && <TableHead>Fees</TableHead>}
                   <TableHead>COGS</TableHead>
                   <TableHead>Net Profit</TableHead>
                   <TableHead>Status</TableHead>
@@ -1537,9 +1543,11 @@ export const OrdersTable = ({
                         </TableCell>
                         <TableCell>{order.totalQuantity}</TableCell>
                         <TableCell>{formatCurrency(order.totalPrice)}</TableCell>
-                        <TableCell className="text-purple-700">
-                          {formatCurrency(orderFees[String(order.id)] || 0)}
-                        </TableCell>
+                        {canSeeFees && (
+                          <TableCell className="text-purple-700">
+                            {formatCurrency(orderFees[String(order.id)] || 0)}
+                          </TableCell>
+                        )}
                         <TableCell>
                           {costs.cogs === null
                             ? <span className="text-xs text-amber-600" title="No COGS price for this order yet — set it on the COGS page">No cost</span>

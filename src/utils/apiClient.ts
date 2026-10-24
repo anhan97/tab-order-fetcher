@@ -71,42 +71,146 @@ async function parse(res: Response): Promise<any> {
 }
 
 /**
- * Single-flight refresh: when a request 401s and we hold a refresh token,
- * every concurrent caller awaits the SAME /api/auth/refresh promise, then
- * retries once with the new access token. Refresh failure clears the
- * session (the refresh token was rotated/revoked/expired).
+ * Session refresh. The access JWT lives ~15 minutes; the refresh token 30
+ * days, renewed on every refresh — so a session only ends after 30 days
+ * without use, or on logout / admin suspend.
+ *
+ * People used to be signed out after minutes, from three holes:
+ *   • a 401 on ANY /api/auth/* call skipped the refresh, and /api/auth/me is
+ *     what every page load asks first → reload after 15 min = signed out;
+ *   • any failed refresh wiped the session — a 502 while the backend
+ *     redeployed, or a second tab losing the race to rotate the token;
+ *   • bare fetch() call sites (charts, P&L) never refresh at all.
+ *
+ * Now: only login/register/refresh/logout skip the retry; the session is
+ * dropped only when the server definitively rejects the refresh token AND no
+ * other tab has replaced it; refreshes are serialised across tabs (Web
+ * Locks); and keepSessionFresh() renews the token before it expires, so bare
+ * fetch() calls always carry a valid one.
  */
+const NO_REFRESH = ['/api/auth/login', '/api/auth/register', '/api/auth/refresh', '/api/auth/logout'];
+
 let refreshInFlight: Promise<boolean> | null = null;
 
-async function tryRefresh(): Promise<boolean> {
+async function refreshOnce(): Promise<boolean> {
+  const sent = localStorage.getItem(REFRESH_KEY);
+  if (!sent) return false;
+  try {
+    const res = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: sent })
+    });
+    if (res.ok) {
+      const body = await res.json();
+      if (body?.token) localStorage.setItem(TOKEN_KEY, body.token);
+      if (body?.refreshToken) localStorage.setItem(REFRESH_KEY, body.refreshToken);
+      return !!body?.token;
+    }
+    // Another tab rotated the token meanwhile: its fresh pair is in storage.
+    if (localStorage.getItem(REFRESH_KEY) !== sent) return true;
+    // Only a definitive "this refresh token is no good" ends the session —
+    // never a 5xx / 502 while the backend restarts.
+    if (res.status === 400 || res.status === 401) {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+    }
+    return false;
+  } catch {
+    return false; // offline — keep the session, try again later
+  }
+}
+
+/**
+ * Single-flight per tab, serialised across tabs. `staleToken` is the access
+ * token that just failed: if storage already holds another one, a different
+ * tab refreshed while we waited and there is nothing to do.
+ */
+function tryRefresh(staleToken?: string | null): Promise<boolean> {
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
-      const refreshToken = localStorage.getItem(REFRESH_KEY);
-      if (!refreshToken) return false;
-      try {
-        const res = await fetch('/api/auth/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken })
-        });
-        if (!res.ok) {
-          localStorage.removeItem(TOKEN_KEY);
-          localStorage.removeItem(REFRESH_KEY);
-          return false;
-        }
-        const body = await res.json();
-        if (body?.token) localStorage.setItem(TOKEN_KEY, body.token);
-        if (body?.refreshToken) localStorage.setItem(REFRESH_KEY, body.refreshToken);
-        return !!body?.token;
-      } catch {
-        return false;
-      } finally {
+    const run = async () => {
+      if (staleToken !== undefined && localStorage.getItem(TOKEN_KEY) && localStorage.getItem(TOKEN_KEY) !== staleToken) return true;
+      return refreshOnce();
+    };
+    const locks = typeof navigator !== 'undefined' ? (navigator as any).locks : undefined;
+    refreshInFlight = (locks?.request ? (locks.request('auth-refresh', run) as Promise<boolean>) : run())
+      .catch(() => false)
+      .finally(() => {
         // Allow the next 401 to trigger a fresh attempt.
         setTimeout(() => { refreshInFlight = null; }, 0);
-      }
-    })();
+      });
   }
   return refreshInFlight;
+}
+
+function jwtTimes(token: string | null): { iat: number | null; exp: number | null } {
+  if (!token) return { iat: null, exp: null };
+  try {
+    const payload = token.split('.')[1];
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return {
+      iat: typeof json?.iat === 'number' ? json.iat * 1000 : null,
+      exp: typeof json?.exp === 'number' ? json.exp * 1000 : null
+    };
+  } catch {
+    return { iat: null, exp: null };
+  }
+}
+
+/** Expiry (ms epoch) of an access JWT, null when it cannot be read. */
+export function tokenExpiry(token: string | null): number | null {
+  return jwtTimes(token).exp;
+}
+
+const RENEW_BEFORE_MS = 60_000;
+const MIN_RENEW_WAIT_MS = 5_000;
+const RETRY_RENEW_MS = 30_000;
+
+/**
+ * When to renew: a minute before expiry, or half-way through a token that
+ * lives under two minutes — never a refresh loop.
+ */
+export function renewDelay(token: string | null, now = Date.now()): number | null {
+  const { iat, exp } = jwtTimes(token);
+  if (!exp) return null;
+  const lead = iat ? Math.min(RENEW_BEFORE_MS, (exp - iat) / 2) : RENEW_BEFORE_MS;
+  return Math.max(exp - lead - now, exp > now ? MIN_RENEW_WAIT_MS : 0);
+}
+
+/**
+ * Renew the access token a minute before it expires — and right away when a
+ * tab comes back from the background with an expired one. Returns a stop
+ * function. AuthProvider runs it while someone is signed in.
+ */
+export function keepSessionFresh(): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const renewAfter = (token: string | null, wait: number) => {
+    timer = setTimeout(async () => {
+      if (await tryRefresh(token)) schedule();
+      // Offline or the backend is down: try again later, not in a loop.
+      else if (localStorage.getItem(REFRESH_KEY)) renewAfter(localStorage.getItem(TOKEN_KEY), RETRY_RENEW_MS);
+    }, wait);
+  };
+  const schedule = () => {
+    clearTimeout(timer);
+    const token = localStorage.getItem(TOKEN_KEY);
+    const wait = renewDelay(token);
+    if (wait == null || !localStorage.getItem(REFRESH_KEY)) return;
+    renewAfter(token, wait);
+  };
+  const onWake = () => { if (document.visibilityState === 'visible') schedule(); };
+  // Another tab refreshed (or signed out): follow its token.
+  const onStorage = (e: StorageEvent) => { if (e.key === TOKEN_KEY) schedule(); };
+  schedule();
+  document.addEventListener('visibilitychange', onWake);
+  window.addEventListener('focus', onWake);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    clearTimeout(timer);
+    document.removeEventListener('visibilitychange', onWake);
+    window.removeEventListener('focus', onWake);
+    window.removeEventListener('storage', onStorage);
+  };
 }
 
 export async function apiFetch<T = any>(path: string, init: RequestInit = {}): Promise<T> {
@@ -123,10 +227,12 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     return { res, body };
   };
 
+  const sentToken = localStorage.getItem(TOKEN_KEY);
   let { res, body } = await doFetch();
   // Access tokens are short-lived (~15m) — transparently refresh + retry once.
-  if (res.status === 401 && !path.startsWith('/api/auth/')) {
-    if (await tryRefresh()) {
+  // /api/auth/me and /api/auth/stores too: they are what a page load asks first.
+  if (res.status === 401 && !NO_REFRESH.some(p => path.split('?')[0].startsWith(p))) {
+    if (await tryRefresh(sentToken)) {
       ({ res, body } = await doFetch());
     }
   }

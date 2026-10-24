@@ -28,6 +28,15 @@ export interface PLSnapshot {
   isFinalized?: boolean;              // false for today's live row
 }
 
+export interface FeeStatus {
+  feeSyncAt: string | null;
+  /** missing_scope: … | not_shopify_payments: … | error: … — null when the last sync worked. */
+  feeSyncError: string | null;
+  /** Does the store's token carry read_shopify_payments_payouts? null = Shopify would not say. */
+  payoutsScope: boolean | null;
+  gateways: Array<{ gateway: string | null; orders: number; withFee: number; fees: number }>;
+}
+
 export interface OperatingCostItem {
   id: string;
   date: string;
@@ -100,7 +109,13 @@ export class ProfitApiClient {
 
   orderFees(from: Date, to: Date) {
     const q = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
-    return this.req<{ fees: Record<string, { fee: number; gateway: string | null }>; count: number }>(`/order-fees?${q}`);
+    return this.req<{ fees: Record<string, { fee: number | null; gateway: string | null }>; count: number }>(`/order-fees?${q}`);
+  }
+
+  /** Why payment fees are (not) deducted — needs the fees.view permission. */
+  feeStatus(from: Date, to: Date) {
+    const q = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+    return this.req<FeeStatus>(`/fee-status?${q}`);
   }
 
   listSnapshots(from: Date, to: Date) {
